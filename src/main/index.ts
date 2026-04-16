@@ -1,7 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } from 'electron'
-import { cp, mkdir, readdir } from 'node:fs/promises'
+import { createServer, type Server } from 'node:http'
+import { cp, mkdir, readFile, readdir } from 'node:fs/promises'
 import { electronApp, is } from '@electron-toolkit/utils'
-import { dirname, join } from 'path'
+import { dirname, extname, join, normalize, resolve } from 'path'
 import { pathToFileURL } from 'url'
 import { deviceService } from './services/deviceService'
 import { dependencyService } from './services/dependencyService'
@@ -12,6 +13,10 @@ import { vrSrcService } from './services/vrSrcService'
 
 const APP_DISPLAY_NAME = 'QuestVault'
 const LEGACY_USER_DATA_DIR_NAME = 'quest-archive-manager'
+const PRODUCTION_RENDERER_SCHEME = 'http://127.0.0.1'
+
+let productionRendererServer: Server | null = null
+let productionRendererServerUrl: string | null = null
 
 app.setName(APP_DISPLAY_NAME)
 
@@ -45,6 +50,93 @@ async function migrateLegacyUserDataIfNeeded(): Promise<void> {
   await cp(legacyUserDataPath, preferredUserDataPath, { recursive: true, force: false })
 }
 
+function getRendererMimeType(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case '.html':
+      return 'text/html; charset=utf-8'
+    case '.js':
+      return 'text/javascript; charset=utf-8'
+    case '.css':
+      return 'text/css; charset=utf-8'
+    case '.json':
+      return 'application/json; charset=utf-8'
+    case '.png':
+      return 'image/png'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.svg':
+      return 'image/svg+xml'
+    case '.ico':
+      return 'image/x-icon'
+    case '.webp':
+      return 'image/webp'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+async function ensureProductionRendererServer(): Promise<string> {
+  if (productionRendererServerUrl) {
+    return productionRendererServerUrl
+  }
+
+  const rendererRoot = resolve(app.getAppPath(), 'out/renderer')
+
+  productionRendererServer = createServer(async (request, response) => {
+    try {
+      const requestPath = request.url ? new URL(request.url, PRODUCTION_RENDERER_SCHEME).pathname : '/'
+      const normalizedRequestPath = normalize(decodeURIComponent(requestPath)).replace(/^(\.\.[/\\])+/, '')
+      const relativeRequestPath =
+        normalizedRequestPath === '/' || normalizedRequestPath === '.'
+          ? 'index.html'
+          : normalizedRequestPath.replace(/^[/\\]+/, '')
+      const filePath = resolve(rendererRoot, relativeRequestPath)
+
+      if (!filePath.startsWith(rendererRoot)) {
+        response.writeHead(403)
+        response.end('Forbidden')
+        return
+      }
+
+      let payload: Buffer
+      let servedPath = filePath
+
+      try {
+        payload = await readFile(filePath)
+      } catch {
+        servedPath = resolve(rendererRoot, 'index.html')
+        payload = await readFile(servedPath)
+      }
+
+      response.writeHead(200, {
+        'Content-Type': getRendererMimeType(servedPath),
+        'Cache-Control': 'no-cache'
+      })
+      response.end(payload)
+    } catch {
+      response.writeHead(500)
+      response.end('Renderer load failed')
+    }
+  })
+
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    productionRendererServer?.once('error', rejectPromise)
+    productionRendererServer?.listen(0, '127.0.0.1', () => {
+      productionRendererServer?.off('error', rejectPromise)
+      resolvePromise()
+    })
+  })
+
+  const address = productionRendererServer.address()
+  if (!address || typeof address === 'string') {
+    throw new Error('Unable to determine production renderer server address')
+  }
+
+  productionRendererServerUrl = `${PRODUCTION_RENDERER_SCHEME}:${address.port}`
+  return productionRendererServerUrl
+}
+
 function createWindow(): void {
   const preferredWidth = 1320
   const preferredHeight = 925
@@ -66,9 +158,12 @@ function createWindow(): void {
 
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    return
   }
+
+  void ensureProductionRendererServer()
+    .then((serverUrl) => mainWindow.loadURL(serverUrl))
+    .catch(() => mainWindow.loadFile(join(__dirname, '../renderer/index.html')))
 }
 
 app.whenReady().then(async () => {
@@ -273,6 +368,12 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('before-quit', () => {
+  productionRendererServer?.close()
+  productionRendererServer = null
+  productionRendererServerUrl = null
 })
 
 app.on('window-all-closed', () => {

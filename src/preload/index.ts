@@ -48,7 +48,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.4.2',
+  version: '0.5.0',
   ping: (): string => 'pong',
   dependencies: {
     getStatus: (): Promise<DependencyStatusResponse> => ipcRenderer.invoke('dependencies:get-status'),
