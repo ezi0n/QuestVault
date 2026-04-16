@@ -1984,6 +1984,8 @@ function GamesView(props: {
       : 'signal-chip'
   const selectedVrSrcNote = selectedVrSrcDetails?.note ?? selectedVrSrcItem?.note ?? null
   const selectedVrSrcTrailerVideoId = selectedVrSrcDetails?.trailerVideoId ?? null
+  const trailerEmbedOrigin =
+    typeof window !== 'undefined' && window.location.origin ? encodeURIComponent(window.location.origin) : null
   const selectedGame = filteredGameRows.find((game) => game.id === selectedGameId) ?? combinedGameRows.find((game) => game.id === selectedGameId) ?? null
   const effectiveSelectedGameDetails = applyManualMetadataOverride(
     manualStorePreview ?? selectedGameDetails,
@@ -3178,7 +3180,7 @@ function GamesView(props: {
                             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                             allowFullScreen
                             referrerPolicy="strict-origin-when-cross-origin"
-                            src={`https://www.youtube-nocookie.com/embed/${selectedVrSrcTrailerVideoId}?rel=0`}
+                            src={`https://www.youtube-nocookie.com/embed/${selectedVrSrcTrailerVideoId}?rel=0${trailerEmbedOrigin ? `&origin=${trailerEmbedOrigin}` : ''}`}
                             title={`${selectedVrSrcItem.name} trailer`}
                           />
                         </div>
