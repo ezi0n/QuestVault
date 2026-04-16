@@ -1,0 +1,26 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="134" y1="84" x2="868" y2="930" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10192A"/>
+      <stop offset="1" stop-color="#0B111B"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="204" y1="192" x2="814" y2="818" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#58D4C5"/>
+      <stop offset="0.56" stop-color="#58D4C5"/>
+      <stop offset="1" stop-color="#FF8F66"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 376) rotate(90) scale(356 320)">
+      <stop stop-color="#58D4C5" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#58D4C5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="40" y="40" width="944" height="944" rx="234" fill="url(#bg)"/>
+  <rect x="176" y="176" width="672" height="672" rx="180" stroke="url(#frame)" stroke-width="18" stroke-opacity="0.75"/>
+  <rect x="214" y="214" width="596" height="596" rx="152" fill="#141F31" stroke="#EDF3F8" stroke-opacity="0.08" stroke-width="6"/>
+  <ellipse cx="512" cy="378" rx="316" ry="268" fill="url(#glow)"/>
+  <path d="M408 330C319.635 330 248 401.635 248 490C248 578.365 319.635 650 408 650H470V586H408C354.98 586 312 543.02 312 490C312 436.98 354.98 394 408 394C461.02 394 504 436.98 504 490V730H568V490C568 401.635 496.365 330 408 330Z" fill="#EDF3F8"/>
+  <path d="M650 694C589.249 694 540 644.751 540 584C540 523.249 589.249 474 650 474C710.751 474 760 523.249 760 584C760 644.751 710.751 694 650 694ZM650 628C674.301 628 694 608.301 694 584C694 559.699 674.301 540 650 540C625.699 540 606 559.699 606 584C606 608.301 625.699 628 650 628Z" fill="#FFD271"/>
+  <path d="M728 662L792 728" stroke="#FF8F66" stroke-width="26" stroke-linecap="round"/>
+  <rect x="612" y="318" width="120" height="24" rx="12" fill="#58D4C5" fill-opacity="0.92"/>
+  <rect x="602" y="356" width="140" height="12" rx="6" fill="#EDF3F8" fill-opacity="0.22"/>
+</svg>

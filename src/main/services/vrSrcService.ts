@@ -1,0 +1,888 @@
+import { app } from 'electron'
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { basename, extname, join } from 'node:path'
+import { execFile as execFileCallback, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
+import type {
+  VrSrcCatalogItem,
+  VrSrcCatalogResponse,
+  VrSrcDownloadToLibraryResponse,
+  VrSrcItemDetailsResponse,
+  VrSrcInstallNowResponse,
+  VrSrcStatusResponse,
+  VrSrcSyncResponse,
+  VrSrcTransferOperation,
+  VrSrcTransferProgressUpdate
+} from '@shared/types/ipc'
+import { settingsService } from './settingsService'
+import { deviceService } from './deviceService'
+import { dependencyService } from './dependencyService'
+
+const execFileAsync = promisify(execFileCallback)
+
+const VR_SRC_TELEGRAM_URL = 'https://t.me/s/the_vrSrc'
+const VR_SRC_USER_AGENT = 'rclone/v1.69.1'
+
+type VrSrcCredentials = {
+  baseUri: string
+  password: string
+  lastResolvedAt: string
+}
+
+class VrSrcService {
+  private syncInFlight: Promise<VrSrcSyncResponse> | null = null
+  private acquireInFlight = new Map<string, Promise<string>>()
+  private transferProgressListeners = new Set<(update: VrSrcTransferProgressUpdate) => void>()
+  private trailerVideoIdCache = new Map<string, string | null>()
+
+  onTransferProgress(listener: (update: VrSrcTransferProgressUpdate) => void): () => void {
+    this.transferProgressListeners.add(listener)
+    return () => {
+      this.transferProgressListeners.delete(listener)
+    }
+  }
+
+  private emitTransferProgress(update: VrSrcTransferProgressUpdate): void {
+    for (const listener of this.transferProgressListeners) {
+      listener(update)
+    }
+  }
+
+  private getRootPath(): string {
+    return join(app.getPath('userData'), 'vrsrc')
+  }
+
+  private getCredentialsPath(): string {
+    return join(this.getRootPath(), 'credentials.json')
+  }
+
+  private getCatalogPath(): string {
+    return join(this.getRootPath(), 'catalog.json')
+  }
+
+  private getMetaArchivePath(): string {
+    return join(this.getRootPath(), 'meta.7z')
+  }
+
+  private getMetaExtractPath(): string {
+    return join(this.getRootPath(), 'meta')
+  }
+
+  private getDownloadsPath(): string {
+    return join(this.getRootPath(), 'downloads')
+  }
+
+  private toLocalAssetUri(absolutePath: string): string {
+    return `qam-asset://${encodeURIComponent(absolutePath)}`
+  }
+
+  private sanitizeSegment(value: string): string {
+    return value
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'vrSrc Item'
+  }
+
+  private ensureTrailingSlash(value: string): string {
+    return value.endsWith('/') ? value : `${value}/`
+  }
+
+  private decodeHtml(value: string): string {
+    return value
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+  }
+
+  private normalizeTrailerSearchKey(value: string): string {
+    return value.trim().toLowerCase()
+  }
+
+  private async ensureDirectories(): Promise<void> {
+    await mkdir(this.getRootPath(), { recursive: true })
+    await mkdir(this.getDownloadsPath(), { recursive: true })
+  }
+
+  private async fileExists(path: string): Promise<boolean> {
+    try {
+      await stat(path)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async fetchText(url: string): Promise<string> {
+    const { stdout } = await execFileAsync(
+      'curl',
+      ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', url],
+      { maxBuffer: 8 * 1024 * 1024 }
+    )
+
+    return stdout
+  }
+
+  private async getRemoteContentLength(url: string): Promise<number | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        'curl',
+        ['-L', '--fail', '-I', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', url],
+        { maxBuffer: 256 * 1024 }
+      )
+      const matches = Array.from(stdout.matchAll(/^content-length:\s*(\d+)\s*$/gim))
+      const lastMatch = matches.at(-1)
+      if (!lastMatch) {
+        return null
+      }
+
+      const parsed = Number.parseInt(lastMatch[1], 10)
+      return Number.isFinite(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  private async downloadFile(
+    url: string,
+    destinationPath: string,
+    progressContext?: {
+      operation: VrSrcTransferOperation
+      releaseName: string
+      bytesCompletedBefore: number
+      totalBytes: number | null
+    }
+  ): Promise<void> {
+    const remoteContentLength = await this.getRemoteContentLength(url)
+    let existingBytes = 0
+    try {
+      existingBytes = (await stat(destinationPath)).size
+    } catch {
+      existingBytes = 0
+    }
+
+    if (remoteContentLength !== null && existingBytes > remoteContentLength) {
+      await rm(destinationPath, { force: true })
+      existingBytes = 0
+    }
+
+    if (remoteContentLength !== null && existingBytes === remoteContentLength && existingBytes > 0) {
+      if (progressContext) {
+        this.emitTransferProgress({
+          operation: progressContext.operation,
+          releaseName: progressContext.releaseName,
+          phase: 'downloading',
+          progress: progressContext.totalBytes
+            ? Math.min(
+                94,
+                Math.max(
+                  1,
+                  Math.round(((progressContext.bytesCompletedBefore + existingBytes) / progressContext.totalBytes) * 100)
+                )
+              )
+            : 94,
+          fileName: basename(destinationPath),
+          transferredBytes: progressContext.bytesCompletedBefore + existingBytes,
+          totalBytes: progressContext.totalBytes,
+          speedBytesPerSecond: null,
+          etaSeconds: 0
+        })
+      }
+      return
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const curlArgs = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', '-o', destinationPath]
+      if (existingBytes > 0) {
+        curlArgs.push('-C', '-')
+      }
+      curlArgs.push(url)
+
+      const child = spawn(
+        'curl',
+        curlArgs,
+        { stdio: ['ignore', 'ignore', 'pipe'] }
+      )
+      let stderr = ''
+      let lastTransferredBytes = existingBytes
+      let lastSampleAt = Date.now()
+
+      const emitProgress = async () => {
+        if (!progressContext) {
+          return
+        }
+
+        let transferredBytes = 0
+        try {
+          transferredBytes = (await stat(destinationPath)).size
+        } catch {
+          transferredBytes = 0
+        }
+
+        const now = Date.now()
+        const elapsedSeconds = Math.max((now - lastSampleAt) / 1000, 0.25)
+        const speedBytesPerSecond =
+          transferredBytes >= lastTransferredBytes ? (transferredBytes - lastTransferredBytes) / elapsedSeconds : null
+        lastTransferredBytes = transferredBytes
+        lastSampleAt = now
+
+        const overallTransferredBytes = progressContext.bytesCompletedBefore + transferredBytes
+        const overallTotalBytes = progressContext.totalBytes
+        const progress = overallTotalBytes
+          ? Math.min(94, Math.max(1, Math.round((overallTransferredBytes / overallTotalBytes) * 100)))
+          : 22
+        const etaSeconds =
+          overallTotalBytes && speedBytesPerSecond && speedBytesPerSecond > 0
+            ? Math.max(0, Math.round((overallTotalBytes - overallTransferredBytes) / speedBytesPerSecond))
+            : null
+
+        this.emitTransferProgress({
+          operation: progressContext.operation,
+          releaseName: progressContext.releaseName,
+          phase: 'downloading',
+          progress,
+          fileName: basename(destinationPath),
+          transferredBytes: overallTransferredBytes,
+          totalBytes: overallTotalBytes,
+          speedBytesPerSecond: speedBytesPerSecond && Number.isFinite(speedBytesPerSecond) ? speedBytesPerSecond : null,
+          etaSeconds
+        })
+      }
+
+      const intervalId = setInterval(() => {
+        void emitProgress()
+      }, 750)
+
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString()
+      })
+
+      child.once('error', (error) => {
+        clearInterval(intervalId)
+        reject(error)
+      })
+
+      child.once('close', async (code) => {
+        clearInterval(intervalId)
+        await emitProgress()
+        if (code === 0) {
+          resolve()
+          return
+        }
+
+        reject(new Error(stderr.trim() || `curl exited with code ${code ?? 'unknown'}.`))
+      })
+    })
+  }
+
+  private async getSevenZipPath(): Promise<string> {
+    const status = await dependencyService.ensureSevenZip()
+    if (status.status === 'ready' && status.path) {
+      return status.path
+    }
+
+    throw new Error(status.message || 'Unable to find a working 7-Zip runtime.')
+  }
+
+  private async extractArchive(
+    archivePath: string,
+    destinationPath: string,
+    password: string | null,
+    options?: {
+      clearDestination?: boolean
+    }
+  ): Promise<void> {
+    if (options?.clearDestination !== false) {
+      await rm(destinationPath, { recursive: true, force: true })
+    }
+    await mkdir(destinationPath, { recursive: true })
+
+    const args = ['x', '-y', `-o${destinationPath}`]
+    if (password) {
+      args.push(`-p${password}`)
+    }
+    args.push(archivePath)
+
+    await execFileAsync(await this.getSevenZipPath(), args, {
+      maxBuffer: 20 * 1024 * 1024
+    })
+  }
+
+  private async extractNestedArchives(basePath: string): Promise<void> {
+    const entries = await readdir(basePath, { withFileTypes: true })
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        await this.extractNestedArchives(join(basePath, entry.name))
+        continue
+      }
+
+      const filePath = join(basePath, entry.name)
+      if (extname(entry.name).toLowerCase() !== '.7z' || /\.7z\.\d+$/i.test(entry.name)) {
+        continue
+      }
+
+      await execFileAsync(
+        await this.getSevenZipPath(),
+        ['x', '-y', `-o${basePath}`, filePath],
+        { maxBuffer: 20 * 1024 * 1024 }
+      )
+    }
+  }
+
+  private async cleanupMultipartArchives(basePath: string): Promise<void> {
+    const entries = await readdir(basePath, { withFileTypes: true })
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        await this.cleanupMultipartArchives(join(basePath, entry.name))
+        continue
+      }
+
+      if (/\.7z(\.\d+)?$/i.test(entry.name)) {
+        await rm(join(basePath, entry.name), { force: true })
+      }
+    }
+  }
+
+  private async findFirstMatchingFile(basePath: string, fileNames: string[]): Promise<string | null> {
+    const normalizedNames = new Set(fileNames.map((name) => name.toLowerCase()))
+
+    const visit = async (currentPath: string): Promise<string | null> => {
+      const entries = await readdir(currentPath, { withFileTypes: true })
+
+      for (const entry of entries) {
+        const entryPath = join(currentPath, entry.name)
+
+        if (entry.isDirectory()) {
+          const nestedMatch = await visit(entryPath)
+          if (nestedMatch) {
+            return nestedMatch
+          }
+          continue
+        }
+
+        if (normalizedNames.has(entry.name.toLowerCase())) {
+          return entryPath
+        }
+      }
+
+      return null
+    }
+
+    return visit(basePath)
+  }
+
+  private async readNoteForRelease(releaseName: string): Promise<string | null> {
+    const directPath = join(this.getMetaExtractPath(), '.meta', 'notes', `${releaseName}.txt`)
+    const fallbackPath = await this.findFirstMatchingFile(this.getMetaExtractPath(), [`${releaseName}.txt`])
+    const notePath = (await this.fileExists(directPath)) ? directPath : fallbackPath
+
+    if (!notePath) {
+      return null
+    }
+
+    try {
+      const note = (await readFile(notePath, 'utf8')).trim()
+      return note || null
+    } catch {
+      return null
+    }
+  }
+
+  private extractTrailerVideoIdFromHtml(html: string): string | null {
+    const matches = Array.from(html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g))
+    const firstMatch = matches[0]
+    return firstMatch?.[1] ?? null
+  }
+
+  private async getTrailerVideoId(gameName: string): Promise<string | null> {
+    const cacheKey = this.normalizeTrailerSearchKey(gameName)
+    if (this.trailerVideoIdCache.has(cacheKey)) {
+      return this.trailerVideoIdCache.get(cacheKey) ?? null
+    }
+
+    try {
+      const query = encodeURIComponent(`${gameName} quest vr trailer`)
+      const html = await this.fetchText(`https://www.youtube.com/results?search_query=${query}&hl=en`)
+      const videoId = this.extractTrailerVideoIdFromHtml(html)
+      this.trailerVideoIdCache.set(cacheKey, videoId ?? null)
+      return videoId ?? null
+    } catch {
+      this.trailerVideoIdCache.set(cacheKey, null)
+      return null
+    }
+  }
+
+  private parseServerInfoFromTelegram(html: string): VrSrcCredentials | null {
+    const codeBlocks = Array.from(html.matchAll(/<code>([\s\S]*?)<\/code>/gi))
+
+    for (const match of codeBlocks) {
+      const decoded = this.decodeHtml(match[1]).replace(/<[^>]+>/g, '').trim()
+
+      try {
+        const parsed = JSON.parse(decoded) as { baseUri?: string; password?: string }
+        if (parsed.baseUri && parsed.password) {
+          return {
+            baseUri: this.ensureTrailingSlash(parsed.baseUri.trim()),
+            password: parsed.password.trim(),
+            lastResolvedAt: new Date().toISOString()
+          }
+        }
+      } catch {
+        continue
+      }
+    }
+
+    return null
+  }
+
+  private async readCachedCredentials(): Promise<VrSrcCredentials | null> {
+    try {
+      const raw = await readFile(this.getCredentialsPath(), 'utf8')
+      const parsed = JSON.parse(raw) as VrSrcCredentials
+      if (!parsed.baseUri || !parsed.password) {
+        return null
+      }
+      return {
+        ...parsed,
+        baseUri: this.ensureTrailingSlash(parsed.baseUri)
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private async resolveCredentials(): Promise<VrSrcCredentials> {
+    await this.ensureDirectories()
+
+    try {
+      const html = await this.fetchText(VR_SRC_TELEGRAM_URL)
+      const resolved = this.parseServerInfoFromTelegram(html)
+      if (resolved) {
+        await writeFile(this.getCredentialsPath(), JSON.stringify(resolved, null, 2), 'utf8')
+        return resolved
+      }
+    } catch {
+      // Fall back to cached credentials when Telegram resolution is unavailable.
+    }
+
+    const cached = await this.readCachedCredentials()
+    if (cached) {
+      return cached
+    }
+
+    throw new Error('Unable to resolve vrSrc credentials from Telegram and no cached credentials are available.')
+  }
+
+  private readCatalogHeaderIndexes(headerLine: string): Record<string, number> {
+    const columns = headerLine.split(';').map((column) => column.trim())
+    return {
+      gameName: columns.indexOf('Game Name'),
+      releaseName: columns.indexOf('Release Name'),
+      packageName: columns.indexOf('Package Name'),
+      versionCode: columns.indexOf('Version Code'),
+      lastUpdated: columns.indexOf('Last Updated'),
+      sizeMb: columns.indexOf('Size (MB)'),
+      downloads: columns.indexOf('Downloads'),
+      rating: columns.indexOf('Rating'),
+      ratingCount: columns.indexOf('Rating Count')
+    }
+  }
+
+  private extractVersionNameFromReleaseName(releaseName: string): string | null {
+    const match = releaseName.match(/\sv\d+\+(.+?)(?:\s-\S.*|$)/i)
+    const candidate = match?.[1]?.trim() ?? null
+    return candidate ? candidate : null
+  }
+
+  private async buildCatalog(): Promise<VrSrcCatalogResponse> {
+    const rootPath = this.getMetaExtractPath()
+    const gameListPath =
+      (await this.findFirstMatchingFile(rootPath, ['VRP-GameList.txt', 'GameList.txt'])) ??
+      join(rootPath, 'VRP-GameList.txt')
+    const thumbnailsPath = join(rootPath, '.meta', 'thumbnails')
+    const raw = await readFile(gameListPath, 'utf8')
+    const lines = raw.split('\n').map((line) => line.trim()).filter(Boolean)
+
+    if (!lines.length) {
+      return { syncedAt: new Date().toISOString(), items: [] }
+    }
+
+    const indexes = this.readCatalogHeaderIndexes(lines[0])
+    const items: VrSrcCatalogItem[] = []
+
+    for (const line of lines.slice(1)) {
+      const parts = line.split(';')
+      const name = parts[indexes.gameName]?.trim()
+      const releaseName = parts[indexes.releaseName]?.trim()
+      const packageName = parts[indexes.packageName]?.trim()
+
+      if (!name || !releaseName || !packageName) {
+        continue
+      }
+
+      const sizeMbRaw = parts[indexes.sizeMb]?.trim() ?? '0'
+      const sizeMb = Number.parseFloat(sizeMbRaw)
+      const artworkPath = join(thumbnailsPath, `${packageName}.jpg`)
+      const artworkUrl = (await this.fileExists(artworkPath)) ? this.toLocalAssetUri(artworkPath) : null
+
+      items.push({
+        id: packageName,
+        name,
+        releaseName,
+        packageName,
+        versionCode: parts[indexes.versionCode]?.trim() ?? '',
+        versionName: this.extractVersionNameFromReleaseName(releaseName),
+        lastUpdated: parts[indexes.lastUpdated]?.trim() ?? '',
+        sizeLabel: `${sizeMbRaw} MB`,
+        sizeBytes: Number.isFinite(sizeMb) ? Math.max(0, Math.round(sizeMb * 1024 * 1024)) : 0,
+        downloads: Number.parseFloat(parts[indexes.downloads]?.trim() ?? '0') || 0,
+        rating: Number.parseFloat(parts[indexes.rating]?.trim() ?? '0') || 0,
+        ratingCount: Number.parseFloat(parts[indexes.ratingCount]?.trim() ?? '0') || 0,
+        artworkUrl,
+        note: null
+      })
+    }
+
+    const catalog = {
+      syncedAt: new Date().toISOString(),
+      items
+    }
+
+    await writeFile(this.getCatalogPath(), JSON.stringify(catalog, null, 2), 'utf8')
+    return catalog
+  }
+
+  private async readCatalog(): Promise<VrSrcCatalogResponse> {
+    try {
+      const raw = await readFile(this.getCatalogPath(), 'utf8')
+      const parsed = JSON.parse(raw) as VrSrcCatalogResponse
+      return {
+        syncedAt: parsed.syncedAt ?? null,
+        items: Array.isArray(parsed.items)
+          ? parsed.items.map((item) => ({
+              ...item,
+              versionName:
+                typeof item?.versionName === 'string'
+                  ? item.versionName
+                  : typeof item?.releaseName === 'string'
+                    ? this.extractVersionNameFromReleaseName(item.releaseName)
+                    : null
+            }))
+          : []
+      }
+    } catch {
+      return {
+        syncedAt: null,
+        items: []
+      }
+    }
+  }
+
+  private async buildStatus(): Promise<VrSrcStatusResponse> {
+    const catalog = await this.readCatalog()
+    const credentials = await this.readCachedCredentials()
+
+    return {
+      configured: Boolean(credentials?.baseUri && credentials?.password),
+      baseUriHost: credentials?.baseUri ? new URL(credentials.baseUri).host : null,
+      lastResolvedAt: credentials?.lastResolvedAt ?? null,
+      lastSyncAt: catalog.syncedAt,
+      itemCount: catalog.items.length,
+      message: credentials
+        ? catalog.syncedAt
+          ? `vrSrc is ready and last synced ${new Date(catalog.syncedAt).toLocaleString()}.`
+          : 'vrSrc credentials are ready. Sync the source to build the remote catalog.'
+        : 'vrSrc is not configured yet.'
+    }
+  }
+
+  private async listRemotePayloadFiles(baseUri: string, releaseName: string): Promise<string[]> {
+    const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
+    const listingHtml = await this.fetchText(`${this.ensureTrailingSlash(baseUri)}${hash}/`)
+
+    return Array.from(listingHtml.matchAll(/href="([^"]+)"/gi))
+      .map((match) => match[1])
+      .filter((href) => href && href !== '../' && !href.endsWith('/'))
+  }
+
+  private async ensureReleasePayload(releaseName: string, operation: VrSrcTransferOperation): Promise<string> {
+    const cachedPromise = this.acquireInFlight.get(releaseName)
+    if (cachedPromise) {
+      return cachedPromise
+    }
+
+    const acquirePromise = (async () => {
+      const credentials = await this.resolveCredentials()
+      const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
+      const folderName = this.sanitizeSegment(releaseName)
+      const payloadPath = join(this.getDownloadsPath(), folderName)
+      const extractedMarkerPath = join(payloadPath, '.questvault-vrsrc-ready')
+
+      if (await this.fileExists(extractedMarkerPath)) {
+        return payloadPath
+      }
+
+      await mkdir(payloadPath, { recursive: true })
+
+      const payloadFiles = await this.listRemotePayloadFiles(credentials.baseUri, releaseName)
+      if (!payloadFiles.length) {
+        throw new Error(`vrSrc did not return any payload files for ${releaseName}.`)
+      }
+
+      const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
+      const payloadBaseUrl = `${this.ensureTrailingSlash(credentials.baseUri)}${hash}/`
+      const payloadUrls = payloadFiles.map((fileName) => new URL(fileName, payloadBaseUrl).toString())
+      const payloadSizes = await Promise.all(payloadUrls.map((url) => this.getRemoteContentLength(url)))
+      const hasKnownTotalBytes = payloadSizes.every((size) => typeof size === 'number')
+      const totalBytes = hasKnownTotalBytes
+        ? payloadSizes.reduce((sum, size) => sum + (size ?? 0), 0)
+        : null
+      let bytesCompletedBefore = 0
+
+      this.emitTransferProgress({
+        operation,
+        releaseName,
+        phase: 'preparing',
+        progress: 6,
+        fileName: null,
+        transferredBytes: 0,
+        totalBytes,
+        speedBytesPerSecond: null,
+        etaSeconds: null
+      })
+
+      for (const [index, fileName] of payloadFiles.entries()) {
+        const fileUrl = payloadUrls[index]
+        const destinationPath = join(payloadPath, basename(fileName))
+        await this.downloadFile(fileUrl, destinationPath, {
+          operation,
+          releaseName,
+          bytesCompletedBefore,
+          totalBytes
+        })
+        bytesCompletedBefore += payloadSizes[index] ?? 0
+      }
+
+      const archivePart = payloadFiles.find((fileName) => /\.7z\.001$/i.test(fileName))
+      if (archivePart) {
+        this.emitTransferProgress({
+          operation,
+          releaseName,
+          phase: 'extracting',
+          progress: 96,
+          fileName: basename(archivePart),
+          transferredBytes: totalBytes ?? bytesCompletedBefore,
+          totalBytes,
+          speedBytesPerSecond: null,
+          etaSeconds: null
+        })
+        await this.extractArchive(join(payloadPath, basename(archivePart)), payloadPath, decodedPassword, {
+          clearDestination: false
+        })
+        await this.extractNestedArchives(payloadPath)
+        await this.cleanupMultipartArchives(payloadPath)
+      }
+
+      await writeFile(extractedMarkerPath, new Date().toISOString(), 'utf8')
+      return payloadPath
+    })()
+
+    this.acquireInFlight.set(releaseName, acquirePromise)
+
+    try {
+      return await acquirePromise
+    } finally {
+      this.acquireInFlight.delete(releaseName)
+    }
+  }
+
+  private async findCatalogItem(releaseName: string): Promise<VrSrcCatalogItem | null> {
+    const catalog = await this.readCatalog()
+    return catalog.items.find((item) => item.releaseName === releaseName) ?? null
+  }
+
+  private async createUniqueLibraryTarget(baseLibraryPath: string, releaseName: string): Promise<string> {
+    const safeBaseName = this.sanitizeSegment(releaseName)
+    let candidate = join(baseLibraryPath, safeBaseName)
+    let suffix = 2
+
+    while (await this.fileExists(candidate)) {
+      candidate = join(baseLibraryPath, `${safeBaseName} (${suffix})`)
+      suffix += 1
+    }
+
+    return candidate
+  }
+
+  private async cleanupReleasePayload(payloadPath: string | null): Promise<void> {
+    if (!payloadPath) {
+      return
+    }
+
+    await rm(payloadPath, { recursive: true, force: true })
+  }
+
+  private async resolveLibraryImportSource(payloadPath: string): Promise<string> {
+    let currentPath = payloadPath
+
+    while (true) {
+      const entries = (await readdir(currentPath, { withFileTypes: true })).filter(
+        (entry) => !entry.name.startsWith('.') && !/\.7z(\.\d+)?$/i.test(entry.name)
+      )
+      const directoryEntries = entries.filter((entry) => entry.isDirectory())
+      const fileEntries = entries.filter((entry) => !entry.isDirectory())
+
+      if (directoryEntries.length === 1 && fileEntries.length === 0) {
+        currentPath = join(currentPath, directoryEntries[0].name)
+        continue
+      }
+
+      return currentPath
+    }
+  }
+
+  async getStatus(): Promise<VrSrcStatusResponse> {
+    return this.buildStatus()
+  }
+
+  async getCatalog(): Promise<VrSrcCatalogResponse> {
+    return this.readCatalog()
+  }
+
+  async getItemDetails(releaseName: string, gameName: string): Promise<VrSrcItemDetailsResponse> {
+    const [note, trailerVideoId] = await Promise.all([
+      this.readNoteForRelease(releaseName),
+      this.getTrailerVideoId(gameName)
+    ])
+
+    return {
+      releaseName,
+      note,
+      trailerVideoId
+    }
+  }
+
+  async syncCatalog(): Promise<VrSrcSyncResponse> {
+    if (this.syncInFlight) {
+      return this.syncInFlight
+    }
+
+    this.syncInFlight = (async () => {
+      try {
+        await this.ensureDirectories()
+        const credentials = await this.resolveCredentials()
+        const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
+        await this.downloadFile(`${credentials.baseUri}meta.7z`, this.getMetaArchivePath())
+        await this.extractArchive(this.getMetaArchivePath(), this.getMetaExtractPath(), decodedPassword)
+        const catalog = await this.buildCatalog()
+        const status = await this.buildStatus()
+
+        return {
+          success: true,
+          message: `vrSrc synced ${catalog.items.length} remote entries.`,
+          details: null,
+          status,
+          catalog
+        }
+      } catch (error) {
+        const status = await this.buildStatus()
+        return {
+          success: false,
+          message: 'Unable to sync vrSrc.',
+          details: error instanceof Error ? error.message : String(error),
+          status,
+          catalog: await this.readCatalog()
+        }
+      } finally {
+        this.syncInFlight = null
+      }
+    })()
+
+    return this.syncInFlight
+  }
+
+  async downloadToLibrary(releaseName: string): Promise<VrSrcDownloadToLibraryResponse> {
+    const settings = await settingsService.getSettings()
+    const libraryPath = settings.localLibraryPath?.trim() ?? ''
+
+    if (!libraryPath) {
+      return {
+        success: false,
+        releaseName,
+        sourcePath: null,
+        targetPath: null,
+        packageName: null,
+        message: 'Select a Local Library path before adding vrSrc items.',
+        details: null
+      }
+    }
+
+    try {
+      const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library')
+      const importSourcePath = await this.resolveLibraryImportSource(sourcePath)
+      const targetPath = await this.createUniqueLibraryTarget(libraryPath, releaseName)
+      await cp(importSourcePath, targetPath, { recursive: true, force: false })
+      await settingsService.rescanLocalLibrary()
+      await this.cleanupReleasePayload(sourcePath)
+      const catalogItem = await this.findCatalogItem(releaseName)
+
+      return {
+        success: true,
+        releaseName,
+        sourcePath: null,
+        targetPath,
+        packageName: catalogItem?.packageName ?? null,
+        message: `${releaseName} was added to the Local Library.`,
+        details: targetPath
+      }
+    } catch (error) {
+      return {
+        success: false,
+        releaseName,
+        sourcePath: null,
+        targetPath: null,
+        packageName: null,
+        message: `Unable to add ${releaseName} to the Local Library.`,
+        details: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  async installNow(serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> {
+    try {
+      const sourcePath = await this.ensureReleasePayload(releaseName, 'install-now')
+      const installResponse = await deviceService.installManualPath(serial, sourcePath)
+      if (installResponse.success) {
+        await this.cleanupReleasePayload(sourcePath)
+      }
+      const catalogItem = await this.findCatalogItem(releaseName)
+
+      return {
+        success: installResponse.success,
+        releaseName,
+        serial,
+        sourcePath: installResponse.success ? null : sourcePath,
+        packageName: installResponse.packageName ?? catalogItem?.packageName ?? null,
+        message: installResponse.message,
+        details: installResponse.details
+      }
+    } catch (error) {
+      return {
+        success: false,
+        releaseName,
+        serial,
+        sourcePath: null,
+        packageName: null,
+        message: `Unable to install ${releaseName} from vrSrc.`,
+        details: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+}
+
+export const vrSrcService = new VrSrcService()

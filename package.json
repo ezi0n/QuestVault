@@ -1,0 +1,90 @@
+{
+  "name": "questvault",
+  "version": "0.4.2",
+  "description": "QuestVault desktop manager for Quest library, backup, install, and save-state workflows",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "electron-vite build",
+    "dist": "pnpm build && electron-builder --mac --arm64 --win --x64 --linux --x64",
+    "dist:mac": "pnpm build && electron-builder --mac --arm64",
+    "dist:mac:x64": "pnpm build && electron-builder --mac --x64",
+    "dist:mac:universal": "pnpm build && electron-builder --mac --universal",
+    "dist:win": "pnpm build && electron-builder --win --x64",
+    "dist:win:arm64": "pnpm build && electron-builder --win --arm64",
+    "dist:linux": "pnpm build && electron-builder --linux --x64",
+    "dist:linux:arm64": "pnpm build && electron-builder --linux --arm64",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "pnpm typecheck:node && pnpm typecheck:web"
+  },
+  "build": {
+    "appId": "com.apprenticevr.questvault",
+    "productName": "QuestVault",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!src/**/*",
+      "!docs/**/*",
+      "!mockups/**/*",
+      "!wireframes/**/*",
+      "!README.md",
+      "!TODO.md",
+      "!tsconfig*.json",
+      "!electron.vite.config.ts"
+    ],
+    "extraMetadata": {
+      "main": "out/main/index.js"
+    },
+    "mac": {
+      "icon": "build/icons/icon.icns",
+      "category": "public.app-category.utilities",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "build/icons/icon.ico",
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "icon": "build/icons/png",
+      "category": "Utility",
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ]
+    }
+  },
+  "dependencies": {
+    "@devicefarmer/adbkit-apkreader": "^3.2.4",
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "extract-zip": "^2.0.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "yauzl": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.1",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.5.2",
+    "electron": "^36.4.0",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^3.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
