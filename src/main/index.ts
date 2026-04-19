@@ -303,11 +303,21 @@ app.whenReady().then(async () => {
     vrSrcService.getItemDetails(releaseName, gameName)
   )
   ipcMain.handle('vrsrc:sync-catalog', async () => vrSrcService.syncCatalog())
+  ipcMain.handle('vrsrc:clear-cache', async () => vrSrcService.clearCache())
   ipcMain.handle('vrsrc:download-to-library', async (_event, releaseName: string) =>
     vrSrcService.downloadToLibrary(releaseName)
   )
   ipcMain.handle('vrsrc:install-now', async (_event, serial: string, releaseName: string) =>
     vrSrcService.installNow(serial, releaseName)
+  )
+  ipcMain.handle('vrsrc:pause-transfer', async (_event, releaseName: string, operation: string) =>
+    vrSrcService.pauseTransfer(releaseName, operation as 'download-to-library' | 'install-now')
+  )
+  ipcMain.handle('vrsrc:resume-transfer', async (_event, releaseName: string, operation: string) =>
+    vrSrcService.resumeTransfer(releaseName, operation as 'download-to-library' | 'install-now')
+  )
+  ipcMain.handle('vrsrc:cancel-transfer', async (_event, releaseName: string, operation: string) =>
+    vrSrcService.cancelTransfer(releaseName, operation as 'download-to-library' | 'install-now')
   )
   ipcMain.handle('devices:install-local-library-item', async (_event, serial: string, itemId: string) => {
     const item = await settingsService.getIndexedLocalLibraryItem(itemId)

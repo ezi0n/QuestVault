@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { getFallbackArtworkUri, type FallbackArtworkVariant } from '../fallbackArtwork'
 import metaQuestIcon from '../assets/device-icons/meta-quest.png'
 import metaQuest2Icon from '../assets/device-icons/meta-quest-2.png'
 import metaQuest3Icon from '../assets/device-icons/meta-quest-3.png'
@@ -28,6 +29,7 @@ import type {
   VrSrcCatalogResponse,
   VrSrcItemDetailsResponse,
   VrSrcStatusResponse,
+  VrSrcTransferOperation,
   ViewDisplayMode
 } from '@shared/types/ipc'
 
@@ -49,6 +51,9 @@ interface WireframeShellProps {
   subtitle: string
   liveQueueItems: LiveQueueItem[]
   queueAutoOpenSignal: number
+  onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   settings: AppSettings | null
   settingsBusy: boolean
   libraryRescanBusy: boolean
@@ -81,7 +86,7 @@ interface WireframeShellProps {
   deviceLeftoverMessage: string | null
   inventoryMessage: UiNotice | null
   inventoryActionBusyPackageId: string | null
-  gamesInstallBusyId: string | null
+  gamesInstallBusyIds: string[]
   manualInstallBusyKind: 'apk' | 'folder' | null
   backupStorageActionBusyItemId: string | null
   gamesMessage: UiNotice | null
@@ -89,7 +94,8 @@ interface WireframeShellProps {
   vrSrcCatalog: VrSrcCatalogResponse | null
   isVrSrcPanelOpen: boolean
   vrSrcSyncBusy: boolean
-  vrSrcActionBusyReleaseName: string | null
+  vrSrcMaintenanceBusy: boolean
+  vrSrcActionBusyReleaseNames: string[]
   vrSrcMessage: UiNotice | null
   saveGamesBusy: boolean
   saveGamesBatchBusy: boolean
@@ -103,6 +109,7 @@ interface WireframeShellProps {
   onRefreshDevices: () => Promise<void>
   onChooseSettingsPath: (key: SettingsPathKey) => Promise<void>
   onClearSettingsPath: (key: SettingsPathKey) => Promise<void>
+  onClearVrSrcCache: () => Promise<void>
   onRescanLocalLibrary: () => Promise<void>
   onInstallManualLibrarySource: (kind: 'apk' | 'folder') => Promise<void>
   onRemoveMissingLibraryItem: (itemId: string) => Promise<void>
@@ -385,6 +392,29 @@ function getRelativePathBaseName(value: string | null | undefined): string | nul
 function getPlaceholderInitial(value: string | null | undefined): string {
   const trimmed = value?.trim()
   return trimmed ? trimmed.slice(0, 1).toLocaleUpperCase() : '?'
+}
+
+function buildFallbackArtworkStyle(uri: string): CSSProperties {
+  return {
+    backgroundImage: `url(${uri})`
+  }
+}
+
+function renderFallbackArtworkSurface(
+  label: string | null | undefined,
+  artworkKey: string | null | undefined,
+  variant: FallbackArtworkVariant,
+  className: string
+): ReactNode {
+  return (
+    <div
+      aria-hidden="true"
+      className={className}
+      style={buildFallbackArtworkStyle(getFallbackArtworkUri(artworkKey, variant))}
+    >
+      <span>{getPlaceholderInitial(label)}</span>
+    </div>
+  )
 }
 
 function formatGameActionLabel(action: string): string {
@@ -1324,8 +1354,11 @@ function QueueRail(props: {
   items: LiveQueueItem[]
   isOpen: boolean
   onClose: () => void
+  onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
 }) {
-  const { items, isOpen, onClose } = props
+  const { items, isOpen, onClose, onPauseVrSrcTransfer, onResumeVrSrcTransfer, onCancelVrSrcTransfer } = props
 
   function formatQueueKind(kind: LiveQueueItem['kind']): string {
     if (kind === 'restore') {
@@ -1376,6 +1409,14 @@ function QueueRail(props: {
       return 'downloading'
     }
 
+    if (phase === 'paused') {
+      return 'paused'
+    }
+
+    if (phase === 'cancelled') {
+      return 'cancelled'
+    }
+
     if (phase === 'extracting') {
       return 'extracting'
     }
@@ -1392,7 +1433,7 @@ function QueueRail(props: {
       return 'ready'
     }
 
-    if (phase === 'failed') {
+    if (phase === 'failed' || phase === 'cancelled') {
       return 'danger'
     }
 
@@ -1436,7 +1477,7 @@ function QueueRail(props: {
   }
 
   function getQueueProgress(item: LiveQueueItem): number {
-    if (item.phase === 'completed' || item.phase === 'failed') {
+    if (item.phase === 'completed' || item.phase === 'failed' || item.phase === 'cancelled') {
       return 100
     }
 
@@ -1498,6 +1539,37 @@ function QueueRail(props: {
                 {formatQueuePhase(item.phase)}
               </span>
               {item.details ? <p className="queue-card-details">{item.details}</p> : null}
+              {item.transferControl?.kind === 'vrsrc' ? (
+                <div className="queue-card-actions">
+                  {item.transferControl.canPause ? (
+                    <button
+                      className="queue-card-action"
+                      onClick={() => void onPauseVrSrcTransfer(item.transferControl!.releaseName, item.transferControl!.operation)}
+                      type="button"
+                    >
+                      Pause
+                    </button>
+                  ) : null}
+                  {item.transferControl.canResume ? (
+                    <button
+                      className="queue-card-action"
+                      onClick={() => void onResumeVrSrcTransfer(item.transferControl!.releaseName, item.transferControl!.operation)}
+                      type="button"
+                    >
+                      Resume
+                    </button>
+                  ) : null}
+                  {item.transferControl.canCancel ? (
+                    <button
+                      className="queue-card-action queue-card-action-danger"
+                      onClick={() => void onCancelVrSrcTransfer(item.transferControl!.releaseName, item.transferControl!.operation)}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="progress-track">
                 <div className="progress-fill" style={{ width: `${getQueueProgress(item)}%` }} />
               </div>
@@ -1524,7 +1596,7 @@ function GamesView(props: {
   deviceUserName: string | null
   deviceUserNameBusy: boolean
   selectedDeviceId: string | null
-  gamesInstallBusyId: string | null
+  gamesInstallBusyIds: string[]
   purgeLibraryItemBusyId: string | null
   backupStorageActionBusyItemId: string | null
   inventoryActionBusyPackageId: string | null
@@ -1533,7 +1605,7 @@ function GamesView(props: {
   vrSrcCatalog: VrSrcCatalogResponse | null
   isVrSrcPanelOpen: boolean
   vrSrcSyncBusy: boolean
-  vrSrcActionBusyReleaseName: string | null
+  vrSrcActionBusyReleaseNames: string[]
   vrSrcMessage: UiNotice | null
   displayMode: GamesDisplayMode
   onToggleDisplayMode: () => void
@@ -1566,7 +1638,7 @@ function GamesView(props: {
     deviceUserName,
     deviceUserNameBusy,
     selectedDeviceId,
-    gamesInstallBusyId,
+    gamesInstallBusyIds,
     purgeLibraryItemBusyId,
     backupStorageActionBusyItemId,
     inventoryActionBusyPackageId,
@@ -1575,7 +1647,7 @@ function GamesView(props: {
     vrSrcCatalog,
     isVrSrcPanelOpen,
     vrSrcSyncBusy,
-    vrSrcActionBusyReleaseName,
+    vrSrcActionBusyReleaseNames,
     vrSrcMessage,
     displayMode,
     onToggleDisplayMode,
@@ -1605,6 +1677,7 @@ function GamesView(props: {
   const [gamesFilter, setGamesFilter] = useState<GamesFilterId>('all')
   const [gamesSearch, setGamesSearch] = useState('')
   const [vrSrcFilter, setVrSrcFilter] = useState<'all' | 'new' | 'updates'>('all')
+  const [vrSrcSortMode, setVrSrcSortMode] = useState<'title' | 'latest'>('title')
   const [gamesUserNameEditing, setGamesUserNameEditing] = useState(false)
   const [gamesUserNameDraft, setGamesUserNameDraft] = useState('')
   const [galleryScalePercent, setGalleryScalePercent] = useState(100)
@@ -1616,8 +1689,11 @@ function GamesView(props: {
   const [gamesScrollAvailableHeight, setGamesScrollAvailableHeight] = useState(0)
   const galleryVisualScale = 0.85
   const scaledGalleryCardHeight = Math.round(154 * galleryVisualScale)
-  const clampedGalleryScalePercent = Math.min(Math.max(galleryScalePercent, 0), 100)
-  const galleryColumnCount = 6 - Math.round(clampedGalleryScalePercent / 50)
+  const clampedGalleryScalePercent = Math.min(Math.max(galleryScalePercent, 100), 150)
+  const galleryColumnCount =
+    clampedGalleryScalePercent >= 150 ? 6 : clampedGalleryScalePercent >= 125 ? 5 : 4
+  const galleryScaleLabel =
+    clampedGalleryScalePercent >= 150 ? '1.5x' : clampedGalleryScalePercent >= 125 ? '1.25x' : '1.0x'
   const gamesResultsViewportHeight = 84 * 5 + 8 * 4
   const gamesGalleryViewportHeight = scaledGalleryCardHeight * 3 + 12 * 2
   const [selectedGameDetails, setSelectedGameDetails] = useState<MetaStoreGameDetails | null>(null)
@@ -1866,6 +1942,15 @@ function GamesView(props: {
 
       return versions
     }, new Map<string, string | null>())
+  const parseVrSrcLastUpdated = (value: string) => {
+    const normalized = value.trim()
+    if (!normalized) {
+      return 0
+    }
+
+    const parsed = Date.parse(normalized.replace(' UTC', 'Z'))
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
   const vrSrcItems = [...(vrSrcCatalog?.items ?? [])].sort((left, right) =>
     left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
   )
@@ -1902,6 +1987,15 @@ function GamesView(props: {
     }
 
     return true
+  }).sort((left, right) => {
+    if (vrSrcSortMode === 'latest') {
+      const difference = parseVrSrcLastUpdated(right.lastUpdated) - parseVrSrcLastUpdated(left.lastUpdated)
+      if (difference !== 0) {
+        return difference
+      }
+    }
+
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
   })
   const vrSrcSummary = vrSrcItems.reduce(
     (summary, item) => {
@@ -1935,7 +2029,7 @@ function GamesView(props: {
     const highestLibraryVersion = matchingLibraryItem?.libraryVersion ?? matchingLibraryItem?.libraryVersionCode ?? null
     const isUpdate = itemStatus?.isUpdate ?? false
     const isInLibrary = itemStatus?.isInLibrary ?? false
-    const actionBusy = vrSrcActionBusyReleaseName === item.releaseName
+    const actionBusy = vrSrcActionBusyReleaseNames.includes(item.releaseName)
     const statusLabel = isUpdate ? 'Update' : isInLibrary ? 'In Library' : 'New'
     const statusClassName = isUpdate
       ? 'status-pill status-pending'
@@ -2001,7 +2095,7 @@ function GamesView(props: {
   const selectedGameHasResolvedMetaStoreMatch = Boolean(selectedGame?.hasResolvedMetaStoreMatch)
   const selectedGameDescription = formatGameDescription(effectiveSelectedGameDetails?.longDescription)
   const selectedGamePrimaryPackageId = selectedGame?.packageIds[0] ?? null
-  const selectedGameInstallBusy = selectedGame?.itemId ? gamesInstallBusyId === selectedGame.itemId : false
+  const selectedGameInstallBusy = selectedGame?.itemId ? gamesInstallBusyIds.includes(selectedGame.itemId) : false
   const selectedLibraryPurgeBusy = selectedGame?.itemId ? purgeLibraryItemBusyId === selectedGame.itemId : false
   const selectedBackupStorageActionBusy = selectedGame?.itemId ? backupStorageActionBusyItemId === selectedGame.itemId : false
   const selectedGameHasHiddenVersions = (selectedGame?.hiddenVersionCount ?? 0) > 0
@@ -2572,20 +2666,20 @@ function GamesView(props: {
             {displayMode === 'gallery' ? (
               <label
                 className="gallery-scale-control"
-                title="Temporarily change gallery density in Apps & Games and vrSrc. 0% = 6 cards, 50% = 5 cards, 100% = 4 cards."
+                title="Temporarily change gallery density in Apps & Games and vrSrc. 1.0x = 4 cards, 1.25x = 5 cards, 1.5x = 6 cards."
               >
                 <span>Scale</span>
                 <input
                   aria-label="Gallery scale"
                   className="gallery-scale-slider"
-                  max="100"
-                  min="0"
+                  max="150"
+                  min="100"
                   onChange={(event) => setGalleryScalePercent(Number(event.target.value))}
-                  step="50"
+                  step="25"
                   type="range"
                   value={galleryScalePercent}
                 />
-                <strong>{galleryScalePercent}%</strong>
+                <strong>{galleryScaleLabel}</strong>
               </label>
             ) : null}
             <div className="games-toolbar-actions">
@@ -2694,7 +2788,17 @@ function GamesView(props: {
                   title={vrSrcStatus?.message ?? 'vrSrc has not been loaded yet.'}
                 >
                   <span className="eyebrow">Status</span>
-                  <strong>{vrSrcStatus?.configured ? 'Ready' : 'Unavailable'}</strong>
+                  <strong className="vrsrc-status-indicator-wrap">
+                    <span
+                      aria-label={vrSrcStatus?.configured ? 'Ready' : 'Unavailable'}
+                      className={
+                        vrSrcStatus?.configured
+                          ? 'runtime-state-dot runtime-state-dot-ready'
+                          : 'runtime-state-dot runtime-state-dot-danger'
+                      }
+                      role="img"
+                    />
+                  </strong>
                 </div>
                 <div
                   className="vrsrc-summary-pill"
@@ -2724,6 +2828,16 @@ function GamesView(props: {
                   <strong>{vrSrcSummary.updateCount}</strong>
                 </button>
                 <button
+                  aria-pressed={vrSrcSortMode === 'latest'}
+                  className={vrSrcSortMode === 'latest' ? 'vrsrc-summary-pill active' : 'vrsrc-summary-pill'}
+                  title="Sort remote items by the most recently updated releases first."
+                  onClick={() => setVrSrcSortMode((current) => (current === 'latest' ? 'title' : 'latest'))}
+                  type="button"
+                >
+                  <span className="eyebrow">Sort</span>
+                  <strong>{vrSrcSortMode === 'latest' ? 'Latest' : 'Title'}</strong>
+                </button>
+                <button
                   className="vrsrc-summary-pill vrsrc-summary-pill-button"
                   disabled={vrSrcSyncBusy}
                   onClick={() => void onSyncVrSrcCatalog()}
@@ -2746,11 +2860,8 @@ function GamesView(props: {
               className="section-copy compact vrsrc-subtitle"
               title="Sync the protected remote catalog, then add items to the Local Library or install them directly to the headset."
             >
-              <>
-                Sync the protected remote catalog, then add items to
-                <br />
-                the Local Library or install them directly to the headset.
-              </>
+              <span>Sync the protected remote catalog, then add items to</span>
+              <span>the Local Library or install them directly to the headset.</span>
             </p>
           </div>
 
@@ -2794,9 +2905,12 @@ function GamesView(props: {
                           {item.artworkUrl ? (
                             <img alt="" className="game-gallery-hero-image" src={item.artworkUrl} />
                           ) : (
-                            <div aria-hidden="true" className="game-gallery-hero-placeholder">
-                              <span>{getPlaceholderInitial(item.name)}</span>
-                            </div>
+                            renderFallbackArtworkSurface(
+                              item.name,
+                              item.releaseName,
+                              'gallery',
+                              'game-gallery-hero-placeholder fallback-art-surface'
+                            )
                           )}
                           <div className="game-gallery-title-banner">
                             <strong>{item.name}</strong>
@@ -2861,9 +2975,12 @@ function GamesView(props: {
                               <img alt="" className="vrsrc-thumb-image" src={item.artworkUrl} />
                             </div>
                           ) : (
-                            <div aria-hidden="true" className="vrsrc-thumb-placeholder">
-                              <span>{getPlaceholderInitial(item.name)}</span>
-                            </div>
+                            renderFallbackArtworkSurface(
+                              item.name,
+                              item.releaseName,
+                              'cover',
+                              'vrsrc-thumb-placeholder fallback-art-surface'
+                            )
                           )}
                           <div className="row-title vrsrc-row-title">
                             <strong>{item.name}</strong>
@@ -2928,6 +3045,10 @@ function GamesView(props: {
 
       <section className="surface-panel games-workspace-shell">
         <p className="eyebrow games-workspace-eyebrow">Local Library</p>
+        <p className="games-workspace-copy">
+          <span>Browse what is already in your Local Library, then decide what to</span>
+          <span>install, review, update, or clean up.</span>
+        </p>
         {displayMode === 'gallery' ? (
           <section className="games-gallery-surface">
             <div
@@ -2966,9 +3087,12 @@ function GamesView(props: {
                         src={game.heroImageUri ?? game.thumbnailUri ?? undefined}
                       />
                     ) : (
-                      <div aria-hidden="true" className="game-gallery-hero-placeholder">
-                        <span>{getPlaceholderInitial(game.title)}</span>
-                      </div>
+                      renderFallbackArtworkSurface(
+                        game.title,
+                        game.itemId ?? game.id,
+                        'gallery',
+                        'game-gallery-hero-placeholder fallback-art-surface'
+                      )
                     )}
                     <div className="game-gallery-title-banner">
                       <strong>{game.title}</strong>
@@ -3046,9 +3170,12 @@ function GamesView(props: {
                         <img alt="" className="game-thumb-image" src={game.thumbnailUri} />
                       </div>
                     ) : (
-                      <div aria-hidden="true" className="game-thumb-placeholder">
-                        <span>Art</span>
-                      </div>
+                      renderFallbackArtworkSurface(
+                        game.title,
+                        game.itemId ?? game.id,
+                        'cover',
+                        'game-thumb-placeholder fallback-art-surface'
+                      )
                     )}
                     <div className="row-title">
                       <strong>{game.title}</strong>
@@ -3088,13 +3215,13 @@ function GamesView(props: {
                       disabled={
                         game.source === 'library' &&
                         (game.action === 'Install' || game.action === 'Update') &&
-                        (!selectedDeviceId || gamesInstallBusyId === game.itemId)
+                        (!selectedDeviceId || gamesInstallBusyIds.includes(game.itemId))
                       }
                       type="button"
                     >
                       {game.source === 'library' &&
                       (game.action === 'Install' || game.action === 'Update') &&
-                      gamesInstallBusyId === game.itemId
+                      gamesInstallBusyIds.includes(game.itemId)
                         ? 'Installing…'
                         : formatGameActionLabel(game.action)}
                     </button>
@@ -3137,9 +3264,12 @@ function GamesView(props: {
                 {selectedVrSrcItem.artworkUrl ? (
                   <img alt="" className="games-drawer-hero-image" src={selectedVrSrcItem.artworkUrl} />
                 ) : (
-                  <div aria-hidden="true" className="games-drawer-image-placeholder">
-                    <span>{getPlaceholderInitial(selectedVrSrcItem.name)}</span>
-                  </div>
+                  renderFallbackArtworkSurface(
+                    selectedVrSrcItem.name,
+                    selectedVrSrcItem.releaseName,
+                    'hero',
+                    'games-drawer-image-placeholder fallback-art-surface'
+                  )
                 )}
               </div>
               <div className="games-drawer-title-row">
@@ -3147,9 +3277,12 @@ function GamesView(props: {
                   {selectedVrSrcItem.artworkUrl ? (
                     <img alt="" className="games-drawer-art-image" src={selectedVrSrcItem.artworkUrl} />
                   ) : (
-                    <div aria-hidden="true" className="games-drawer-image-placeholder compact">
-                      <span>{getPlaceholderInitial(selectedVrSrcItem.name)}</span>
-                    </div>
+                    renderFallbackArtworkSurface(
+                      selectedVrSrcItem.name,
+                      selectedVrSrcItem.releaseName,
+                      'cover',
+                      'games-drawer-image-placeholder compact fallback-art-surface'
+                    )
                   )}
                 </div>
                 <div className="games-drawer-title-block">
@@ -3245,15 +3378,15 @@ function GamesView(props: {
             <div className="stack-sm">
               <button
                 className="action-pill"
-                disabled={vrSrcActionBusyReleaseName === selectedVrSrcItem.releaseName}
+                disabled={vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName)}
                 onClick={() => void onDownloadVrSrcToLibrary(selectedVrSrcItem.releaseName)}
                 type="button"
               >
-                {vrSrcActionBusyReleaseName === selectedVrSrcItem.releaseName ? 'Working…' : 'Add to Library'}
+                {vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName) ? 'Working…' : 'Add to Library'}
               </button>
               <button
                 className="action-pill"
-                disabled={vrSrcActionBusyReleaseName === selectedVrSrcItem.releaseName || !selectedDeviceId}
+                disabled={vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName) || !selectedDeviceId}
                 onClick={() => void onInstallVrSrcNow(selectedVrSrcItem.releaseName)}
                 title={
                   selectedDeviceId
@@ -3288,9 +3421,12 @@ function GamesView(props: {
                 {selectedGameHeroUri ? (
                   <img alt="" className="games-drawer-hero-image" src={selectedGameHeroUri} />
                 ) : (
-                  <div aria-hidden="true" className="games-drawer-image-placeholder">
-                    <span>{getPlaceholderInitial(effectiveSelectedGameDetails?.title ?? selectedGame.title)}</span>
-                  </div>
+                  renderFallbackArtworkSurface(
+                    effectiveSelectedGameDetails?.title ?? selectedGame.title,
+                    selectedGame.itemId ?? selectedGame.id,
+                    'hero',
+                    'games-drawer-image-placeholder fallback-art-surface'
+                  )
                 )}
                 {selectedGameHasNewerAvailableVersion ? (
                   <div className="games-drawer-hero-banner">
@@ -3336,9 +3472,12 @@ function GamesView(props: {
                   {selectedGameHeaderArtUri ? (
                     <img alt="" className="games-drawer-art-image" src={selectedGameHeaderArtUri} />
                   ) : (
-                    <div aria-hidden="true" className="games-drawer-image-placeholder compact">
-                      <span>{getPlaceholderInitial(effectiveSelectedGameDetails?.title ?? selectedGame.title)}</span>
-                    </div>
+                    renderFallbackArtworkSurface(
+                      effectiveSelectedGameDetails?.title ?? selectedGame.title,
+                      selectedGame.itemId ?? selectedGame.id,
+                      'cover',
+                      'games-drawer-image-placeholder compact fallback-art-surface'
+                    )
                   )}
                   <div
                     className={
@@ -4257,9 +4396,12 @@ function InventoryView(props: {
                         {artworkUri ? (
                           <img alt="" className="inventory-gallery-hero-image" src={artworkUri} />
                         ) : (
-                          <div className="inventory-gallery-hero-placeholder" aria-hidden="true">
-                            <span>{getPlaceholderInitial(displayLabel)}</span>
-                          </div>
+                          renderFallbackArtworkSurface(
+                            displayLabel,
+                            app.packageId,
+                            'gallery',
+                            'inventory-gallery-hero-placeholder fallback-art-surface'
+                          )
                         )}
                         <div className="inventory-gallery-overlay">
                           <span className="inventory-gallery-meta">{formatBytes(app.totalFootprintBytes)}</span>
@@ -4327,9 +4469,12 @@ function InventoryView(props: {
                             <img alt="" className="game-thumb-image" src={artworkUri} />
                           </div>
                         ) : (
-                          <div aria-hidden="true" className="game-thumb-placeholder">
-                            <span>{getPlaceholderInitial(displayLabel)}</span>
-                          </div>
+                          renderFallbackArtworkSurface(
+                            displayLabel,
+                            app.packageId,
+                            'cover',
+                            'game-thumb-placeholder fallback-art-surface'
+                          )
                         )}
                         <div className="row-title inventory-row-title">
                           <strong>{displayLabel}</strong>
@@ -4419,10 +4564,10 @@ function InventoryView(props: {
 
 const saveGamesFilters = [
   { id: 'all', label: 'All' },
-  { id: 'installed', label: 'Installed' },
   { id: 'live', label: 'Live Save Data' },
   { id: 'backed-up', label: 'Backed Up' },
-  { id: 'backup-only', label: 'Backup Only' }
+  { id: 'backup-only', label: 'Backups Only' },
+  { id: 'blocked', label: 'Blocked' }
 ] as const
 
 type SaveGamesFilterId = (typeof saveGamesFilters)[number]['id']
@@ -4433,7 +4578,7 @@ type SaveGamesCard = {
   artworkUri: string | null
   isInstalled: boolean
   installedLabel: string | null
-  liveStatus: 'available' | 'none' | 'error' | null
+  liveStatus: 'available' | 'blocked' | 'none' | 'error' | null
   liveRoots: SaveDataRoot[]
   liveMessage: string | null
   backups: SaveBackupEntry[]
@@ -4533,11 +4678,15 @@ function GameSavesView(props: {
         installedApp?.inferredLabel ??
         normalizedPackageId
       const totalBackupBytes = backups.reduce((sum, entry) => sum + entry.sizeBytes, 0)
-      const filterTags: SaveGamesFilterId[] = ['all']
+      const filterTags: SaveGamesFilterId[] = []
       const isInstalled = Boolean(installedApp)
 
-      if (isInstalled) {
-        filterTags.push('installed')
+      if (saveScan?.status === 'blocked') {
+        filterTags.push('blocked')
+      }
+
+      if (saveScan?.status !== 'blocked') {
+        filterTags.push('all')
       }
 
       if (saveScan?.status === 'available') {
@@ -4601,6 +4750,18 @@ function GameSavesView(props: {
     null
   const selectedCardRootsBytes = selectedCard?.liveRoots.reduce((sum, root) => sum + root.sizeBytes, 0) ?? 0
   const drawerPortalTarget = typeof document !== 'undefined' ? document.body : null
+  const saveGamesEmptyState =
+    filter === 'blocked'
+      ? {
+          title: 'No blocked save entries were found.',
+          body: saveScanResponse
+            ? 'Scan the headset again after opening a title once if you want to re-check for Android/data folders that exist but ADB cannot read.'
+            : 'Scan the headset to detect titles whose save data exists but Android permissions block ADB access.'
+        }
+      : {
+          title: 'No save entries match this view yet.',
+          body: 'Scan the headset for live save data or refresh snapshots from the configured Game Saves folder.'
+        }
 
   useEffect(() => {
     if (selectedCard) {
@@ -4645,13 +4806,13 @@ function GameSavesView(props: {
                 title={
                   entry.id === 'all'
                     ? 'Show every title tracked by Game Saves'
-                    : entry.id === 'installed'
-                      ? 'Show only titles currently installed on the selected headset'
-                      : entry.id === 'live'
+                    : entry.id === 'live'
                         ? 'Show titles where live save data is currently present on the headset'
                         : entry.id === 'backed-up'
                           ? 'Show titles that already have one or more save snapshots in the Game Saves folder'
-                          : 'Show titles that are not installed but still have retained save snapshots'
+                          : entry.id === 'backup-only'
+                            ? 'Show titles that are not installed but still have retained save snapshots'
+                            : 'Show titles where save data exists on the headset but Android permissions blocked ADB access'
                 }
                 type="button"
               >
@@ -4694,58 +4855,73 @@ function GameSavesView(props: {
       {saveGamesMessage ? <NoticeBanner className="apps-banner" notice={saveGamesMessage} /> : null}
 
       <section className="surface-panel games-workspace-shell">
+        <p className="eyebrow games-workspace-eyebrow">Saved States</p>
+        <p className="games-workspace-copy">
+          <span>Browse the save snapshots already stored in Game Saves, then decide what to</span>
+          <span>restore, back up, review, or clean up.</span>
+        </p>
         <section className="games-gallery-surface">
-          <div className="save-games-gallery-scroll inventory-gallery-scroll">
-            {filteredCards.map((card) => (
-              <article
-                className={selectedPackageId === card.packageId ? 'inventory-gallery-card active save-games-gallery-card' : 'inventory-gallery-card save-games-gallery-card'}
-                key={card.packageId}
-                onClick={() => setSelectedPackageId(card.packageId)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    setSelectedPackageId(card.packageId)
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="inventory-gallery-hero-shell">
-                  <div className="game-gallery-title-banner">
-                    <strong>{card.title}</strong>
-                  </div>
-                  {card.artworkUri ? (
-                    <img alt="" className="inventory-gallery-hero-image" src={card.artworkUri} />
-                  ) : (
-                    <div aria-hidden="true" className="inventory-gallery-hero-placeholder">
-                      <span>{getPlaceholderInitial(card.title)}</span>
+          {filteredCards.length ? (
+            <div className="save-games-gallery-scroll inventory-gallery-scroll">
+              {filteredCards.map((card) => (
+                <article
+                  className={selectedPackageId === card.packageId ? 'inventory-gallery-card active save-games-gallery-card' : 'inventory-gallery-card save-games-gallery-card'}
+                  key={card.packageId}
+                  onClick={() => setSelectedPackageId(card.packageId)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setSelectedPackageId(card.packageId)
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="inventory-gallery-hero-shell">
+                    <div className="game-gallery-title-banner">
+                      <strong>{card.title}</strong>
                     </div>
-                  )}
-                  <div className="inventory-gallery-overlay save-games-gallery-overlay">
-                    <span className="game-gallery-size save-games-gallery-meta">
-                      {card.backupCount > 0 ? `${card.backupCount} ${card.backupCount === 1 ? 'Backup' : 'Backups'}` : 'No Backups'}
-                    </span>
-                    {card.isInstalled ? (
-                      <span className="status-pill status-ready game-action-indicator game-gallery-state save-games-gallery-state">
-                        <span aria-hidden="true" className="game-action-indicator-check" />
-                        <span>Installed</span>
+                    {card.artworkUri ? (
+                      <img alt="" className="inventory-gallery-hero-image" src={card.artworkUri} />
+                    ) : (
+                      renderFallbackArtworkSurface(
+                        card.title,
+                        card.packageId,
+                        'gallery',
+                        'inventory-gallery-hero-placeholder fallback-art-surface'
+                      )
+                    )}
+                    <div className="inventory-gallery-overlay save-games-gallery-overlay">
+                      <span className="game-gallery-size save-games-gallery-meta">
+                        {card.backupCount > 0 ? `${card.backupCount} ${card.backupCount === 1 ? 'Backup' : 'Backups'}` : 'No Backups'}
                       </span>
-                    ) : card.backupCount > 0 ? (
-                      <span className="action-pill game-gallery-state save-games-gallery-state save-games-gallery-status-pill is-backup-only">
-                        Backup Only
-                      </span>
-                    ) : null}
+                      {card.liveStatus === 'blocked' ? (
+                        <span className="status-pill status-danger game-gallery-state save-games-gallery-state save-games-gallery-status-pill is-blocked">
+                          Blocked
+                        </span>
+                      ) : card.isInstalled ? (
+                        <span className="status-pill status-ready game-action-indicator game-gallery-state save-games-gallery-state">
+                          <span aria-hidden="true" className="game-action-indicator-check" />
+                          <span>Installed</span>
+                        </span>
+                      ) : card.backupCount > 0 ? (
+                        <span className="action-pill game-gallery-state save-games-gallery-state save-games-gallery-status-pill is-backup-only">
+                          Backups Only
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              </article>
-            ))}
-            {!filteredCards.length ? (
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="save-games-empty-shell">
               <div className="empty-state games-empty-state save-games-empty-state">
-                <strong>No save entries match this view yet.</strong>
-                <p>Scan the headset for live save data or refresh snapshots from the configured Game Saves folder.</p>
+                <strong>{saveGamesEmptyState.title}</strong>
+                <p>{saveGamesEmptyState.body}</p>
               </div>
-            ) : null}
-          </div>
+            </div>
+          )}
         </section>
       </section>
 
@@ -4767,13 +4943,31 @@ function GameSavesView(props: {
                 <div className="games-drawer-hero">
                   <img alt="" className="games-drawer-hero-image" src={selectedCard.artworkUri} />
                 </div>
-              ) : null}
+              ) : (
+                <div className="games-drawer-hero">
+                  {renderFallbackArtworkSurface(
+                    selectedCard.title,
+                    selectedCard.packageId,
+                    'hero',
+                    'games-drawer-image-placeholder fallback-art-surface'
+                  )}
+                </div>
+              )}
               <div className="games-drawer-title-row">
                 {selectedCard.artworkUri ? (
                   <div className="games-drawer-art">
                     <img alt="" className="games-drawer-art-image" src={selectedCard.artworkUri} />
                   </div>
-                ) : null}
+                ) : (
+                  <div className="games-drawer-art">
+                    {renderFallbackArtworkSurface(
+                      selectedCard.title,
+                      selectedCard.packageId,
+                      'cover',
+                      'games-drawer-image-placeholder compact fallback-art-surface'
+                    )}
+                  </div>
+                )}
                 <div className="games-drawer-title-block">
                   <h3>{selectedCard.title}</h3>
                   <p>{selectedCard.packageId}</p>
@@ -4794,6 +4988,8 @@ function GameSavesView(props: {
                 className={
                   selectedCard.liveStatus === 'available'
                     ? 'signal-chip signal-chip-ready'
+                    : selectedCard.liveStatus === 'blocked'
+                      ? 'signal-chip signal-chip-danger'
                     : selectedCard.liveStatus === 'error'
                       ? 'signal-chip signal-chip-danger'
                       : 'signal-chip'
@@ -4803,6 +4999,8 @@ function GameSavesView(props: {
                 <strong>
                   {selectedCard.liveStatus === 'available'
                     ? 'Found'
+                    : selectedCard.liveStatus === 'blocked'
+                      ? 'Blocked'
                     : selectedCard.liveStatus === 'error'
                       ? 'Scan error'
                       : 'None found'}
@@ -4835,7 +5033,12 @@ function GameSavesView(props: {
               </button>
               <button
                 className="action-pill"
-                disabled={!selectedCard.isInstalled || saveGamesBatchBusy || saveGamesActionBusyPackageId === selectedCard.packageId}
+                disabled={
+                  !selectedCard.isInstalled ||
+                  selectedCard.liveStatus !== 'available' ||
+                  saveGamesBatchBusy ||
+                  saveGamesActionBusyPackageId === selectedCard.packageId
+                }
                 onClick={() => void onBackupSavePackage(selectedCard.packageId, selectedCard.installedLabel)}
                 type="button"
               >
@@ -4910,6 +5113,7 @@ function SettingsView(props: {
   settingsBusy: boolean
   libraryRescanBusy: boolean
   settingsMessage: string | null
+  dependencyIndicatorTone: 'ready' | 'warning' | 'error'
   localLibraryIndex: LocalLibraryScanResponse | null
   backupStorageIndex: LocalLibraryScanResponse | null
   gameSavesPathStats: SettingsPathStatsResponse | null
@@ -4918,11 +5122,14 @@ function SettingsView(props: {
   deviceLeftoverBusy: boolean
   deviceLeftoverBusyItemId: string | null
   deviceLeftoverMessage: string | null
+  onOpenManagedDependencies: () => void
   onOpenLibraryDiagnostics: (filter?: 'all' | 'installReady' | 'missing') => void
   onOpenOrphanedDataDiscovery: () => void
+  onClearVrSrcCache: () => Promise<void>
   onChooseSettingsPath: (key: SettingsPathKey) => Promise<void>
   onClearSettingsPath: (key: SettingsPathKey) => Promise<void>
   onRescanLocalLibrary: () => Promise<void>
+  vrSrcMaintenanceBusy: boolean
   onRefreshLeftoverData: (serial: string) => Promise<void>
   onDeleteLeftoverData: (itemId: string) => Promise<void>
 }) {
@@ -4931,6 +5138,7 @@ function SettingsView(props: {
     settingsBusy,
     libraryRescanBusy,
     settingsMessage,
+    dependencyIndicatorTone,
     localLibraryIndex,
     backupStorageIndex,
     gameSavesPathStats,
@@ -4939,11 +5147,14 @@ function SettingsView(props: {
     deviceLeftoverBusy,
     deviceLeftoverBusyItemId,
     deviceLeftoverMessage,
+    onOpenManagedDependencies,
     onOpenLibraryDiagnostics,
     onOpenOrphanedDataDiscovery,
+    onClearVrSrcCache,
     onChooseSettingsPath,
     onClearSettingsPath,
     onRescanLocalLibrary,
+    vrSrcMaintenanceBusy,
     onRefreshLeftoverData,
     onDeleteLeftoverData
   } = props
@@ -5015,9 +5226,6 @@ function SettingsView(props: {
       <section className="surface-panel">
         <div className="section-heading settings-section-heading">
           <p className="eyebrow">Library &amp; Storage Paths</p>
-          <button className="status-pill status-pill-button" onClick={() => onOpenLibraryDiagnostics('all')} type="button">
-            Library Diagnostics
-          </button>
         </div>
 
         <p className="section-copy settings-section-copy">
@@ -5080,20 +5288,51 @@ function SettingsView(props: {
         </div>
       </section>
 
-      <section className="surface-panel">
-        <div className="section-heading">
+      <section className="surface-panel settings-maintenance-panel">
+        <div className="section-heading settings-maintenance-heading">
           <div>
-            <p className="eyebrow">Remove Leftover Data from Headset</p>
-            <h2>Orphaned OBB / Data</h2>
+            <p className="eyebrow">Maintenance</p>
           </div>
-          <button
-            className="status-pill status-pill-button"
-            onClick={onOpenOrphanedDataDiscovery}
-            title="Open Orphaned Data Discovery to scan and remove leftover Android/obb and Android/data folders from the selected headset"
-            type="button"
-          >
-            Orphaned Data Discovery
-          </button>
+        </div>
+
+        <p className="section-copy settings-section-copy">
+          Open runtime tooling, inspect library diagnostics, clear cached vrSrc metadata, and review orphaned data left on the headset.
+        </p>
+
+        <div className="settings-maintenance-toolbar">
+          <div className="settings-maintenance-actions">
+            <button
+              className="status-pill status-pill-button"
+              onClick={onOpenManagedDependencies}
+              title="Open Managed Dependencies to review ADB and 7-Zip runtime readiness"
+              type="button"
+            >
+              <span className={`settings-maintenance-indicator is-${dependencyIndicatorTone}`} aria-hidden="true" />
+              <span>Managed Dependencies</span>
+            </button>
+            <button className="status-pill status-pill-button" onClick={() => onOpenLibraryDiagnostics('all')} type="button">
+              Library Diagnostics
+            </button>
+            <button
+              className="status-pill status-pill-button"
+              onClick={onOpenOrphanedDataDiscovery}
+              title="Open Orphaned Data Discovery to scan and remove leftover Android/obb and Android/data folders from the selected headset"
+              type="button"
+            >
+              Orphaned Data Discovery
+            </button>
+          </div>
+          <div className="settings-maintenance-actions settings-maintenance-actions-end">
+            <button
+              className="status-pill status-pill-button status-pill-button-danger"
+              disabled={vrSrcMaintenanceBusy}
+              onClick={() => void onClearVrSrcCache()}
+              title="Clear cached vrSrc catalog metadata and downloads while keeping credentials, then rebuild it with Sync Source"
+              type="button"
+            >
+              {vrSrcMaintenanceBusy ? 'Clearing vrSrc Cache…' : 'Clear vrSrc Cache'}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -5773,6 +6012,9 @@ export function WireframeShell(props: WireframeShellProps) {
     subtitle,
     liveQueueItems,
     queueAutoOpenSignal,
+    onPauseVrSrcTransfer,
+    onResumeVrSrcTransfer,
+    onCancelVrSrcTransfer,
     settings,
     settingsBusy,
     libraryRescanBusy,
@@ -5805,7 +6047,7 @@ export function WireframeShell(props: WireframeShellProps) {
     deviceLeftoverMessage,
     inventoryMessage,
     inventoryActionBusyPackageId,
-    gamesInstallBusyId,
+    gamesInstallBusyIds,
     manualInstallBusyKind,
     backupStorageActionBusyItemId,
     gamesMessage,
@@ -5813,7 +6055,8 @@ export function WireframeShell(props: WireframeShellProps) {
     vrSrcCatalog,
     isVrSrcPanelOpen,
     vrSrcSyncBusy,
-    vrSrcActionBusyReleaseName,
+    vrSrcMaintenanceBusy,
+    vrSrcActionBusyReleaseNames,
     vrSrcMessage,
     saveGamesBusy,
     saveGamesBatchBusy,
@@ -5827,6 +6070,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onRefreshDevices,
     onChooseSettingsPath,
     onClearSettingsPath,
+    onClearVrSrcCache,
     onRescanLocalLibrary,
     onInstallManualLibrarySource,
     onRemoveMissingLibraryItem,
@@ -6113,23 +6357,6 @@ export function WireframeShell(props: WireframeShellProps) {
                   </button>
                 </div>
               ) : null}
-              {activeTab === 'settings' ? (
-                <div className="hero-pill-row hero-inline-toolbar">
-                  <button
-                    aria-expanded={isManagedDependenciesOpen}
-                    className="status-pill status-pill-button settings-runtime-pill"
-                    onClick={() => setIsManagedDependenciesOpen(true)}
-                    title="Open Managed Dependencies to review ADB and 7-Zip runtime readiness"
-                    type="button"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`settings-dependency-indicator settings-runtime-pill-indicator is-${dependencyIndicatorTone}`}
-                    />
-                    <span>Managed Dependencies</span>
-                  </button>
-                </div>
-              ) : null}
             </div>
           </header>
 
@@ -6144,7 +6371,7 @@ export function WireframeShell(props: WireframeShellProps) {
               deviceUserName={deviceUserName}
               deviceUserNameBusy={deviceUserNameBusy}
               selectedDeviceId={selectedDeviceId}
-              gamesInstallBusyId={gamesInstallBusyId}
+              gamesInstallBusyIds={gamesInstallBusyIds}
               purgeLibraryItemBusyId={purgeLibraryItemBusyId}
               backupStorageActionBusyItemId={backupStorageActionBusyItemId}
               inventoryActionBusyPackageId={inventoryActionBusyPackageId}
@@ -6153,7 +6380,7 @@ export function WireframeShell(props: WireframeShellProps) {
               vrSrcCatalog={vrSrcCatalog}
               isVrSrcPanelOpen={isVrSrcPanelOpen}
               vrSrcSyncBusy={vrSrcSyncBusy}
-              vrSrcActionBusyReleaseName={vrSrcActionBusyReleaseName}
+              vrSrcActionBusyReleaseNames={vrSrcActionBusyReleaseNames}
               vrSrcMessage={vrSrcMessage}
               displayMode={gamesDisplayMode}
               onToggleDisplayMode={() => void onSetGamesDisplayMode(gamesDisplayMode === 'list' ? 'gallery' : 'list')}
@@ -6246,6 +6473,7 @@ export function WireframeShell(props: WireframeShellProps) {
               settingsBusy={settingsBusy}
               libraryRescanBusy={libraryRescanBusy}
               settingsMessage={settingsMessage}
+              dependencyIndicatorTone={dependencyIndicatorTone}
               localLibraryIndex={localLibraryIndex}
               backupStorageIndex={backupStorageIndex}
               gameSavesPathStats={gameSavesPathStats}
@@ -6254,14 +6482,17 @@ export function WireframeShell(props: WireframeShellProps) {
               deviceLeftoverBusy={deviceLeftoverBusy}
               deviceLeftoverBusyItemId={deviceLeftoverBusyItemId}
               deviceLeftoverMessage={deviceLeftoverMessage}
+              onOpenManagedDependencies={() => setIsManagedDependenciesOpen(true)}
               onOpenLibraryDiagnostics={(filter) => {
                 setLibraryDiagnosticsInitialFilter(filter ?? 'all')
                 setIsLibraryDiagnosticsOpen(true)
               }}
               onOpenOrphanedDataDiscovery={() => setIsOrphanedDataOpen(true)}
+              onClearVrSrcCache={onClearVrSrcCache}
               onChooseSettingsPath={onChooseSettingsPath}
               onClearSettingsPath={onClearSettingsPath}
               onRescanLocalLibrary={onRescanLocalLibrary}
+              vrSrcMaintenanceBusy={vrSrcMaintenanceBusy}
               onRefreshLeftoverData={onRefreshLeftoverData}
               onDeleteLeftoverData={onDeleteLeftoverData}
             />
@@ -6279,6 +6510,9 @@ export function WireframeShell(props: WireframeShellProps) {
         isOpen={isQueueOpen}
         items={liveQueueItems}
         onClose={() => setIsQueueOpen(false)}
+        onPauseVrSrcTransfer={onPauseVrSrcTransfer}
+        onResumeVrSrcTransfer={onResumeVrSrcTransfer}
+        onCancelVrSrcTransfer={onCancelVrSrcTransfer}
       />
       <LibraryScanDialog
         scan={localLibraryIndex}

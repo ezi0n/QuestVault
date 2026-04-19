@@ -33,6 +33,13 @@ interface SaveBackupManifest {
   }>
 }
 
+interface SaveRootProbeResult {
+  exists: boolean
+  totalFileCount: number
+  readableFileCount: number
+  sizeBytes: number
+}
+
 class SavegameService {
   private readonly manifestFileName = 'savegame-manifest.json'
 
@@ -66,7 +73,7 @@ class SavegameService {
     return [`/sdcard/Android/data/${packageId}`]
   }
 
-  private async getRootStats(adbPath: string, serial: string, remotePath: string): Promise<SaveDataRoot | null> {
+  private async probeRootAccess(adbPath: string, serial: string, remotePath: string): Promise<SaveRootProbeResult> {
     const existsOutput = await this.runShellCommand(
       adbPath,
       serial,
@@ -74,28 +81,48 @@ class SavegameService {
     )
 
     if (!existsOutput.includes('EXISTS')) {
+      return {
+        exists: false,
+        totalFileCount: 0,
+        readableFileCount: 0,
+        sizeBytes: 0
+      }
+    }
+
+    const [totalFileCountOutput, readableFileCountOutput, sizeKbOutput] = await Promise.all([
+      this.runShellCommand(adbPath, serial, `find "${remotePath}" -type f 2>/dev/null | wc -l`),
+      this.runShellCommand(adbPath, serial, `find "${remotePath}" -type f -readable 2>/dev/null | wc -l`),
+      this.runShellCommand(adbPath, serial, `du -sk "${remotePath}" 2>/dev/null | awk '{print $1}'`)
+    ])
+
+    const totalFileCount = Number.parseInt(totalFileCountOutput.trim(), 10)
+    const readableFileCount = Number.parseInt(readableFileCountOutput.trim(), 10)
+    const sizeKb = Number.parseInt(sizeKbOutput.trim(), 10)
+
+    return {
+      exists: true,
+      totalFileCount: Number.isFinite(totalFileCount) ? totalFileCount : 0,
+      readableFileCount: Number.isFinite(readableFileCount) ? readableFileCount : 0,
+      sizeBytes: Number.isFinite(sizeKb) ? sizeKb * 1024 : 0
+    }
+  }
+
+  private async getRootStats(adbPath: string, serial: string, remotePath: string): Promise<SaveDataRoot | null> {
+    const probe = await this.probeRootAccess(adbPath, serial, remotePath)
+
+    if (!probe.exists) {
       return null
     }
 
-    const fileCountOutput = await this.runShellCommand(
-      adbPath,
-      serial,
-      `find "${remotePath}" -type f 2>/dev/null | wc -l`
-    )
-    const sizeKbOutput = await this.runShellCommand(
-      adbPath,
-      serial,
-      `du -sk "${remotePath}" 2>/dev/null | awk '{print $1}'`
-    )
-
-    const fileCount = Number.parseInt(fileCountOutput.trim(), 10)
-    const sizeKb = Number.parseInt(sizeKbOutput.trim(), 10)
+    if (probe.readableFileCount <= 0) {
+      return null
+    }
 
     return {
       id: this.sanitizeSegment(basename(remotePath) || remotePath.replace(/\//g, '_')),
       remotePath,
-      fileCount: Number.isFinite(fileCount) ? fileCount : 0,
-      sizeBytes: Number.isFinite(sizeKb) ? sizeKb * 1024 : 0
+      fileCount: probe.readableFileCount,
+      sizeBytes: probe.sizeBytes
     }
   }
 
@@ -239,22 +266,59 @@ class SavegameService {
 
     try {
       const roots: SaveDataRoot[] = []
+      let blockedRootCount = 0
       for (const remotePath of this.getSaveRoots(packageId)) {
-        const stats = await this.getRootStats(runtime.adbPath, serial, remotePath)
-        if (stats) {
-          roots.push(stats)
+        const probe = await this.probeRootAccess(runtime.adbPath, serial, remotePath)
+        if (!probe.exists) {
+          continue
+        }
+
+        if (probe.readableFileCount > 0) {
+          const stats = await this.getRootStats(runtime.adbPath, serial, remotePath)
+          if (stats) {
+            roots.push(stats)
+          }
+          continue
+        }
+
+        if (probe.totalFileCount > 0) {
+          blockedRootCount += 1
         }
       }
 
       const backups = await this.listPackageBackups(packageId)
+      if (roots.length > 0) {
+        return {
+          packageId,
+          appName,
+          status: 'available',
+          roots,
+          backupCount: backups.length,
+          latestBackupId: backups[0]?.id ?? null,
+          message: null
+        }
+      }
+
+      if (blockedRootCount > 0) {
+        return {
+          packageId,
+          appName,
+          status: 'blocked',
+          roots: [],
+          backupCount: backups.length,
+          latestBackupId: backups[0]?.id ?? null,
+          message: 'Save data exists on the headset but ADB could not read it from Android/data.'
+        }
+      }
+
       return {
         packageId,
         appName,
-        status: roots.length > 0 ? 'available' : 'none',
-        roots,
+        status: 'none',
+        roots: [],
         backupCount: backups.length,
         latestBackupId: backups[0]?.id ?? null,
-        message: roots.length > 0 ? null : 'No accessible save data found in Android/data.'
+        message: 'No accessible save data found in Android/data.'
       }
     } catch (error) {
       return {

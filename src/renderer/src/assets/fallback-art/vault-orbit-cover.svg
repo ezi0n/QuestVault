@@ -1,0 +1,27 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="166" y1="112" x2="858" y2="916" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101A2C"/>
+      <stop offset="1" stop-color="#08111B"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(520 470) rotate(90) scale(328 328)">
+      <stop stop-color="#58D4C5" stop-opacity="0.34"/>
+      <stop offset="0.66" stop-color="#58D4C5" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#58D4C5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="282" y1="250" x2="774" y2="726" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#58D4C5"/>
+      <stop offset="1" stop-color="#FF8F66"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="184" fill="url(#bg)"/>
+  <rect x="86" y="86" width="852" height="852" rx="152" fill="#111B2D" stroke="rgba(237,243,248,0.08)"/>
+  <circle cx="520" cy="484" r="288" fill="url(#glow)"/>
+  <path d="M266 650C382 472 548 376 784 364" stroke="url(#ring)" stroke-opacity="0.84" stroke-width="24" stroke-linecap="round"/>
+  <path d="M332 728C438 554 590 466 824 454" stroke="rgba(237,243,248,0.18)" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="784" cy="366" r="20" fill="#FFD271" fill-opacity="0.94"/>
+  <circle cx="334" cy="720" r="12" fill="#58D4C5" fill-opacity="0.9"/>
+  <circle cx="520" cy="484" r="176" stroke="rgba(237,243,248,0.08)" stroke-width="2"/>
+  <rect x="180" y="206" width="160" height="96" rx="28" fill="rgba(88,212,197,0.08)" stroke="rgba(88,212,197,0.22)"/>
+  <rect x="694" y="640" width="150" height="90" rx="26" fill="rgba(255,143,102,0.08)" stroke="rgba(255,143,102,0.22)"/>
+</svg>

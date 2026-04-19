@@ -160,7 +160,7 @@ export interface DeviceInstalledAppBackupResponse {
   backupPath: string | null
 }
 
-export type SaveDataStatus = 'available' | 'none' | 'error'
+export type SaveDataStatus = 'available' | 'blocked' | 'none' | 'error'
 
 export interface SaveDataRoot {
   id: string
@@ -329,6 +329,8 @@ export interface ManualGameMetadataOverride {
 export type LiveQueueKind = 'install' | 'backup' | 'uninstall' | 'scan' | 'cleanup' | 'restore' | 'download'
 export type LiveQueuePhase =
   | 'queued'
+  | 'paused'
+  | 'cancelled'
   | 'downloading'
   | 'extracting'
   | 'installing'
@@ -350,6 +352,16 @@ export interface LiveQueueItem {
   details: string | null
   artworkUrl: string | null
   updatedAt: string
+  transferControl: LiveQueueTransferControl | null
+}
+
+export interface LiveQueueTransferControl {
+  kind: 'vrsrc'
+  operation: VrSrcTransferOperation
+  releaseName: string
+  canPause: boolean
+  canResume: boolean
+  canCancel: boolean
 }
 
 export interface DownloadQueueItem {
@@ -417,12 +429,22 @@ export interface VrSrcSyncResponse {
   success: boolean
   message: string
   details: string | null
+  usedCachedCatalog: boolean
+  status: VrSrcStatusResponse
+  catalog: VrSrcCatalogResponse
+}
+
+export interface VrSrcClearCacheResponse {
+  success: boolean
+  message: string
+  details: string | null
   status: VrSrcStatusResponse
   catalog: VrSrcCatalogResponse
 }
 
 export interface VrSrcDownloadToLibraryResponse {
   success: boolean
+  cancelled: boolean
   releaseName: string
   sourcePath: string | null
   targetPath: string | null
@@ -433,6 +455,7 @@ export interface VrSrcDownloadToLibraryResponse {
 
 export interface VrSrcInstallNowResponse {
   success: boolean
+  cancelled: boolean
   releaseName: string
   serial: string
   sourcePath: string | null
@@ -442,7 +465,7 @@ export interface VrSrcInstallNowResponse {
 }
 
 export type VrSrcTransferOperation = 'download-to-library' | 'install-now'
-export type VrSrcTransferPhase = 'preparing' | 'downloading' | 'extracting'
+export type VrSrcTransferPhase = 'queued' | 'paused' | 'cancelled' | 'preparing' | 'downloading' | 'extracting' | 'installing'
 
 export interface VrSrcTransferProgressUpdate {
   operation: VrSrcTransferOperation
@@ -454,6 +477,17 @@ export interface VrSrcTransferProgressUpdate {
   totalBytes: number | null
   speedBytesPerSecond: number | null
   etaSeconds: number | null
+  canPause: boolean
+  canResume: boolean
+  canCancel: boolean
+}
+
+export interface VrSrcTransferControlResponse {
+  success: boolean
+  releaseName: string
+  operation: VrSrcTransferOperation
+  message: string
+  details: string | null
 }
 
 export type SettingsPathKey = 'localLibraryPath' | 'backupPath' | 'gameSavesPath'

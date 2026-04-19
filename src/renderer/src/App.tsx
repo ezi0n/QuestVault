@@ -81,7 +81,11 @@ function isObsoleteDeviceBanner(message: string | null | undefined): boolean {
     return false
   }
 
-  return /\bdisconnected\.\s*$/i.test(message.trim())
+  return /\b(?:connected|reconnected|disconnected)\.\s*$/i.test(message.trim()) || /\binstalled successfully\.\s*$/i.test(message.trim())
+}
+
+function areCorePathsConfigured(settings: AppSettings | null | undefined): boolean {
+  return Boolean(settings?.localLibraryPath && settings?.backupPath && settings?.gameSavesPath)
 }
 
 function deriveDeviceStatusTransport(response: DeviceListResponse | null): DeviceStatusTransport {
@@ -185,6 +189,25 @@ function buildLiveQueueDetails(message: string, details: string | null | undefin
   return details ? `${message} ${details}` : message
 }
 
+function buildVrSrcSyncLiveQueueDetails(response: {
+  message: string
+  details: string | null
+  usedCachedCatalog: boolean
+  catalog: VrSrcCatalogResponse
+}): string {
+  if (!response.usedCachedCatalog) {
+    return buildLiveQueueDetails(response.message, response.details)
+  }
+
+  const cachedCount = response.catalog.items.length
+  const fallbackMessage =
+    cachedCount > 0
+      ? `${response.message} Showing cached vrSrc data (${cachedCount} entries).`
+      : `${response.message} No cached vrSrc catalog is available.`
+
+  return buildLiveQueueDetails(fallbackMessage, response.details)
+}
+
 function buildVrSrcQueueId(operation: VrSrcTransferOperation, releaseName: string): string {
   return `vrsrc-${operation}-${releaseName}`
 }
@@ -260,8 +283,26 @@ function formatEtaSeconds(value: number | null | undefined): string | null {
 function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   const parts: string[] = []
 
+  if (update.phase === 'queued') {
+    return update.operation === 'install-now'
+      ? 'Queued behind another headset install...'
+      : 'Queued behind other vrSrc downloads...'
+  }
+
+  if (update.phase === 'paused') {
+    return 'Download paused. Resume when you are ready.'
+  }
+
+  if (update.phase === 'cancelled') {
+    return 'Download cancelled.'
+  }
+
   if (update.phase === 'preparing') {
     return 'Preparing download...'
+  }
+
+  if (update.phase === 'installing') {
+    return 'Queued payload is now installing on the headset...'
   }
 
   if (update.totalBytes) {
@@ -319,7 +360,7 @@ function buildSummaryFromDetails(details: MetaStoreGameDetails): MetaStoreGameSu
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<PrimaryTab>('manager')
+  const [activeTab, setActiveTab] = useState<PrimaryTab>('games')
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [libraryRescanBusy, setLibraryRescanBusy] = useState(false)
@@ -354,7 +395,7 @@ function App() {
   const [deviceLeftoverMessage, setDeviceLeftoverMessage] = useState<string | null>(null)
   const [inventoryMessage, setInventoryMessage] = useState<UiNotice | null>(null)
   const [inventoryActionBusyPackageId, setInventoryActionBusyPackageId] = useState<string | null>(null)
-  const [gamesInstallBusyId, setGamesInstallBusyId] = useState<string | null>(null)
+  const [gamesInstallBusyIds, setGamesInstallBusyIds] = useState<string[]>([])
   const [manualInstallBusyKind, setManualInstallBusyKind] = useState<'apk' | 'folder' | null>(null)
   const [backupStorageActionBusyItemId, setBackupStorageActionBusyItemId] = useState<string | null>(null)
   const [gamesMessage, setGamesMessage] = useState<UiNotice | null>(null)
@@ -362,7 +403,8 @@ function App() {
   const [vrSrcCatalog, setVrSrcCatalog] = useState<VrSrcCatalogResponse | null>(null)
   const [isVrSrcPanelOpen, setIsVrSrcPanelOpen] = useState(false)
   const [vrSrcSyncBusy, setVrSrcSyncBusy] = useState(false)
-  const [vrSrcActionBusyReleaseName, setVrSrcActionBusyReleaseName] = useState<string | null>(null)
+  const [vrSrcMaintenanceBusy, setVrSrcMaintenanceBusy] = useState(false)
+  const [vrSrcActionBusyReleaseNames, setVrSrcActionBusyReleaseNames] = useState<string[]>([])
   const [vrSrcMessage, setVrSrcMessage] = useState<UiNotice | null>(null)
   const [saveGamesBusy, setSaveGamesBusy] = useState(false)
   const [saveGamesBatchBusy, setSaveGamesBatchBusy] = useState(false)
@@ -380,6 +422,10 @@ function App() {
   const metaStoreRefreshRunRef = useRef(0)
   const metaStoreMatchesByItemIdRef = useRef<Record<string, MetaStoreGameSummary>>({})
   const dependencyQueueIdsRef = useRef(new Set<string>())
+  const hasAppliedStartupTabRef = useRef(false)
+  const vrSrcInitialSyncAttemptedRef = useRef(false)
+  const gamesInstallBusyIdsRef = useRef<string[]>([])
+  const vrSrcActionBusyReleaseNamesRef = useRef<string[]>([])
   const subtitle =
     activeTab === 'manager'
       ? 'ADB device operations, live devices and ADB runtime visibility'
@@ -418,8 +464,12 @@ function App() {
     readyDevices.find((device) => device.transport === 'usb' || device.transport === 'emulator') ?? null
   const deviceStatusWifiDisconnectTargetId = readyWifiDevice?.id ?? null
 
-  function enqueueLiveQueueItem(input: Omit<LiveQueueItem, 'updatedAt'>): string {
-    const item: LiveQueueItem = { ...input, updatedAt: new Date().toISOString() }
+  function enqueueLiveQueueItem(
+    input: Omit<LiveQueueItem, 'updatedAt' | 'transferControl'> & {
+      transferControl?: LiveQueueItem['transferControl']
+    }
+  ): string {
+    const item: LiveQueueItem = { ...input, transferControl: input.transferControl ?? null, updatedAt: new Date().toISOString() }
     setLiveQueueItems((current) => {
       const withoutExisting = current.filter((entry) => entry.id !== item.id)
       return [item, ...withoutExisting].slice(0, 12)
@@ -701,6 +751,32 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }, [])
 
   useEffect(() => {
+    gamesInstallBusyIdsRef.current = gamesInstallBusyIds
+  }, [gamesInstallBusyIds])
+
+  useEffect(() => {
+    vrSrcActionBusyReleaseNamesRef.current = vrSrcActionBusyReleaseNames
+  }, [vrSrcActionBusyReleaseNames])
+
+  useEffect(() => {
+    if (vrSrcSyncBusy || vrSrcInitialSyncAttemptedRef.current || !vrSrcStatus || !vrSrcCatalog) {
+      return
+    }
+
+    if (!vrSrcStatus.configured) {
+      return
+    }
+
+    const hasExistingCatalog = Boolean(vrSrcStatus.lastSyncAt || vrSrcCatalog.syncedAt || vrSrcCatalog.items.length)
+    if (hasExistingCatalog) {
+      return
+    }
+
+    vrSrcInitialSyncAttemptedRef.current = true
+    void syncVrSrcCatalog({ openPanelOnSuccess: false })
+  }, [vrSrcCatalog, vrSrcStatus, vrSrcSyncBusy])
+
+  useEffect(() => {
     metaStoreMatchesByItemIdRef.current = metaStoreMatchesByItemId
   }, [metaStoreMatchesByItemId])
 
@@ -917,9 +993,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           setDeviceMessage(isObsoleteDeviceBanner(changeMessage) ? null : changeMessage)
         } else if (response.runtime.status === 'error') {
           setDeviceMessage(response.runtime.message)
+        } else {
+          setDeviceMessage(null)
         }
       } else {
-        setDeviceMessage(response.runtime.message)
+        setDeviceMessage(isObsoleteDeviceBanner(response.runtime.message) ? null : response.runtime.message)
       }
 
       if (queueId) {
@@ -993,6 +1071,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     try {
       const response = await window.api.settings.get()
       setSettings(response)
+      if (!hasAppliedStartupTabRef.current) {
+        setActiveTab(areCorePathsConfigured(response) ? 'games' : 'settings')
+        hasAppliedStartupTabRef.current = true
+      }
 
       const [
         libraryIndexResult,
@@ -1145,7 +1227,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
   }
 
-  async function syncVrSrcCatalog() {
+  async function syncVrSrcCatalog(options?: { openPanelOnSuccess?: boolean }) {
     setVrSrcSyncBusy(true)
     setVrSrcMessage(null)
     const queueId = enqueueLiveQueueItem({
@@ -1166,11 +1248,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       updateLiveQueueItem(queueId, {
         phase: response.success ? 'completed' : 'failed',
         progress: 100,
-        details: buildLiveQueueDetails(response.message, response.details)
+        details: buildVrSrcSyncLiveQueueDetails(response)
       })
       if (response.success) {
         setVrSrcMessage(null)
-        setIsVrSrcPanelOpen(true)
+        if (options?.openPanelOnSuccess !== false) {
+          setIsVrSrcPanelOpen(true)
+        }
       } else {
         setVrSrcMessage(null)
       }
@@ -1187,36 +1271,102 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
   }
 
-  async function downloadVrSrcToLibrary(releaseName: string) {
-    setVrSrcActionBusyReleaseName(releaseName)
-    setVrSrcMessage(null)
-    const queueId = enqueueLiveQueueItem({
-      id: buildVrSrcQueueId('download-to-library', releaseName),
-      title: releaseName,
-      subtitle: 'vrSrc to Local Library',
-      kind: 'download',
+  async function queueVrSrcTransferAction(options: {
+    releaseName: string
+    operation: VrSrcTransferOperation
+    title: string
+    subtitle: string
+    execute: () => Promise<{ success: boolean; cancelled: boolean; message: string; details: string | null }>
+    onSuccess?: () => Promise<void>
+    onFailureText: string
+  }) {
+    if (vrSrcActionBusyReleaseNamesRef.current.includes(options.releaseName)) {
+      return
+    }
+
+    const queueId = buildVrSrcQueueId(options.operation, options.releaseName)
+    vrSrcActionBusyReleaseNamesRef.current = [...vrSrcActionBusyReleaseNamesRef.current, options.releaseName]
+    setVrSrcActionBusyReleaseNames((current) => [...current, options.releaseName])
+
+    enqueueLiveQueueItem({
+      id: queueId,
+      title: options.title,
+      subtitle: options.subtitle,
+      kind: options.operation === 'install-now' ? 'install' : 'download',
       phase: 'downloading',
       progress: 4,
       details: 'Preparing download...',
+      artworkUrl: null,
+      transferControl: {
+        kind: 'vrsrc',
+        operation: options.operation,
+        releaseName: options.releaseName,
+        canPause: true,
+        canResume: false,
+        canCancel: true
+      }
+    })
+
+    try {
+      const response = await options.execute()
+      updateLiveQueueItem(queueId, {
+        phase: response.success ? 'completed' : response.cancelled ? 'cancelled' : 'failed',
+        progress: 100,
+        details: buildLiveQueueDetails(response.message, response.details),
+        transferControl: null
+      })
+      if (response.success) {
+        setVrSrcMessage(null)
+        await options.onSuccess?.()
+      } else {
+        setVrSrcMessage(null)
+      }
+    } catch (error) {
+      const details = error instanceof Error ? error.message : 'Unknown error.'
+      updateLiveQueueItem(queueId, {
+        phase: 'failed',
+        progress: 100,
+        details,
+        transferControl: null
+      })
+      setVrSrcMessage({
+        text: options.onFailureText,
+        details,
+        tone: 'danger'
+      })
+    } finally {
+      vrSrcActionBusyReleaseNamesRef.current = vrSrcActionBusyReleaseNamesRef.current.filter(
+        (entry) => entry !== options.releaseName
+      )
+      setVrSrcActionBusyReleaseNames((current) => current.filter((entry) => entry !== options.releaseName))
+    }
+  }
+
+  async function clearVrSrcCache() {
+    setVrSrcMaintenanceBusy(true)
+    setVrSrcMessage(null)
+    const queueId = enqueueLiveQueueItem({
+      id: createLiveQueueId('cleanup', 'vrsrc-cache'),
+      title: 'vrSrc Cache',
+      subtitle: 'Remote Source',
+      kind: 'cleanup',
+      phase: 'cleaning-up',
+      progress: 16,
+      details: 'Clearing cached vrSrc metadata while preserving credentials...',
       artworkUrl: null
     })
 
     try {
-      const response = await window.api.vrsrc.downloadToLibrary(releaseName)
+      const response = await window.api.vrsrc.clearCache()
+      setVrSrcStatus(response.status)
+      setVrSrcCatalog(response.catalog)
+      setIsVrSrcPanelOpen(false)
       updateLiveQueueItem(queueId, {
         phase: response.success ? 'completed' : 'failed',
         progress: 100,
         details: buildLiveQueueDetails(response.message, response.details)
       })
-      if (response.success) {
-        setVrSrcMessage(null)
-      } else {
-        setVrSrcMessage({
-          text: response.message,
-          details: response.details,
-          tone: 'danger'
-        })
-      }
+      setVrSrcMessage(null)
     } catch (error) {
       const details = error instanceof Error ? error.message : 'Unknown error.'
       updateLiveQueueItem(queueId, {
@@ -1224,18 +1374,27 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details
       })
-      setVrSrcMessage({
-        text: `Unable to add ${releaseName} from vrSrc.`,
-        details,
-        tone: 'danger'
-      })
+      setVrSrcMessage(null)
     } finally {
-      setVrSrcActionBusyReleaseName(null)
+      setVrSrcMaintenanceBusy(false)
     }
   }
 
+  async function downloadVrSrcToLibrary(releaseName: string) {
+    setVrSrcMessage(null)
+    await queueVrSrcTransferAction({
+      releaseName,
+      operation: 'download-to-library',
+      title: releaseName,
+      subtitle: 'vrSrc to Local Library',
+      execute: () => window.api.vrsrc.downloadToLibrary(releaseName),
+      onFailureText: `Unable to add ${releaseName} from vrSrc.`
+    })
+  }
+
   async function installVrSrcNow(releaseName: string) {
-    if (!selectedDeviceId) {
+    const targetDeviceId = selectedDeviceId
+    if (!targetDeviceId) {
       setVrSrcMessage({
         text: 'Select a ready headset before installing from vrSrc.',
         details: null,
@@ -1244,51 +1403,18 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       return
     }
 
-    setVrSrcActionBusyReleaseName(releaseName)
     setVrSrcMessage(null)
-    const queueId = enqueueLiveQueueItem({
-      id: buildVrSrcQueueId('install-now', releaseName),
+    await queueVrSrcTransferAction({
+      releaseName,
+      operation: 'install-now',
       title: releaseName,
       subtitle: 'vrSrc Install Now',
-      kind: 'install',
-      phase: 'downloading',
-      progress: 4,
-      details: 'Preparing download...',
-      artworkUrl: null
+      execute: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
+      onSuccess: async () => {
+        await refreshInstalledApps(targetDeviceId)
+      },
+      onFailureText: `Unable to install ${releaseName} from vrSrc.`
     })
-
-    try {
-      const response = await window.api.vrsrc.installNow(selectedDeviceId, releaseName)
-      updateLiveQueueItem(queueId, {
-        phase: response.success ? 'completed' : 'failed',
-        progress: 100,
-        details: buildLiveQueueDetails(response.message, response.details)
-      })
-      if (response.success) {
-        setVrSrcMessage(null)
-        await refreshInstalledApps(selectedDeviceId)
-      } else {
-        setVrSrcMessage({
-          text: response.message,
-          details: response.details,
-          tone: 'danger'
-        })
-      }
-    } catch (error) {
-      const details = error instanceof Error ? error.message : 'Unknown error.'
-      updateLiveQueueItem(queueId, {
-        phase: 'failed',
-        progress: 100,
-        details
-      })
-      setVrSrcMessage({
-        text: `Unable to install ${releaseName} from vrSrc.`,
-        details,
-        tone: 'danger'
-      })
-    } finally {
-      setVrSrcActionBusyReleaseName(null)
-    }
   }
 
   useEffect(() => {
@@ -1327,9 +1453,42 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     const unsubscribe = window.api.vrsrc.onTransferProgress((update) => {
       const queueId = buildVrSrcQueueId(update.operation, update.releaseName)
       updateLiveQueueItem(queueId, {
-        phase: update.phase === 'extracting' ? 'extracting' : 'downloading',
+        phase: (() => {
+          if (update.phase === 'queued') {
+            return 'queued'
+          }
+
+          if (update.phase === 'paused') {
+            return 'paused'
+          }
+
+          if (update.phase === 'cancelled') {
+            return 'cancelled'
+          }
+
+          if (update.phase === 'extracting') {
+            return 'extracting'
+          }
+
+          if (update.phase === 'installing') {
+            return 'installing'
+          }
+
+          return 'downloading'
+        })(),
         progress: update.progress,
-        details: describeVrSrcTransfer(update)
+        details: describeVrSrcTransfer(update),
+        transferControl:
+          update.phase === 'installing' || update.phase === 'cancelled'
+            ? null
+            : {
+                kind: 'vrsrc',
+                operation: update.operation,
+                releaseName: update.releaseName,
+                canPause: update.canPause,
+                canResume: update.canResume,
+                canCancel: update.canCancel
+              }
       })
     })
 
@@ -1337,6 +1496,18 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       unsubscribe()
     }
   }, [])
+
+  async function pauseVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation) {
+    await window.api.vrsrc.pauseTransfer(releaseName, operation)
+  }
+
+  async function resumeVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation) {
+    await window.api.vrsrc.resumeTransfer(releaseName, operation)
+  }
+
+  async function cancelVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation) {
+    await window.api.vrsrc.cancelTransfer(releaseName, operation)
+  }
 
   async function saveDisplayMode(key: SettingsDisplayModeKey, mode: ViewDisplayMode) {
     const previousSettings = settings
@@ -2500,6 +2671,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }
 
   async function installLocalLibraryItem(itemId: string) {
+    if (gamesInstallBusyIdsRef.current.includes(itemId)) {
+      return
+    }
+
     if (!selectedDeviceId) {
       setGamesMessage({
         text: 'Select a ready headset in Manager before installing a local payload.',
@@ -2550,7 +2725,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             ? `Installing local payload ${indexedItem.name}...`
             : 'Installing local payload...'
 
-    setGamesInstallBusyId(itemId)
+    gamesInstallBusyIdsRef.current = [...gamesInstallBusyIdsRef.current, itemId]
+    setGamesInstallBusyIds((current) => [...current, itemId])
     setGamesMessage(null)
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('install', itemId),
@@ -2602,7 +2778,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         tone: 'danger'
       })
     } finally {
-      setGamesInstallBusyId(null)
+      gamesInstallBusyIdsRef.current = gamesInstallBusyIdsRef.current.filter((entry) => entry !== itemId)
+      setGamesInstallBusyIds((current) => current.filter((entry) => entry !== itemId))
     }
   }
 
@@ -3165,6 +3342,9 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       subtitle={subtitle}
       liveQueueItems={liveQueueItems}
       queueAutoOpenSignal={queueAutoOpenSignal}
+      onPauseVrSrcTransfer={pauseVrSrcTransfer}
+      onResumeVrSrcTransfer={resumeVrSrcTransfer}
+      onCancelVrSrcTransfer={cancelVrSrcTransfer}
       settings={settings}
       settingsBusy={settingsBusy}
       libraryRescanBusy={libraryRescanBusy}
@@ -3197,7 +3377,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       deviceLeftoverMessage={deviceLeftoverMessage}
       inventoryMessage={inventoryMessage}
       inventoryActionBusyPackageId={inventoryActionBusyPackageId}
-      gamesInstallBusyId={gamesInstallBusyId}
+      gamesInstallBusyIds={gamesInstallBusyIds}
       manualInstallBusyKind={manualInstallBusyKind}
       backupStorageActionBusyItemId={backupStorageActionBusyItemId}
       gamesMessage={gamesMessage}
@@ -3205,7 +3385,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       vrSrcCatalog={vrSrcCatalog}
       isVrSrcPanelOpen={isVrSrcPanelOpen}
       vrSrcSyncBusy={vrSrcSyncBusy}
-      vrSrcActionBusyReleaseName={vrSrcActionBusyReleaseName}
+      vrSrcMaintenanceBusy={vrSrcMaintenanceBusy}
+      vrSrcActionBusyReleaseNames={vrSrcActionBusyReleaseNames}
       vrSrcMessage={vrSrcMessage}
       saveGamesBusy={saveGamesBusy}
       saveGamesBatchBusy={saveGamesBatchBusy}
@@ -3219,6 +3400,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onRefreshDevices={() => refreshDevices('manual')}
       onChooseSettingsPath={chooseSettingsPath}
       onClearSettingsPath={clearSettingsPath}
+      onClearVrSrcCache={clearVrSrcCache}
       onRescanLocalLibrary={rescanLocalLibrary}
       onInstallManualLibrarySource={installManualLibrarySource}
       onRemoveMissingLibraryItem={removeMissingLibraryItem}

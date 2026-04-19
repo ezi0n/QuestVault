@@ -3,15 +3,18 @@ import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promi
 import { createHash } from 'node:crypto'
 import { basename, extname, join } from 'node:path'
 import { execFile as execFileCallback, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import type {
   VrSrcCatalogItem,
   VrSrcCatalogResponse,
+  VrSrcClearCacheResponse,
   VrSrcDownloadToLibraryResponse,
   VrSrcItemDetailsResponse,
   VrSrcInstallNowResponse,
   VrSrcStatusResponse,
   VrSrcSyncResponse,
+  VrSrcTransferControlResponse,
   VrSrcTransferOperation,
   VrSrcTransferProgressUpdate
 } from '@shared/types/ipc'
@@ -30,11 +33,40 @@ type VrSrcCredentials = {
   lastResolvedAt: string
 }
 
+type VrSrcTransferCommand = 'none' | 'pause' | 'cancel'
+type VrSrcTransferLifecycle = 'running' | 'paused' | 'cancelled'
+
+type VrSrcTransferControlState = {
+  releaseName: string
+  operation: VrSrcTransferOperation
+  status: VrSrcTransferLifecycle
+  command: VrSrcTransferCommand
+  child: ChildProcess | null
+  waiters: Array<() => void>
+  lastUpdate: VrSrcTransferProgressUpdate | null
+}
+
+class VrSrcTransferPausedError extends Error {
+  constructor() {
+    super('Transfer paused.')
+  }
+}
+
+class VrSrcTransferCancelledError extends Error {
+  constructor() {
+    super('Transfer cancelled.')
+  }
+}
+
 class VrSrcService {
   private syncInFlight: Promise<VrSrcSyncResponse> | null = null
   private acquireInFlight = new Map<string, Promise<string>>()
   private transferProgressListeners = new Set<(update: VrSrcTransferProgressUpdate) => void>()
   private trailerVideoIdCache = new Map<string, string | null>()
+  private transferControls = new Map<string, VrSrcTransferControlState>()
+  private readonly maxConcurrentPayloadPreparations = 5
+  private activePayloadPreparations = 0
+  private payloadPreparationWaiters: Array<() => void> = []
 
   onTransferProgress(listener: (update: VrSrcTransferProgressUpdate) => void): () => void {
     this.transferProgressListeners.add(listener)
@@ -47,6 +79,135 @@ class VrSrcService {
     for (const listener of this.transferProgressListeners) {
       listener(update)
     }
+  }
+
+  private getTransferControlKey(releaseName: string): string {
+    return releaseName
+  }
+
+  private getOrCreateTransferControl(
+    releaseName: string,
+    operation: VrSrcTransferOperation
+  ): VrSrcTransferControlState {
+    const key = this.getTransferControlKey(releaseName)
+    const existing = this.transferControls.get(key)
+    if (existing) {
+      existing.operation = operation
+      return existing
+    }
+
+    const control: VrSrcTransferControlState = {
+      releaseName,
+      operation,
+      status: 'running',
+      command: 'none',
+      child: null,
+      waiters: [],
+      lastUpdate: null
+    }
+    this.transferControls.set(key, control)
+    return control
+  }
+
+  private getTransferControl(releaseName: string): VrSrcTransferControlState | null {
+    return this.transferControls.get(this.getTransferControlKey(releaseName)) ?? null
+  }
+
+  private clearTransferControl(releaseName: string): void {
+    this.transferControls.delete(this.getTransferControlKey(releaseName))
+  }
+
+  private buildTransferControlFlags(control: VrSrcTransferControlState, phase: VrSrcTransferProgressUpdate['phase']) {
+    if (phase === 'paused' || control.status === 'paused') {
+      return {
+        canPause: false,
+        canResume: true,
+        canCancel: true
+      }
+    }
+
+    if (phase === 'queued' || phase === 'preparing' || phase === 'downloading' || phase === 'extracting') {
+      return {
+        canPause: true,
+        canResume: false,
+        canCancel: true
+      }
+    }
+
+    return {
+      canPause: false,
+      canResume: false,
+      canCancel: false
+    }
+  }
+
+  private emitControlledTransferProgress(
+    control: VrSrcTransferControlState,
+    update: Omit<VrSrcTransferProgressUpdate, 'canPause' | 'canResume' | 'canCancel'>
+  ): void {
+    const nextUpdate: VrSrcTransferProgressUpdate = {
+      ...update,
+      ...this.buildTransferControlFlags(control, update.phase)
+    }
+    control.lastUpdate = nextUpdate
+    this.emitTransferProgress(nextUpdate)
+  }
+
+  private async waitForTransferResume(control: VrSrcTransferControlState): Promise<void> {
+    while (control.status === 'paused') {
+      await new Promise<void>((resolve) => {
+        control.waiters.push(resolve)
+      })
+    }
+
+    if (control.status === 'cancelled' || control.command === 'cancel') {
+      throw new VrSrcTransferCancelledError()
+    }
+  }
+
+  private async checkpointTransferControl(control: VrSrcTransferControlState): Promise<void> {
+    if (control.command === 'cancel' || control.status === 'cancelled') {
+      control.status = 'cancelled'
+      throw new VrSrcTransferCancelledError()
+    }
+
+    if (control.command === 'pause' || control.status === 'paused') {
+      control.command = 'none'
+      control.status = 'paused'
+      const lastUpdate = control.lastUpdate
+      this.emitControlledTransferProgress(control, {
+        operation: control.operation,
+        releaseName: control.releaseName,
+        phase: 'paused',
+        progress: lastUpdate?.progress ?? 0,
+        fileName: lastUpdate?.fileName ?? null,
+        transferredBytes: lastUpdate?.transferredBytes ?? 0,
+        totalBytes: lastUpdate?.totalBytes ?? null,
+        speedBytesPerSecond: null,
+        etaSeconds: null
+      })
+      await this.waitForTransferResume(control)
+    }
+  }
+
+  private async acquirePayloadPreparationSlot(): Promise<() => void> {
+    if (this.activePayloadPreparations < this.maxConcurrentPayloadPreparations) {
+      this.activePayloadPreparations += 1
+      return () => this.releasePayloadPreparationSlot()
+    }
+
+    return await new Promise((resolve) => {
+      this.payloadPreparationWaiters.push(() => {
+        this.activePayloadPreparations += 1
+        resolve(() => this.releasePayloadPreparationSlot())
+      })
+    })
+  }
+
+  private releasePayloadPreparationSlot(): void {
+    this.activePayloadPreparations = Math.max(0, this.activePayloadPreparations - 1)
+    const next = this.payloadPreparationWaiters.shift()
+    next?.()
   }
 
   private getRootPath(): string {
@@ -149,6 +310,7 @@ class VrSrcService {
   private async downloadFile(
     url: string,
     destinationPath: string,
+    control: VrSrcTransferControlState | null,
     progressContext?: {
       operation: VrSrcTransferOperation
       releaseName: string
@@ -171,7 +333,7 @@ class VrSrcService {
 
     if (remoteContentLength !== null && existingBytes === remoteContentLength && existingBytes > 0) {
       if (progressContext) {
-        this.emitTransferProgress({
+        const update: Omit<VrSrcTransferProgressUpdate, 'canPause' | 'canResume' | 'canCancel'> = {
           operation: progressContext.operation,
           releaseName: progressContext.releaseName,
           phase: 'downloading',
@@ -189,93 +351,154 @@ class VrSrcService {
           totalBytes: progressContext.totalBytes,
           speedBytesPerSecond: null,
           etaSeconds: 0
-        })
+        }
+        if (control) {
+          this.emitControlledTransferProgress(control, update)
+        } else {
+          this.emitTransferProgress({
+            ...update,
+            canPause: false,
+            canResume: false,
+            canCancel: false
+          })
+        }
       }
       return
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const curlArgs = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', '-o', destinationPath]
-      if (existingBytes > 0) {
-        curlArgs.push('-C', '-')
+    while (true) {
+      if (control) {
+        await this.checkpointTransferControl(control)
       }
-      curlArgs.push(url)
 
-      const child = spawn(
-        'curl',
-        curlArgs,
-        { stdio: ['ignore', 'ignore', 'pipe'] }
-      )
-      let stderr = ''
-      let lastTransferredBytes = existingBytes
-      let lastSampleAt = Date.now()
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const curlArgs = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', '-o', destinationPath]
+          if (existingBytes > 0) {
+            curlArgs.push('-C', '-')
+          }
+          curlArgs.push(url)
 
-      const emitProgress = async () => {
-        if (!progressContext) {
-          return
-        }
+          const child = spawn('curl', curlArgs, { stdio: ['ignore', 'ignore', 'pipe'] })
+          if (control) {
+            control.child = child
+            control.status = 'running'
+          }
+          let stderr = ''
+          let lastTransferredBytes = existingBytes
+          let lastSampleAt = Date.now()
 
-        let transferredBytes = 0
-        try {
-          transferredBytes = (await stat(destinationPath)).size
-        } catch {
-          transferredBytes = 0
-        }
+          const emitProgress = async () => {
+            if (!progressContext) {
+              return
+            }
 
-        const now = Date.now()
-        const elapsedSeconds = Math.max((now - lastSampleAt) / 1000, 0.25)
-        const speedBytesPerSecond =
-          transferredBytes >= lastTransferredBytes ? (transferredBytes - lastTransferredBytes) / elapsedSeconds : null
-        lastTransferredBytes = transferredBytes
-        lastSampleAt = now
+            let transferredBytes = 0
+            try {
+              transferredBytes = (await stat(destinationPath)).size
+            } catch {
+              transferredBytes = 0
+            }
 
-        const overallTransferredBytes = progressContext.bytesCompletedBefore + transferredBytes
-        const overallTotalBytes = progressContext.totalBytes
-        const progress = overallTotalBytes
-          ? Math.min(94, Math.max(1, Math.round((overallTransferredBytes / overallTotalBytes) * 100)))
-          : 22
-        const etaSeconds =
-          overallTotalBytes && speedBytesPerSecond && speedBytesPerSecond > 0
-            ? Math.max(0, Math.round((overallTotalBytes - overallTransferredBytes) / speedBytesPerSecond))
-            : null
+            existingBytes = transferredBytes
+            const now = Date.now()
+            const elapsedSeconds = Math.max((now - lastSampleAt) / 1000, 0.25)
+            const speedBytesPerSecond =
+              transferredBytes >= lastTransferredBytes ? (transferredBytes - lastTransferredBytes) / elapsedSeconds : null
+            lastTransferredBytes = transferredBytes
+            lastSampleAt = now
 
-        this.emitTransferProgress({
-          operation: progressContext.operation,
-          releaseName: progressContext.releaseName,
-          phase: 'downloading',
-          progress,
-          fileName: basename(destinationPath),
-          transferredBytes: overallTransferredBytes,
-          totalBytes: overallTotalBytes,
-          speedBytesPerSecond: speedBytesPerSecond && Number.isFinite(speedBytesPerSecond) ? speedBytesPerSecond : null,
-          etaSeconds
+            const overallTransferredBytes = progressContext.bytesCompletedBefore + transferredBytes
+            const overallTotalBytes = progressContext.totalBytes
+            const progress = overallTotalBytes
+              ? Math.min(94, Math.max(1, Math.round((overallTransferredBytes / overallTotalBytes) * 100)))
+              : 22
+            const etaSeconds =
+              overallTotalBytes && speedBytesPerSecond && speedBytesPerSecond > 0
+                ? Math.max(0, Math.round((overallTotalBytes - overallTransferredBytes) / speedBytesPerSecond))
+                : null
+
+            const update = {
+              operation: progressContext.operation,
+              releaseName: progressContext.releaseName,
+              phase: 'downloading' as const,
+              progress,
+              fileName: basename(destinationPath),
+              transferredBytes: overallTransferredBytes,
+              totalBytes: overallTotalBytes,
+              speedBytesPerSecond: speedBytesPerSecond && Number.isFinite(speedBytesPerSecond) ? speedBytesPerSecond : null,
+              etaSeconds
+            }
+
+            if (control) {
+              this.emitControlledTransferProgress(control, update)
+            } else {
+              this.emitTransferProgress({
+                ...update,
+                canPause: false,
+                canResume: false,
+                canCancel: false
+              })
+            }
+          }
+
+          const intervalId = setInterval(() => {
+            void emitProgress()
+          }, 750)
+
+          child.stderr.on('data', (chunk) => {
+            stderr += chunk.toString()
+          })
+
+          child.once('error', (error) => {
+            clearInterval(intervalId)
+            if (control) {
+              control.child = null
+            }
+            reject(error)
+          })
+
+          child.once('close', async (code) => {
+            clearInterval(intervalId)
+            await emitProgress()
+            if (control) {
+              control.child = null
+            }
+            if (code === 0) {
+              resolve()
+              return
+            }
+
+            if (control?.command === 'pause') {
+              control.command = 'none'
+              control.status = 'paused'
+              reject(new VrSrcTransferPausedError())
+              return
+            }
+
+            if (control?.command === 'cancel' || control?.status === 'cancelled') {
+              control.command = 'none'
+              control.status = 'cancelled'
+              reject(new VrSrcTransferCancelledError())
+              return
+            }
+
+            reject(new Error(stderr.trim() || `curl exited with code ${code ?? 'unknown'}.`))
+          })
         })
-      }
 
-      const intervalId = setInterval(() => {
-        void emitProgress()
-      }, 750)
-
-      child.stderr.on('data', (chunk) => {
-        stderr += chunk.toString()
-      })
-
-      child.once('error', (error) => {
-        clearInterval(intervalId)
-        reject(error)
-      })
-
-      child.once('close', async (code) => {
-        clearInterval(intervalId)
-        await emitProgress()
-        if (code === 0) {
-          resolve()
-          return
+        return
+      } catch (error) {
+        if (error instanceof VrSrcTransferPausedError) {
+          if (control) {
+            await this.waitForTransferResume(control)
+            continue
+          }
         }
 
-        reject(new Error(stderr.trim() || `curl exited with code ${code ?? 'unknown'}.`))
-      })
-    })
+        throw error
+      }
+    }
   }
 
   private async getSevenZipPath(): Promise<string> {
@@ -617,6 +840,7 @@ class VrSrcService {
     }
 
     const acquirePromise = (async () => {
+      const control = this.getOrCreateTransferControl(releaseName, operation)
       const credentials = await this.resolveCredentials()
       const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
       const folderName = this.sanitizeSegment(releaseName)
@@ -629,67 +853,93 @@ class VrSrcService {
 
       await mkdir(payloadPath, { recursive: true })
 
-      const payloadFiles = await this.listRemotePayloadFiles(credentials.baseUri, releaseName)
-      if (!payloadFiles.length) {
-        throw new Error(`vrSrc did not return any payload files for ${releaseName}.`)
-      }
-
-      const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
-      const payloadBaseUrl = `${this.ensureTrailingSlash(credentials.baseUri)}${hash}/`
-      const payloadUrls = payloadFiles.map((fileName) => new URL(fileName, payloadBaseUrl).toString())
-      const payloadSizes = await Promise.all(payloadUrls.map((url) => this.getRemoteContentLength(url)))
-      const hasKnownTotalBytes = payloadSizes.every((size) => typeof size === 'number')
-      const totalBytes = hasKnownTotalBytes
-        ? payloadSizes.reduce((sum, size) => sum + (size ?? 0), 0)
-        : null
-      let bytesCompletedBefore = 0
-
-      this.emitTransferProgress({
-        operation,
-        releaseName,
-        phase: 'preparing',
-        progress: 6,
-        fileName: null,
-        transferredBytes: 0,
-        totalBytes,
-        speedBytesPerSecond: null,
-        etaSeconds: null
-      })
-
-      for (const [index, fileName] of payloadFiles.entries()) {
-        const fileUrl = payloadUrls[index]
-        const destinationPath = join(payloadPath, basename(fileName))
-        await this.downloadFile(fileUrl, destinationPath, {
+      const queuedBehindAnotherPreparation = this.activePayloadPreparations >= this.maxConcurrentPayloadPreparations
+      if (queuedBehindAnotherPreparation) {
+        this.emitControlledTransferProgress(control, {
           operation,
           releaseName,
-          bytesCompletedBefore,
-          totalBytes
+          phase: 'queued',
+          progress: 0,
+          fileName: null,
+          transferredBytes: 0,
+          totalBytes: null,
+          speedBytesPerSecond: null,
+          etaSeconds: null
         })
-        bytesCompletedBefore += payloadSizes[index] ?? 0
       }
 
-      const archivePart = payloadFiles.find((fileName) => /\.7z\.001$/i.test(fileName))
-      if (archivePart) {
-        this.emitTransferProgress({
+      await this.checkpointTransferControl(control)
+      const releasePreparationSlot = await this.acquirePayloadPreparationSlot()
+      try {
+        await this.checkpointTransferControl(control)
+        const payloadFiles = await this.listRemotePayloadFiles(credentials.baseUri, releaseName)
+        if (!payloadFiles.length) {
+          throw new Error(`vrSrc did not return any payload files for ${releaseName}.`)
+        }
+
+        const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
+        const payloadBaseUrl = `${this.ensureTrailingSlash(credentials.baseUri)}${hash}/`
+        const payloadUrls = payloadFiles.map((fileName) => new URL(fileName, payloadBaseUrl).toString())
+        const payloadSizes = await Promise.all(payloadUrls.map((url) => this.getRemoteContentLength(url)))
+        const hasKnownTotalBytes = payloadSizes.every((size) => typeof size === 'number')
+        const totalBytes = hasKnownTotalBytes
+          ? payloadSizes.reduce((sum, size) => sum + (size ?? 0), 0)
+          : null
+        let bytesCompletedBefore = 0
+
+        this.emitControlledTransferProgress(control, {
           operation,
           releaseName,
-          phase: 'extracting',
-          progress: 96,
-          fileName: basename(archivePart),
-          transferredBytes: totalBytes ?? bytesCompletedBefore,
+          phase: 'preparing',
+          progress: 6,
+          fileName: null,
+          transferredBytes: 0,
           totalBytes,
           speedBytesPerSecond: null,
           etaSeconds: null
         })
-        await this.extractArchive(join(payloadPath, basename(archivePart)), payloadPath, decodedPassword, {
-          clearDestination: false
-        })
-        await this.extractNestedArchives(payloadPath)
-        await this.cleanupMultipartArchives(payloadPath)
-      }
 
-      await writeFile(extractedMarkerPath, new Date().toISOString(), 'utf8')
-      return payloadPath
+        for (const [index, fileName] of payloadFiles.entries()) {
+          await this.checkpointTransferControl(control)
+          const fileUrl = payloadUrls[index]
+          const destinationPath = join(payloadPath, basename(fileName))
+          await this.downloadFile(fileUrl, destinationPath, control, {
+            operation,
+            releaseName,
+            bytesCompletedBefore,
+            totalBytes
+          })
+          bytesCompletedBefore += payloadSizes[index] ?? 0
+        }
+
+        const archivePart = payloadFiles.find((fileName) => /\.7z\.001$/i.test(fileName))
+        if (archivePart) {
+          await this.checkpointTransferControl(control)
+          this.emitControlledTransferProgress(control, {
+            operation,
+            releaseName,
+            phase: 'extracting',
+            progress: 96,
+            fileName: basename(archivePart),
+            transferredBytes: totalBytes ?? bytesCompletedBefore,
+            totalBytes,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+          await this.extractArchive(join(payloadPath, basename(archivePart)), payloadPath, decodedPassword, {
+            clearDestination: false
+          })
+          await this.checkpointTransferControl(control)
+          await this.extractNestedArchives(payloadPath)
+          await this.checkpointTransferControl(control)
+          await this.cleanupMultipartArchives(payloadPath)
+        }
+
+        await writeFile(extractedMarkerPath, new Date().toISOString(), 'utf8')
+        return payloadPath
+      } finally {
+        releasePreparationSlot()
+      }
     })()
 
     this.acquireInFlight.set(releaseName, acquirePromise)
@@ -777,7 +1027,7 @@ class VrSrcService {
         await this.ensureDirectories()
         const credentials = await this.resolveCredentials()
         const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
-        await this.downloadFile(`${credentials.baseUri}meta.7z`, this.getMetaArchivePath())
+        await this.downloadFile(`${credentials.baseUri}meta.7z`, this.getMetaArchivePath(), null)
         await this.extractArchive(this.getMetaArchivePath(), this.getMetaExtractPath(), decodedPassword)
         const catalog = await this.buildCatalog()
         const status = await this.buildStatus()
@@ -786,17 +1036,20 @@ class VrSrcService {
           success: true,
           message: `vrSrc synced ${catalog.items.length} remote entries.`,
           details: null,
+          usedCachedCatalog: false,
           status,
           catalog
         }
       } catch (error) {
+        const catalog = await this.readCatalog()
         const status = await this.buildStatus()
         return {
           success: false,
           message: 'Unable to sync vrSrc.',
           details: error instanceof Error ? error.message : String(error),
+          usedCachedCatalog: Boolean(catalog.syncedAt || catalog.items.length),
           status,
-          catalog: await this.readCatalog()
+          catalog
         }
       } finally {
         this.syncInFlight = null
@@ -806,6 +1059,49 @@ class VrSrcService {
     return this.syncInFlight
   }
 
+  async clearCache(): Promise<VrSrcClearCacheResponse> {
+    if (this.syncInFlight) {
+      const status = await this.buildStatus()
+      const catalog = await this.readCatalog()
+      return {
+        success: false,
+        message: 'Unable to clear the vrSrc cache while a sync is in progress.',
+        details: 'Wait for the current vrSrc sync to finish, then try clearing the cache again.',
+        status,
+        catalog
+      }
+    }
+
+    try {
+      this.trailerVideoIdCache.clear()
+      await rm(this.getCatalogPath(), { force: true })
+      await rm(this.getMetaArchivePath(), { force: true })
+      await rm(this.getMetaExtractPath(), { recursive: true, force: true })
+      await rm(this.getDownloadsPath(), { recursive: true, force: true })
+      await mkdir(this.getDownloadsPath(), { recursive: true })
+      const status = await this.buildStatus()
+      const catalog = await this.readCatalog()
+
+      return {
+        success: true,
+        message: 'Cleared the cached vrSrc catalog and metadata.',
+        details: 'Credentials were preserved. Run Sync Source to rebuild the remote catalog from scratch.',
+        status,
+        catalog
+      }
+    } catch (error) {
+      const status = await this.buildStatus()
+      const catalog = await this.readCatalog()
+      return {
+        success: false,
+        message: 'Unable to clear the vrSrc cache.',
+        details: error instanceof Error ? error.message : String(error),
+        status,
+        catalog
+      }
+    }
+  }
+
   async downloadToLibrary(releaseName: string): Promise<VrSrcDownloadToLibraryResponse> {
     const settings = await settingsService.getSettings()
     const libraryPath = settings.localLibraryPath?.trim() ?? ''
@@ -813,6 +1109,7 @@ class VrSrcService {
     if (!libraryPath) {
       return {
         success: false,
+        cancelled: false,
         releaseName,
         sourcePath: null,
         targetPath: null,
@@ -833,6 +1130,7 @@ class VrSrcService {
 
       return {
         success: true,
+        cancelled: false,
         releaseName,
         sourcePath: null,
         targetPath,
@@ -841,8 +1139,22 @@ class VrSrcService {
         details: targetPath
       }
     } catch (error) {
+      if (error instanceof VrSrcTransferCancelledError) {
+        return {
+          success: false,
+          cancelled: true,
+          releaseName,
+          sourcePath: null,
+          targetPath: null,
+          packageName: null,
+          message: `${releaseName} download was cancelled.`,
+          details: null
+        }
+      }
+
       return {
         success: false,
+        cancelled: false,
         releaseName,
         sourcePath: null,
         targetPath: null,
@@ -850,13 +1162,78 @@ class VrSrcService {
         message: `Unable to add ${releaseName} to the Local Library.`,
         details: error instanceof Error ? error.message : String(error)
       }
+    } finally {
+      this.clearTransferControl(releaseName)
     }
   }
 
   async installNow(serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> {
     try {
       const sourcePath = await this.ensureReleasePayload(releaseName, 'install-now')
-      const installResponse = await deviceService.installManualPath(serial, sourcePath)
+      const installResponse = await deviceService.installManualPath(serial, sourcePath, {
+        onQueued: async () => {
+          const control = this.getTransferControl(releaseName)
+          if (!control) {
+            this.emitTransferProgress({
+              operation: 'install-now',
+              releaseName,
+              phase: 'queued',
+              progress: 96,
+              fileName: null,
+              transferredBytes: 0,
+              totalBytes: null,
+              speedBytesPerSecond: null,
+              etaSeconds: null,
+              canPause: false,
+              canResume: false,
+              canCancel: false
+            })
+            return
+          }
+          this.emitControlledTransferProgress(control, {
+            operation: 'install-now',
+            releaseName,
+            phase: 'queued',
+            progress: 96,
+            fileName: null,
+            transferredBytes: 0,
+            totalBytes: null,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        },
+        onStarted: async () => {
+          const control = this.getTransferControl(releaseName)
+          if (!control) {
+            this.emitTransferProgress({
+              operation: 'install-now',
+              releaseName,
+              phase: 'installing',
+              progress: 97,
+              fileName: null,
+              transferredBytes: 0,
+              totalBytes: null,
+              speedBytesPerSecond: null,
+              etaSeconds: null,
+              canPause: false,
+              canResume: false,
+              canCancel: false
+            })
+            return
+          }
+          this.emitControlledTransferProgress(control, {
+            operation: 'install-now',
+            releaseName,
+            phase: 'installing',
+            progress: 97,
+            fileName: null,
+            transferredBytes: 0,
+            totalBytes: null,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        }
+      })
       if (installResponse.success) {
         await this.cleanupReleasePayload(sourcePath)
       }
@@ -864,6 +1241,7 @@ class VrSrcService {
 
       return {
         success: installResponse.success,
+        cancelled: false,
         releaseName,
         serial,
         sourcePath: installResponse.success ? null : sourcePath,
@@ -872,8 +1250,22 @@ class VrSrcService {
         details: installResponse.details
       }
     } catch (error) {
+      if (error instanceof VrSrcTransferCancelledError) {
+        return {
+          success: false,
+          cancelled: true,
+          releaseName,
+          serial,
+          sourcePath: null,
+          packageName: null,
+          message: `${releaseName} install was cancelled.`,
+          details: null
+        }
+      }
+
       return {
         success: false,
+        cancelled: false,
         releaseName,
         serial,
         sourcePath: null,
@@ -881,6 +1273,149 @@ class VrSrcService {
         message: `Unable to install ${releaseName} from vrSrc.`,
         details: error instanceof Error ? error.message : String(error)
       }
+    } finally {
+      this.clearTransferControl(releaseName)
+    }
+  }
+
+  async pauseTransfer(releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> {
+    const control = this.getTransferControl(releaseName)
+    if (!control || control.operation !== operation) {
+      return {
+        success: false,
+        releaseName,
+        operation,
+        message: 'No active vrSrc transfer was found to pause.',
+        details: null
+      }
+    }
+
+    if (control.status === 'paused') {
+      return {
+        success: true,
+        releaseName,
+        operation,
+        message: `${releaseName} is already paused.`,
+        details: null
+      }
+    }
+
+    control.command = 'pause'
+    if (control.child) {
+      control.child.kill('SIGTERM')
+    } else {
+      control.status = 'paused'
+      const fallbackProgress = control.lastUpdate?.progress ?? 0
+      this.emitControlledTransferProgress(control, {
+        operation,
+        releaseName,
+        phase: 'paused',
+        progress: fallbackProgress,
+        fileName: control.lastUpdate?.fileName ?? null,
+        transferredBytes: control.lastUpdate?.transferredBytes ?? 0,
+        totalBytes: control.lastUpdate?.totalBytes ?? null,
+        speedBytesPerSecond: null,
+        etaSeconds: null
+      })
+    }
+
+    return {
+      success: true,
+      releaseName,
+      operation,
+      message: `Paused ${releaseName}.`,
+      details: null
+    }
+  }
+
+  async resumeTransfer(releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> {
+    const control = this.getTransferControl(releaseName)
+    if (!control || control.operation !== operation) {
+      return {
+        success: false,
+        releaseName,
+        operation,
+        message: 'No paused vrSrc transfer was found to resume.',
+        details: null
+      }
+    }
+
+    control.status = 'running'
+    control.command = 'none'
+    const waiters = control.waiters.splice(0)
+    for (const resolve of waiters) {
+      resolve()
+    }
+
+    const lastUpdate = control.lastUpdate
+    if (lastUpdate) {
+      const resumePhase =
+        lastUpdate.phase === 'paused'
+          ? control.child
+            ? 'downloading'
+            : lastUpdate.fileName
+              ? 'downloading'
+              : lastUpdate.progress > 0
+                ? 'preparing'
+                : 'queued'
+          : lastUpdate.phase
+
+      this.emitControlledTransferProgress(control, {
+        ...lastUpdate,
+        phase: resumePhase
+      })
+    }
+
+    return {
+      success: true,
+      releaseName,
+      operation,
+      message: `Resumed ${releaseName}.`,
+      details: null
+    }
+  }
+
+  async cancelTransfer(releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> {
+    const control = this.getTransferControl(releaseName)
+    if (!control || control.operation !== operation) {
+      return {
+        success: false,
+        releaseName,
+        operation,
+        message: 'No active vrSrc transfer was found to cancel.',
+        details: null
+      }
+    }
+
+    control.command = 'cancel'
+    control.status = 'cancelled'
+    const waiters = control.waiters.splice(0)
+    for (const resolve of waiters) {
+      resolve()
+    }
+    if (control.child) {
+      control.child.kill('SIGTERM')
+    } else {
+      const fallbackProgress = control.lastUpdate?.progress ?? 0
+      this.emitControlledTransferProgress(control, {
+        operation,
+        releaseName,
+        phase: 'cancelled',
+        progress: fallbackProgress,
+        fileName: control.lastUpdate?.fileName ?? null,
+        transferredBytes: control.lastUpdate?.transferredBytes ?? 0,
+        totalBytes: control.lastUpdate?.totalBytes ?? null,
+        speedBytesPerSecond: null,
+        etaSeconds: null
+      })
+    }
+
+    return {
+      success: true,
+      releaseName,
+      operation,
+      message: `Cancelled ${releaseName}.`,
+      details: null
     }
   }
 }
