@@ -37,11 +37,14 @@ import type {
   SettingsPathKey,
   SettingsSelectPathResponse,
   VrSrcCatalogResponse,
+  VrSrcClearCacheResponse,
   VrSrcDownloadToLibraryResponse,
   VrSrcItemDetailsResponse,
   VrSrcInstallNowResponse,
   VrSrcStatusResponse,
   VrSrcSyncResponse,
+  VrSrcTransferControlResponse,
+  VrSrcTransferOperation,
   VrSrcTransferProgressUpdate,
   ViewDisplayMode
 } from '@shared/types/ipc'
@@ -103,8 +106,12 @@ interface ElectronApi {
     getCatalog: () => Promise<VrSrcCatalogResponse>
     getItemDetails: (releaseName: string, gameName: string) => Promise<VrSrcItemDetailsResponse>
     syncCatalog: () => Promise<VrSrcSyncResponse>
+    clearCache: () => Promise<VrSrcClearCacheResponse>
     downloadToLibrary: (releaseName: string) => Promise<VrSrcDownloadToLibraryResponse>
     installNow: (serial: string, releaseName: string) => Promise<VrSrcInstallNowResponse>
+    pauseTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
+    resumeTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
+    cancelTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
     onTransferProgress: (callback: (update: VrSrcTransferProgressUpdate) => void) => () => void
   }
   settings: {

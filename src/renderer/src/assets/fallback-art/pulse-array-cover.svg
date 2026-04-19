@@ -1,0 +1,28 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="154" y1="114" x2="880" y2="914" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0D182A"/>
+      <stop offset="1" stop-color="#07101A"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 512) rotate(90) scale(290 290)">
+      <stop stop-color="#D4FFF8" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#58D4C5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="link" x1="270" y1="632" x2="760" y2="374" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#58D4C5"/>
+      <stop offset="1" stop-color="#FFD271"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="184" fill="url(#bg)"/>
+  <rect x="84" y="84" width="856" height="856" rx="150" fill="#111A2C" stroke="rgba(237,243,248,0.08)"/>
+  <circle cx="512" cy="512" r="286" fill="url(#glow)"/>
+  <circle cx="512" cy="512" r="172" stroke="rgba(88,212,197,0.22)" stroke-width="2"/>
+  <circle cx="512" cy="512" r="244" stroke="rgba(237,243,248,0.1)" stroke-width="2"/>
+  <circle cx="512" cy="512" r="316" stroke="rgba(255,143,102,0.1)" stroke-width="2"/>
+  <path d="M276 640L400 568L512 512L668 452L780 366" stroke="url(#link)" stroke-opacity="0.84" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="276" cy="640" r="12" fill="#58D4C5" fill-opacity="0.92"/>
+  <circle cx="400" cy="568" r="10" fill="#78E5D6" fill-opacity="0.9"/>
+  <circle cx="512" cy="512" r="14" fill="#EDF3F8" fill-opacity="0.86"/>
+  <circle cx="668" cy="452" r="12" fill="#FFD271" fill-opacity="0.9"/>
+  <circle cx="780" cy="366" r="14" fill="#FF8F66" fill-opacity="0.88"/>
+</svg>

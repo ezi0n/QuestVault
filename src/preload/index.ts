@@ -38,17 +38,20 @@ import type {
   SettingsPathKey,
   SettingsSelectPathResponse,
   VrSrcCatalogResponse,
+  VrSrcClearCacheResponse,
   VrSrcDownloadToLibraryResponse,
   VrSrcItemDetailsResponse,
   VrSrcInstallNowResponse,
   VrSrcStatusResponse,
   VrSrcSyncResponse,
+  VrSrcTransferControlResponse,
+  VrSrcTransferOperation,
   VrSrcTransferProgressUpdate,
   ViewDisplayMode
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.5.0',
+  version: '0.5.3',
   ping: (): string => 'pong',
   dependencies: {
     getStatus: (): Promise<DependencyStatusResponse> => ipcRenderer.invoke('dependencies:get-status'),
@@ -133,10 +136,17 @@ const api = {
     getItemDetails: (releaseName: string, gameName: string): Promise<VrSrcItemDetailsResponse> =>
       ipcRenderer.invoke('vrsrc:get-item-details', releaseName, gameName),
     syncCatalog: (): Promise<VrSrcSyncResponse> => ipcRenderer.invoke('vrsrc:sync-catalog'),
+    clearCache: (): Promise<VrSrcClearCacheResponse> => ipcRenderer.invoke('vrsrc:clear-cache'),
     downloadToLibrary: (releaseName: string): Promise<VrSrcDownloadToLibraryResponse> =>
       ipcRenderer.invoke('vrsrc:download-to-library', releaseName),
     installNow: (serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> =>
       ipcRenderer.invoke('vrsrc:install-now', serial, releaseName),
+    pauseTransfer: (releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> =>
+      ipcRenderer.invoke('vrsrc:pause-transfer', releaseName, operation),
+    resumeTransfer: (releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> =>
+      ipcRenderer.invoke('vrsrc:resume-transfer', releaseName, operation),
+    cancelTransfer: (releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> =>
+      ipcRenderer.invoke('vrsrc:cancel-transfer', releaseName, operation),
     onTransferProgress: (callback: (update: VrSrcTransferProgressUpdate) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, update: VrSrcTransferProgressUpdate) => {
         callback(update)

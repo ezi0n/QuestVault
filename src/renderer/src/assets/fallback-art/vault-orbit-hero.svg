@@ -1,0 +1,34 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="176" y1="96" x2="1412" y2="832" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101A2D"/>
+      <stop offset="1" stop-color="#08111C"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(810 408) rotate(90) scale(360 468)">
+      <stop stop-color="#58D4C5" stop-opacity="0.34"/>
+      <stop offset="0.54" stop-color="#58D4C5" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#58D4C5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="orbit" x1="402" y1="216" x2="1180" y2="690" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#58D4C5"/>
+      <stop offset="0.58" stop-color="#86E8D9"/>
+      <stop offset="1" stop-color="#FF8F66"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" rx="48" fill="url(#bg)"/>
+  <rect x="56" y="56" width="1488" height="788" rx="38" fill="#111B2D" stroke="rgba(237,243,248,0.08)"/>
+  <ellipse cx="810" cy="430" rx="490" ry="278" fill="url(#glow)"/>
+  <path d="M338 634C510 408 758 294 1130 292" stroke="url(#orbit)" stroke-opacity="0.82" stroke-width="28" stroke-linecap="round"/>
+  <path d="M428 742C596 506 828 380 1212 374" stroke="url(#orbit)" stroke-opacity="0.42" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="1188" cy="286" r="22" fill="#FFD271" fill-opacity="0.94"/>
+  <circle cx="420" cy="640" r="14" fill="#58D4C5" fill-opacity="0.9"/>
+  <rect x="236" y="238" width="182" height="120" rx="28" fill="rgba(88,212,197,0.08)" stroke="rgba(88,212,197,0.24)"/>
+  <rect x="1186" y="540" width="182" height="120" rx="28" fill="rgba(255,143,102,0.08)" stroke="rgba(255,143,102,0.24)"/>
+  <rect x="262" y="266" width="128" height="18" rx="9" fill="rgba(237,243,248,0.18)"/>
+  <rect x="262" y="302" width="92" height="12" rx="6" fill="rgba(88,212,197,0.44)"/>
+  <rect x="1214" y="568" width="108" height="18" rx="9" fill="rgba(237,243,248,0.18)"/>
+  <rect x="1214" y="604" width="76" height="12" rx="6" fill="rgba(255,210,113,0.48)"/>
+  <path d="M132 146H502" stroke="rgba(237,243,248,0.08)" stroke-width="2"/>
+  <path d="M1098 758H1468" stroke="rgba(237,243,248,0.08)" stroke-width="2"/>
+  <circle cx="808" cy="450" r="168" stroke="rgba(237,243,248,0.08)" stroke-width="2"/>
+</svg>

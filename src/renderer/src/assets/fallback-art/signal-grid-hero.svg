@@ -1,0 +1,32 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="146" y1="92" x2="1458" y2="830" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0D1728"/>
+      <stop offset="1" stop-color="#08101A"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="246" y1="694" x2="1350" y2="250" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#58D4C5" stop-opacity="0"/>
+      <stop offset="0.44" stop-color="#58D4C5" stop-opacity="0.48"/>
+      <stop offset="1" stop-color="#FF8F66" stop-opacity="0.72"/>
+    </linearGradient>
+    <radialGradient id="haze" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(808 450) rotate(90) scale(308 514)">
+      <stop stop-color="#C2FFF3" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#58D4C5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="900" rx="48" fill="url(#bg)"/>
+  <ellipse cx="808" cy="454" rx="470" ry="238" fill="url(#haze)"/>
+  <path d="M180 734L570 346L924 574L1362 214" stroke="url(#beam)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M250 778L622 430L908 620L1420 278" stroke="rgba(237,243,248,0.14)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="572" cy="346" r="16" fill="#58D4C5" fill-opacity="0.9"/>
+  <circle cx="924" cy="574" r="22" fill="#FFD271" fill-opacity="0.92"/>
+  <circle cx="1362" cy="214" r="18" fill="#FF8F66" fill-opacity="0.88"/>
+  <path d="M184 190H1416" stroke="rgba(237,243,248,0.08)" stroke-width="2"/>
+  <path d="M184 310H1416" stroke="rgba(237,243,248,0.06)" stroke-width="2"/>
+  <path d="M184 590H1416" stroke="rgba(237,243,248,0.06)" stroke-width="2"/>
+  <path d="M184 710H1416" stroke="rgba(237,243,248,0.08)" stroke-width="2"/>
+  <path d="M280 154V746" stroke="rgba(237,243,248,0.06)" stroke-width="2"/>
+  <path d="M552 154V746" stroke="rgba(237,243,248,0.06)" stroke-width="2"/>
+  <path d="M1048 154V746" stroke="rgba(237,243,248,0.06)" stroke-width="2"/>
+  <path d="M1320 154V746" stroke="rgba(237,243,248,0.06)" stroke-width="2"/>
+</svg>

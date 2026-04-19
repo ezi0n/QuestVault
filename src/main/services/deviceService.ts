@@ -34,9 +34,39 @@ interface ParsedDeviceRow {
   transportId: string | null
 }
 
+interface InstallQueueHooks {
+  onQueued?: () => void | Promise<void>
+  onStarted?: () => void | Promise<void>
+}
+
 class DeviceService {
   private catalogNameMapPromise: Promise<Map<string, string>> | null = null
   private blockedLeftoverDeletes = new Map<string, string>()
+  private installQueue: Promise<void> = Promise.resolve()
+  private installQueueDepth = 0
+
+  private async runQueuedInstall<T>(task: () => Promise<T>, hooks?: InstallQueueHooks): Promise<T> {
+    const queuedBehindAnotherInstall = this.installQueueDepth > 0
+    if (queuedBehindAnotherInstall) {
+      await hooks?.onQueued?.()
+    }
+
+    this.installQueueDepth += 1
+
+    const run = this.installQueue.then(async () => {
+      await hooks?.onStarted?.()
+      return task()
+    })
+
+    this.installQueue = run
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        this.installQueueDepth = Math.max(0, this.installQueueDepth - 1)
+      })
+
+    return run
+  }
 
   async listDevices(): Promise<DeviceListResponse> {
     const runtime = await this.resolveRuntime()
@@ -879,31 +909,44 @@ class DeviceService {
     }
 
     try {
-      await this.logHeadsetActionStep(action, `Resolved managed ADB runtime at ${runtime.adbPath}.`)
-      const installResult =
-        item.kind === 'apk'
-          ? await this.installSingleApk(runtime.adbPath, normalizedSerial, item.absolutePath, action)
-          : await this.installFolderPayload(runtime.adbPath, normalizedSerial, item, action)
+      return await this.runQueuedInstall(
+        async () => {
+          const adbPath = runtime.adbPath as string
+          await this.logHeadsetActionStep(action, `Resolved managed ADB runtime at ${adbPath}.`)
+          const installResult =
+            item.kind === 'apk'
+              ? await this.installSingleApk(adbPath, normalizedSerial, item.absolutePath, action)
+              : await this.installFolderPayload(adbPath, normalizedSerial, item, action)
 
-      if (installResult.success) {
-        await this.completeHeadsetAction(action, installResult.message, {
-          packageName: installResult.packageName ?? item.packageIds[0] ?? null
-        })
-      } else {
-        await this.failHeadsetAction(action, installResult.message, {
-          packageName: installResult.packageName ?? item.packageIds[0] ?? null
-        })
-      }
+          if (installResult.success) {
+            await this.completeHeadsetAction(action, installResult.message, {
+              packageName: installResult.packageName ?? item.packageIds[0] ?? null
+            })
+          } else {
+            await this.failHeadsetAction(action, installResult.message, {
+              packageName: installResult.packageName ?? item.packageIds[0] ?? null
+            })
+          }
 
-      return {
-        runtime,
-        serial: normalizedSerial,
-        itemId: item.id,
-        success: installResult.success,
-        message: installResult.message,
-        details: installResult.details,
-        packageName: installResult.packageName
-      }
+          return {
+            runtime,
+            serial: normalizedSerial,
+            itemId: item.id,
+            success: installResult.success,
+            message: installResult.message,
+            details: installResult.details,
+            packageName: installResult.packageName
+          }
+        },
+        {
+          onQueued: async () => {
+            await this.logHeadsetActionStep(
+              action,
+              'Queued for install because another headset installation is already in progress.'
+            )
+          }
+        }
+      )
     } catch (error) {
       const details = this.readErrorMessage(error)
       const message = `Unable to install ${item.name}.`
@@ -926,7 +969,11 @@ class DeviceService {
     }
   }
 
-  async installManualPath(serial: string, sourcePath: string): Promise<DeviceManualInstallResponse> {
+  async installManualPath(
+    serial: string,
+    sourcePath: string,
+    options?: InstallQueueHooks
+  ): Promise<DeviceManualInstallResponse> {
     const runtime = await this.resolveRuntime()
     const normalizedSerial = serial.trim()
     const normalizedSourcePath = sourcePath.trim()
@@ -982,88 +1029,106 @@ class DeviceService {
 
     try {
       const sourceStats = await stat(normalizedSourcePath)
-      let installResult: { success: boolean; message: string; details: string | null; packageName: string | null }
 
-      await this.logHeadsetActionStep(action, `Resolved manual install source ${normalizedSourcePath}.`)
+      return await this.runQueuedInstall(
+        async () => {
+          const adbPath = runtime.adbPath as string
+          let installResult: { success: boolean; message: string; details: string | null; packageName: string | null }
 
-      if (sourceStats.isFile()) {
-        if (!normalizedSourcePath.toLowerCase().endsWith('.apk')) {
-          const message = 'Only standalone APK files can be installed from manual file selection.'
-          await this.failHeadsetAction(action, message, { sourcePath: normalizedSourcePath })
+          await this.logHeadsetActionStep(action, `Resolved manual install source ${normalizedSourcePath}.`)
+
+          if (sourceStats.isFile()) {
+            if (!normalizedSourcePath.toLowerCase().endsWith('.apk')) {
+              const message = 'Only standalone APK files can be installed from manual file selection.'
+              await this.failHeadsetAction(action, message, { sourcePath: normalizedSourcePath })
+              return {
+                runtime: { status: 'error', adbPath: runtime.adbPath, message },
+                serial: normalizedSerial,
+                sourcePath: normalizedSourcePath,
+                success: false,
+                message,
+                details: null,
+                packageName: null
+              }
+            }
+
+            installResult = await this.installSingleApk(adbPath, normalizedSerial, normalizedSourcePath, action)
+          } else if (sourceStats.isDirectory()) {
+            const tempItem: LocalLibraryIndexedItem = {
+              id: `manual:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+              name: sourceName,
+              relativePath: sourceName,
+              absolutePath: normalizedSourcePath,
+              searchTerms: [sourceName],
+              packageIds: [],
+              kind: 'folder',
+              availability: 'present',
+              discoveryState: 'existing',
+              installReady: true,
+              sizeBytes: 0,
+              modifiedAt: new Date().toISOString(),
+              childCount: 0,
+              apkCount: 0,
+              obbCount: 0,
+              archiveCount: 0,
+              libraryVersion: null,
+              libraryVersionCode: null,
+              manualStoreId: null,
+              manualStoreIdEdited: false,
+              manualMetadata: null,
+              note: 'Manual install source.'
+            }
+
+            installResult = await this.installFolderPayload(adbPath, normalizedSerial, tempItem, action)
+          } else {
+            const message = 'The selected manual install source is not a file or folder.'
+            await this.failHeadsetAction(action, message, { sourcePath: normalizedSourcePath })
+            return {
+              runtime: { status: 'error', adbPath: runtime.adbPath, message },
+              serial: normalizedSerial,
+              sourcePath: normalizedSourcePath,
+              success: false,
+              message,
+              details: null,
+              packageName: null
+            }
+          }
+
+          if (installResult.success) {
+            await this.completeHeadsetAction(action, installResult.message, {
+              sourcePath: normalizedSourcePath,
+              packageName: installResult.packageName
+            })
+          } else {
+            await this.failHeadsetAction(action, installResult.message, {
+              sourcePath: normalizedSourcePath,
+              packageName: installResult.packageName
+            })
+          }
+
           return {
-            runtime: { status: 'error', adbPath: runtime.adbPath, message },
+            runtime,
             serial: normalizedSerial,
             sourcePath: normalizedSourcePath,
-            success: false,
-            message,
-            details: null,
-            packageName: null
+            success: installResult.success,
+            message: installResult.message,
+            details: installResult.details,
+            packageName: installResult.packageName
+          }
+        },
+        {
+          onQueued: async () => {
+            await this.logHeadsetActionStep(
+              action,
+              'Queued for install because another headset installation is already in progress.'
+            )
+            await options?.onQueued?.()
+          },
+          onStarted: async () => {
+            await options?.onStarted?.()
           }
         }
-
-        installResult = await this.installSingleApk(runtime.adbPath, normalizedSerial, normalizedSourcePath, action)
-      } else if (sourceStats.isDirectory()) {
-        const tempItem: LocalLibraryIndexedItem = {
-          id: `manual:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-          name: sourceName,
-          relativePath: sourceName,
-          absolutePath: normalizedSourcePath,
-          searchTerms: [sourceName],
-          packageIds: [],
-          kind: 'folder',
-          availability: 'present',
-          discoveryState: 'existing',
-          installReady: true,
-          sizeBytes: 0,
-          modifiedAt: new Date().toISOString(),
-          childCount: 0,
-          apkCount: 0,
-          obbCount: 0,
-          archiveCount: 0,
-          libraryVersion: null,
-          libraryVersionCode: null,
-          manualStoreId: null,
-          manualStoreIdEdited: false,
-          manualMetadata: null,
-          note: 'Manual install source.'
-        }
-
-        installResult = await this.installFolderPayload(runtime.adbPath, normalizedSerial, tempItem, action)
-      } else {
-        const message = 'The selected manual install source is not a file or folder.'
-        await this.failHeadsetAction(action, message, { sourcePath: normalizedSourcePath })
-        return {
-          runtime: { status: 'error', adbPath: runtime.adbPath, message },
-          serial: normalizedSerial,
-          sourcePath: normalizedSourcePath,
-          success: false,
-          message,
-          details: null,
-          packageName: null
-        }
-      }
-
-      if (installResult.success) {
-        await this.completeHeadsetAction(action, installResult.message, {
-          sourcePath: normalizedSourcePath,
-          packageName: installResult.packageName
-        })
-      } else {
-        await this.failHeadsetAction(action, installResult.message, {
-          sourcePath: normalizedSourcePath,
-          packageName: installResult.packageName
-        })
-      }
-
-      return {
-        runtime,
-        serial: normalizedSerial,
-        sourcePath: normalizedSourcePath,
-        success: installResult.success,
-        message: installResult.message,
-        details: installResult.details,
-        packageName: installResult.packageName
-      }
+      )
     } catch (error) {
       const details = this.readErrorMessage(error)
       const message = `Unable to install ${sourceName}.`

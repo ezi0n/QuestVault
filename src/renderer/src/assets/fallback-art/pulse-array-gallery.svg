@@ -1,0 +1,27 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="94" x2="1438" y2="826" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0D182A"/>
+      <stop offset="1" stop-color="#07101A"/>
+    </linearGradient>
+    <radialGradient id="field" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(804 446) rotate(90) scale(286 408)">
+      <stop stop-color="#D4FFF8" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#58D4C5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="node" x1="474" y1="322" x2="1138" y2="588" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#58D4C5"/>
+      <stop offset="1" stop-color="#FFD271"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" rx="48" fill="url(#bg)"/>
+  <ellipse cx="804" cy="446" rx="416" ry="226" fill="url(#field)"/>
+  <circle cx="804" cy="446" r="168" stroke="rgba(88,212,197,0.22)" stroke-width="2"/>
+  <circle cx="804" cy="446" r="240" stroke="rgba(237,243,248,0.1)" stroke-width="2"/>
+  <circle cx="804" cy="446" r="312" stroke="rgba(255,143,102,0.1)" stroke-width="2"/>
+  <path d="M486 586L650 490L804 446L984 398L1124 320" stroke="url(#node)" stroke-opacity="0.82" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="486" cy="586" r="12" fill="#58D4C5" fill-opacity="0.92"/>
+  <circle cx="650" cy="490" r="10" fill="#78E5D6" fill-opacity="0.9"/>
+  <circle cx="804" cy="446" r="14" fill="#EDF3F8" fill-opacity="0.86"/>
+  <circle cx="984" cy="398" r="12" fill="#FFD271" fill-opacity="0.9"/>
+  <circle cx="1124" cy="320" r="14" fill="#FF8F66" fill-opacity="0.88"/>
+</svg>
