@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { basename, extname, join } from 'node:path'
 import { execFile as execFileCallback, spawn } from 'node:child_process'
@@ -9,6 +9,7 @@ import type {
   VrSrcCatalogItem,
   VrSrcCatalogResponse,
   VrSrcClearCacheResponse,
+  VrSrcDownloadAndInstallResponse,
   VrSrcDownloadToLibraryResponse,
   VrSrcItemDetailsResponse,
   VrSrcInstallNowResponse,
@@ -35,6 +36,15 @@ type VrSrcCredentials = {
 
 type VrSrcTransferCommand = 'none' | 'pause' | 'cancel'
 type VrSrcTransferLifecycle = 'running' | 'paused' | 'cancelled'
+type VrSrcLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
+
+type VrSrcLogger = {
+  logPath: string
+  debug: (message: string, details?: unknown) => Promise<void>
+  info: (message: string, details?: unknown) => Promise<void>
+  warn: (message: string, details?: unknown) => Promise<void>
+  error: (message: string, details?: unknown) => Promise<void>
+}
 
 type VrSrcTransferControlState = {
   releaseName: string
@@ -234,6 +244,10 @@ class VrSrcService {
     return join(this.getRootPath(), 'downloads')
   }
 
+  private getLogsPath(): string {
+    return join(this.getRootPath(), 'logs')
+  }
+
   private toLocalAssetUri(absolutePath: string): string {
     return `qam-asset://${encodeURIComponent(absolutePath)}`
   }
@@ -263,9 +277,78 @@ class VrSrcService {
     return value.trim().toLowerCase()
   }
 
+  private formatLogDetails(details: unknown): string {
+    if (details === undefined) {
+      return ''
+    }
+
+    if (details instanceof Error) {
+      return ` | ${details.name}: ${details.message}`
+    }
+
+    if (typeof details === 'string') {
+      return details.trim() ? ` | ${details}` : ''
+    }
+
+    try {
+      return ` | ${JSON.stringify(details)}`
+    } catch {
+      return ` | ${String(details)}`
+    }
+  }
+
+  private async appendLogLine(
+    logPath: string,
+    level: VrSrcLogLevel,
+    message: string,
+    details?: unknown
+  ): Promise<void> {
+    const line = `[${new Date().toISOString()}] [${level}] ${message}${this.formatLogDetails(details)}\n`
+    try {
+      await appendFile(logPath, line, 'utf8')
+    } catch {
+      // Logging must never block vrSrc operations.
+    }
+  }
+
+  private sanitizeLogSuffix(value: string): string {
+    return value.replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'sync'
+  }
+
+  private async createLogger(scope: string): Promise<VrSrcLogger> {
+    await mkdir(this.getLogsPath(), { recursive: true })
+    const logPath = join(this.getLogsPath(), `${new Date().toISOString().replace(/[:.]/g, '-')}-${this.sanitizeLogSuffix(scope)}.log`)
+
+    await writeFile(logPath, '', 'utf8')
+
+    return {
+      logPath,
+      debug: (message, details) => this.appendLogLine(logPath, 'DEBUG', message, details),
+      info: (message, details) => this.appendLogLine(logPath, 'INFO', message, details),
+      warn: (message, details) => this.appendLogLine(logPath, 'WARN', message, details),
+      error: (message, details) => this.appendLogLine(logPath, 'ERROR', message, details)
+    }
+  }
+
   private async ensureDirectories(): Promise<void> {
     await mkdir(this.getRootPath(), { recursive: true })
     await mkdir(this.getDownloadsPath(), { recursive: true })
+    await mkdir(this.getLogsPath(), { recursive: true })
+  }
+
+  private async logCurlOutput(logger: VrSrcLogger | undefined, source: string, output: string): Promise<void> {
+    if (!logger) {
+      return
+    }
+
+    const lines = output
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+
+    for (const line of lines) {
+      await logger.debug(`${source} curl`, line)
+    }
   }
 
   private async fileExists(path: string): Promise<boolean> {
@@ -277,23 +360,40 @@ class VrSrcService {
     }
   }
 
-  private async fetchText(url: string): Promise<string> {
-    const { stdout } = await execFileAsync(
-      'curl',
-      ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', url],
-      { maxBuffer: 8 * 1024 * 1024 }
-    )
+  private async fetchText(url: string, logger?: VrSrcLogger): Promise<string> {
+    try {
+      const args = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
+      if (logger) {
+        args.push('-v')
+      }
+      args.push(url)
+      const { stdout, stderr } = await execFileAsync('curl', args, {
+        maxBuffer: 8 * 1024 * 1024
+      })
 
-    return stdout
+      await this.logCurlOutput(logger, 'fetchText', stderr)
+      return stdout
+    } catch (error) {
+      const stderr =
+        typeof error === 'object' && error !== null && 'stderr' in error && typeof error.stderr === 'string'
+          ? error.stderr
+          : ''
+      await this.logCurlOutput(logger, 'fetchText', stderr)
+      throw error
+    }
   }
 
-  private async getRemoteContentLength(url: string): Promise<number | null> {
+  private async getRemoteContentLength(url: string, logger?: VrSrcLogger): Promise<number | null> {
     try {
-      const { stdout } = await execFileAsync(
-        'curl',
-        ['-L', '--fail', '-I', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', url],
-        { maxBuffer: 256 * 1024 }
-      )
+      const args = ['-L', '--fail', '-I', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
+      if (logger) {
+        args.push('-v')
+      }
+      args.push(url)
+      const { stdout, stderr } = await execFileAsync('curl', args, {
+        maxBuffer: 256 * 1024
+      })
+      await this.logCurlOutput(logger, 'content-length', stderr)
       const matches = Array.from(stdout.matchAll(/^content-length:\s*(\d+)\s*$/gim))
       const lastMatch = matches.at(-1)
       if (!lastMatch) {
@@ -302,7 +402,12 @@ class VrSrcService {
 
       const parsed = Number.parseInt(lastMatch[1], 10)
       return Number.isFinite(parsed) ? parsed : null
-    } catch {
+    } catch (error) {
+      const stderr =
+        typeof error === 'object' && error !== null && 'stderr' in error && typeof error.stderr === 'string'
+          ? error.stderr
+          : ''
+      await this.logCurlOutput(logger, 'content-length', stderr)
       return null
     }
   }
@@ -311,6 +416,7 @@ class VrSrcService {
     url: string,
     destinationPath: string,
     control: VrSrcTransferControlState | null,
+    logger?: VrSrcLogger,
     progressContext?: {
       operation: VrSrcTransferOperation
       releaseName: string
@@ -318,7 +424,13 @@ class VrSrcService {
       totalBytes: number | null
     }
   ): Promise<void> {
-    const remoteContentLength = await this.getRemoteContentLength(url)
+    await logger?.debug('Preparing download.', {
+      url,
+      destinationPath,
+      operation: progressContext?.operation ?? null,
+      releaseName: progressContext?.releaseName ?? null
+    })
+    const remoteContentLength = await this.getRemoteContentLength(url, logger)
     let existingBytes = 0
     try {
       existingBytes = (await stat(destinationPath)).size
@@ -327,11 +439,20 @@ class VrSrcService {
     }
 
     if (remoteContentLength !== null && existingBytes > remoteContentLength) {
+      await logger?.warn('Existing partial file exceeded remote content length. Resetting local file.', {
+        destinationPath,
+        existingBytes,
+        remoteContentLength
+      })
       await rm(destinationPath, { force: true })
       existingBytes = 0
     }
 
     if (remoteContentLength !== null && existingBytes === remoteContentLength && existingBytes > 0) {
+      await logger?.debug('Skipping download because the local file already matches the remote size.', {
+        destinationPath,
+        bytes: existingBytes
+      })
       if (progressContext) {
         const update: Omit<VrSrcTransferProgressUpdate, 'canPause' | 'canResume' | 'canCancel'> = {
           operation: progressContext.operation,
@@ -372,8 +493,18 @@ class VrSrcService {
       }
 
       try {
+        await logger?.info(existingBytes > 0 ? 'Resuming download.' : 'Starting download.', {
+          url,
+          destinationPath,
+          existingBytes,
+          remoteContentLength
+        })
         await new Promise<void>((resolve, reject) => {
-          const curlArgs = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*', '-o', destinationPath]
+          const curlArgs = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
+          if (logger) {
+            curlArgs.push('--verbose')
+          }
+          curlArgs.push('-o', destinationPath)
           if (existingBytes > 0) {
             curlArgs.push('-C', '-')
           }
@@ -447,7 +578,9 @@ class VrSrcService {
           }, 750)
 
           child.stderr.on('data', (chunk) => {
-            stderr += chunk.toString()
+            const text = chunk.toString()
+            stderr += text
+            void this.logCurlOutput(logger, 'download', text)
           })
 
           child.once('error', (error) => {
@@ -465,6 +598,10 @@ class VrSrcService {
               control.child = null
             }
             if (code === 0) {
+              await logger?.info('Download finished successfully.', {
+                url,
+                destinationPath
+              })
               resolve()
               return
             }
@@ -489,6 +626,13 @@ class VrSrcService {
 
         return
       } catch (error) {
+        if (!(error instanceof VrSrcTransferPausedError)) {
+          await logger?.error('Download failed.', {
+            url,
+            destinationPath,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
         if (error instanceof VrSrcTransferPausedError) {
           if (control) {
             await this.waitForTransferResume(control)
@@ -514,10 +658,16 @@ class VrSrcService {
     archivePath: string,
     destinationPath: string,
     password: string | null,
+    logger?: VrSrcLogger,
     options?: {
       clearDestination?: boolean
     }
   ): Promise<void> {
+    await logger?.info('Extracting archive.', {
+      archivePath,
+      destinationPath,
+      clearDestination: options?.clearDestination !== false
+    })
     if (options?.clearDestination !== false) {
       await rm(destinationPath, { recursive: true, force: true })
     }
@@ -531,6 +681,10 @@ class VrSrcService {
 
     await execFileAsync(await this.getSevenZipPath(), args, {
       maxBuffer: 20 * 1024 * 1024
+    })
+    await logger?.info('Archive extraction completed.', {
+      archivePath,
+      destinationPath
     })
   }
 
@@ -679,25 +833,35 @@ class VrSrcService {
     }
   }
 
-  private async resolveCredentials(): Promise<VrSrcCredentials> {
+  private async resolveCredentials(logger?: VrSrcLogger): Promise<VrSrcCredentials> {
     await this.ensureDirectories()
 
     try {
-      const html = await this.fetchText(VR_SRC_TELEGRAM_URL)
+      await logger?.debug('Resolving vrSrc credentials from Telegram.')
+      const html = await this.fetchText(VR_SRC_TELEGRAM_URL, logger)
       const resolved = this.parseServerInfoFromTelegram(html)
       if (resolved) {
         await writeFile(this.getCredentialsPath(), JSON.stringify(resolved, null, 2), 'utf8')
+        await logger?.info('Resolved vrSrc credentials from Telegram.', {
+          baseUriHost: new URL(resolved.baseUri).host
+        })
         return resolved
       }
     } catch {
       // Fall back to cached credentials when Telegram resolution is unavailable.
+      await logger?.warn('Unable to resolve vrSrc credentials from Telegram. Falling back to cached credentials if available.')
     }
 
     const cached = await this.readCachedCredentials()
     if (cached) {
+      await logger?.info('Using cached vrSrc credentials.', {
+        baseUriHost: new URL(cached.baseUri).host,
+        lastResolvedAt: cached.lastResolvedAt
+      })
       return cached
     }
 
+    await logger?.error('vrSrc credentials could not be resolved and no cached credentials were available.')
     throw new Error('Unable to resolve vrSrc credentials from Telegram and no cached credentials are available.')
   }
 
@@ -722,12 +886,16 @@ class VrSrcService {
     return candidate ? candidate : null
   }
 
-  private async buildCatalog(): Promise<VrSrcCatalogResponse> {
+  private async buildCatalog(logger?: VrSrcLogger): Promise<VrSrcCatalogResponse> {
     const rootPath = this.getMetaExtractPath()
     const gameListPath =
       (await this.findFirstMatchingFile(rootPath, ['VRP-GameList.txt', 'GameList.txt'])) ??
       join(rootPath, 'VRP-GameList.txt')
     const thumbnailsPath = join(rootPath, '.meta', 'thumbnails')
+    await logger?.debug('Building vrSrc catalog from extracted metadata.', {
+      gameListPath,
+      thumbnailsPath
+    })
     const raw = await readFile(gameListPath, 'utf8')
     const lines = raw.split('\n').map((line) => line.trim()).filter(Boolean)
 
@@ -737,6 +905,7 @@ class VrSrcService {
 
     const indexes = this.readCatalogHeaderIndexes(lines[0])
     const items: VrSrcCatalogItem[] = []
+    let artworkCount = 0
 
     for (const line of lines.slice(1)) {
       const parts = line.split(';')
@@ -752,6 +921,9 @@ class VrSrcService {
       const sizeMb = Number.parseFloat(sizeMbRaw)
       const artworkPath = join(thumbnailsPath, `${packageName}.jpg`)
       const artworkUrl = (await this.fileExists(artworkPath)) ? this.toLocalAssetUri(artworkPath) : null
+      if (artworkUrl) {
+        artworkCount += 1
+      }
 
       items.push({
         id: packageName,
@@ -777,6 +949,12 @@ class VrSrcService {
     }
 
     await writeFile(this.getCatalogPath(), JSON.stringify(catalog, null, 2), 'utf8')
+    await logger?.info('vrSrc catalog rebuilt successfully.', {
+      itemCount: items.length,
+      artworkCount,
+      missingArtworkCount: items.length - artworkCount,
+      syncedAt: catalog.syncedAt
+    })
     return catalog
   }
 
@@ -824,9 +1002,9 @@ class VrSrcService {
     }
   }
 
-  private async listRemotePayloadFiles(baseUri: string, releaseName: string): Promise<string[]> {
+  private async listRemotePayloadFiles(baseUri: string, releaseName: string, logger?: VrSrcLogger): Promise<string[]> {
     const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
-    const listingHtml = await this.fetchText(`${this.ensureTrailingSlash(baseUri)}${hash}/`)
+    const listingHtml = await this.fetchText(`${this.ensureTrailingSlash(baseUri)}${hash}/`, logger)
 
     return Array.from(listingHtml.matchAll(/href="([^"]+)"/gi))
       .map((match) => match[1])
@@ -903,7 +1081,7 @@ class VrSrcService {
           await this.checkpointTransferControl(control)
           const fileUrl = payloadUrls[index]
           const destinationPath = join(payloadPath, basename(fileName))
-          await this.downloadFile(fileUrl, destinationPath, control, {
+          await this.downloadFile(fileUrl, destinationPath, control, undefined, {
             operation,
             releaseName,
             bytesCompletedBefore,
@@ -926,7 +1104,7 @@ class VrSrcService {
             speedBytesPerSecond: null,
             etaSeconds: null
           })
-          await this.extractArchive(join(payloadPath, basename(archivePart)), payloadPath, decodedPassword, {
+          await this.extractArchive(join(payloadPath, basename(archivePart)), payloadPath, decodedPassword, undefined, {
             clearDestination: false
           })
           await this.checkpointTransferControl(control)
@@ -1023,14 +1201,28 @@ class VrSrcService {
     }
 
     this.syncInFlight = (async () => {
+      const logger = await this.createLogger('sync-catalog')
       try {
+        await logger.info('vrSrc sync started.')
         await this.ensureDirectories()
-        const credentials = await this.resolveCredentials()
+        const credentials = await this.resolveCredentials(logger)
         const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
-        await this.downloadFile(`${credentials.baseUri}meta.7z`, this.getMetaArchivePath(), null)
-        await this.extractArchive(this.getMetaArchivePath(), this.getMetaExtractPath(), decodedPassword)
-        const catalog = await this.buildCatalog()
+        await logger.debug('Resolved vrSrc sync target.', {
+          baseUriHost: new URL(credentials.baseUri).host,
+          credentialsPath: this.getCredentialsPath(),
+          archivePath: this.getMetaArchivePath(),
+          extractPath: this.getMetaExtractPath(),
+          catalogPath: this.getCatalogPath()
+        })
+        await this.downloadFile(`${credentials.baseUri}meta.7z`, this.getMetaArchivePath(), null, logger)
+        await this.extractArchive(this.getMetaArchivePath(), this.getMetaExtractPath(), decodedPassword, logger)
+        const catalog = await this.buildCatalog(logger)
         const status = await this.buildStatus()
+        await logger.info('vrSrc sync completed successfully.', {
+          itemCount: catalog.items.length,
+          lastSyncAt: status.lastSyncAt,
+          logPath: logger.logPath
+        })
 
         return {
           success: true,
@@ -1041,17 +1233,30 @@ class VrSrcService {
           catalog
         }
       } catch (error) {
+        await logger.error('vrSrc sync failed.', error)
         const catalog = await this.readCatalog()
         const status = await this.buildStatus()
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        const fallbackMessage = Boolean(catalog.syncedAt || catalog.items.length)
+          ? `Sync failed and QuestVault is showing cached vrSrc data. See log: ${logger.logPath}`
+          : `Sync failed before any cached vrSrc data was available. See log: ${logger.logPath}`
+        await logger.warn('vrSrc sync is returning cached status to the app.', {
+          usedCachedCatalog: Boolean(catalog.syncedAt || catalog.items.length),
+          cachedItemCount: catalog.items.length,
+          lastSyncAt: catalog.syncedAt
+        })
         return {
           success: false,
           message: 'Unable to sync vrSrc.',
-          details: error instanceof Error ? error.message : String(error),
+          details: `${errorMessage}\n${fallbackMessage}`,
           usedCachedCatalog: Boolean(catalog.syncedAt || catalog.items.length),
           status,
           catalog
         }
       } finally {
+        await logger.info('vrSrc sync finished.', {
+          inFlightPreparations: this.activePayloadPreparations
+        })
         this.syncInFlight = null
       }
     })()
@@ -1160,6 +1365,145 @@ class VrSrcService {
         targetPath: null,
         packageName: null,
         message: `Unable to add ${releaseName} to the Local Library.`,
+        details: error instanceof Error ? error.message : String(error)
+      }
+    } finally {
+      this.clearTransferControl(releaseName)
+    }
+  }
+
+  async downloadToLibraryAndInstall(serial: string, releaseName: string): Promise<VrSrcDownloadAndInstallResponse> {
+    const settings = await settingsService.getSettings()
+    const libraryPath = settings.localLibraryPath?.trim() ?? ''
+
+    if (!libraryPath) {
+      return {
+        success: false,
+        cancelled: false,
+        releaseName,
+        serial,
+        sourcePath: null,
+        targetPath: null,
+        packageName: null,
+        message: 'Select a Local Library path before downloading and installing vrSrc items.',
+        details: null
+      }
+    }
+
+    try {
+      const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library-and-install')
+      const importSourcePath = await this.resolveLibraryImportSource(sourcePath)
+      const targetPath = await this.createUniqueLibraryTarget(libraryPath, releaseName)
+      await cp(importSourcePath, targetPath, { recursive: true, force: false })
+      await settingsService.rescanLocalLibrary()
+
+      const installResponse = await deviceService.installManualPath(serial, targetPath, {
+        onQueued: async () => {
+          const control = this.getTransferControl(releaseName)
+          if (!control) {
+            this.emitTransferProgress({
+              operation: 'download-to-library-and-install',
+              releaseName,
+              phase: 'queued',
+              progress: 96,
+              fileName: null,
+              transferredBytes: 0,
+              totalBytes: null,
+              speedBytesPerSecond: null,
+              etaSeconds: null,
+              canPause: false,
+              canResume: false,
+              canCancel: false
+            })
+            return
+          }
+
+          this.emitControlledTransferProgress(control, {
+            operation: 'download-to-library-and-install',
+            releaseName,
+            phase: 'queued',
+            progress: 96,
+            fileName: null,
+            transferredBytes: 0,
+            totalBytes: null,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        },
+        onStarted: async () => {
+          const control = this.getTransferControl(releaseName)
+          if (!control) {
+            this.emitTransferProgress({
+              operation: 'download-to-library-and-install',
+              releaseName,
+              phase: 'installing',
+              progress: 97,
+              fileName: null,
+              transferredBytes: 0,
+              totalBytes: null,
+              speedBytesPerSecond: null,
+              etaSeconds: null,
+              canPause: false,
+              canResume: false,
+              canCancel: false
+            })
+            return
+          }
+
+          this.emitControlledTransferProgress(control, {
+            operation: 'download-to-library-and-install',
+            releaseName,
+            phase: 'installing',
+            progress: 97,
+            fileName: null,
+            transferredBytes: 0,
+            totalBytes: null,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        }
+      })
+
+      await this.cleanupReleasePayload(sourcePath)
+      const catalogItem = await this.findCatalogItem(releaseName)
+
+      return {
+        success: installResponse.success,
+        cancelled: false,
+        releaseName,
+        serial,
+        sourcePath: null,
+        targetPath,
+        packageName: installResponse.packageName ?? catalogItem?.packageName ?? null,
+        message: installResponse.success
+          ? `${releaseName} was added to the Local Library and installed on the selected headset.`
+          : `${releaseName} was added to the Local Library, but the headset install did not complete.`,
+        details: installResponse.details ?? targetPath
+      }
+    } catch (error) {
+      if (error instanceof VrSrcTransferCancelledError) {
+        return {
+          success: false,
+          cancelled: true,
+          releaseName,
+          serial,
+          sourcePath: null,
+          targetPath: null,
+          packageName: null,
+          message: `${releaseName} download was cancelled.`,
+          details: null
+        }
+      }
+
+      return {
+        success: false,
+        cancelled: false,
+        releaseName,
+        serial,
+        sourcePath: null,
+        targetPath: null,
+        packageName: null,
+        message: `Unable to download and install ${releaseName} from vrSrc.`,
         details: error instanceof Error ? error.message : String(error)
       }
     } finally {

@@ -280,11 +280,83 @@ function formatEtaSeconds(value: number | null | undefined): string | null {
   return `${value}s`
 }
 
+function normalizeVersionIdentity(value: string | null | undefined): string {
+  return (value ?? '').trim().replace(/^v/i, '').toLowerCase()
+}
+
+function tokenizeVersionIdentity(value: string | null | undefined): Array<number | string> {
+  return normalizeVersionIdentity(value)
+    .split(/[^a-z0-9]+/i)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => (/^\d+$/.test(segment) ? Number.parseInt(segment, 10) : segment))
+}
+
+function compareVersionValues(left: string | null | undefined, right: string | null | undefined): number {
+  const leftTokens = tokenizeVersionIdentity(left)
+  const rightTokens = tokenizeVersionIdentity(right)
+
+  if (!leftTokens.length && !rightTokens.length) {
+    return 0
+  }
+
+  if (!leftTokens.length) {
+    return -1
+  }
+
+  if (!rightTokens.length) {
+    return 1
+  }
+
+  const maxLength = Math.max(leftTokens.length, rightTokens.length)
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftToken = leftTokens[index]
+    const rightToken = rightTokens[index]
+
+    if (leftToken === undefined) {
+      return -1
+    }
+
+    if (rightToken === undefined) {
+      return 1
+    }
+
+    if (typeof leftToken === 'number' && typeof rightToken === 'number') {
+      if (leftToken !== rightToken) {
+        return leftToken > rightToken ? 1 : -1
+      }
+      continue
+    }
+
+    const leftValue = String(leftToken)
+    const rightValue = String(rightToken)
+    if (leftValue !== rightValue) {
+      return leftValue.localeCompare(rightValue, undefined, { sensitivity: 'base' })
+    }
+  }
+
+  return 0
+}
+
+function isSignatureMismatchFailure(response: {
+  success: boolean
+  cancelled?: boolean
+  message: string
+  details: string | null
+}): boolean {
+  if (response.success || response.cancelled) {
+    return false
+  }
+
+  const combined = `${response.message}\n${response.details ?? ''}`
+  return /INSTALL_FAILED_UPDATE_INCOMPATIBLE/i.test(combined)
+}
+
 function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   const parts: string[] = []
 
   if (update.phase === 'queued') {
-    return update.operation === 'install-now'
+    return update.operation === 'install-now' || update.operation === 'download-to-library-and-install'
       ? 'Queued behind another headset install...'
       : 'Queued behind other vrSrc downloads...'
   }
@@ -1276,7 +1348,21 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     operation: VrSrcTransferOperation
     title: string
     subtitle: string
-    execute: () => Promise<{ success: boolean; cancelled: boolean; message: string; details: string | null }>
+    execute: () => Promise<{
+      success: boolean
+      cancelled: boolean
+      message: string
+      details: string | null
+      packageName?: string | null
+    }>
+    retryAfterSignatureMismatch?: () => Promise<{
+      success: boolean
+      cancelled: boolean
+      message: string
+      details: string | null
+      packageName?: string | null
+    }>
+    serialForRecovery?: string | null
     onSuccess?: () => Promise<void>
     onFailureText: string
   }) {
@@ -1292,7 +1378,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       id: queueId,
       title: options.title,
       subtitle: options.subtitle,
-      kind: options.operation === 'install-now' ? 'install' : 'download',
+      kind: options.operation === 'install-now' || options.operation === 'download-to-library-and-install' ? 'install' : 'download',
       phase: 'downloading',
       progress: 4,
       details: 'Preparing download...',
@@ -1308,7 +1394,48 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     })
 
     try {
-      const response = await options.execute()
+      let response = await options.execute()
+      if (
+        isSignatureMismatchFailure(response) &&
+        options.serialForRecovery &&
+        response.packageName &&
+        options.retryAfterSignatureMismatch
+      ) {
+        const confirmed = window.confirm(
+          `QuestVault could not update ${response.packageName} because the installed app uses a different signing key.\n\nUninstall the existing app from the selected headset and retry the install?\n\nThis may remove the app's data and saves if they are not backed up first.`
+        )
+
+        if (confirmed) {
+          updateLiveQueueItem(queueId, {
+            phase: 'uninstalling',
+            progress: 52,
+            details: `Installed copy uses a different signature. Removing ${response.packageName} before retrying...`,
+            transferControl: null
+          })
+
+          const uninstallResponse = await window.api.devices.uninstallInstalledApp(options.serialForRecovery, response.packageName)
+          if (!uninstallResponse.success) {
+            updateLiveQueueItem(queueId, {
+              phase: 'failed',
+              progress: 100,
+              details: uninstallResponse.details ?? uninstallResponse.message,
+              transferControl: null
+            })
+            setVrSrcMessage(null)
+            return
+          }
+
+          await refreshInstalledApps(options.serialForRecovery)
+          updateLiveQueueItem(queueId, {
+            phase: 'installing',
+            progress: 58,
+            details: `Removed ${response.packageName}. Retrying install...`,
+            transferControl: null
+          })
+          response = await options.retryAfterSignatureMismatch()
+        }
+      }
+
       updateLiveQueueItem(queueId, {
         phase: response.success ? 'completed' : response.cancelled ? 'cancelled' : 'failed',
         progress: 100,
@@ -1329,11 +1456,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details,
         transferControl: null
       })
-      setVrSrcMessage({
-        text: options.onFailureText,
-        details,
-        tone: 'danger'
-      })
+      setVrSrcMessage(null)
     } finally {
       vrSrcActionBusyReleaseNamesRef.current = vrSrcActionBusyReleaseNamesRef.current.filter(
         (entry) => entry !== options.releaseName
@@ -1410,10 +1533,45 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       title: releaseName,
       subtitle: 'vrSrc Install Now',
       execute: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
+      retryAfterSignatureMismatch: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
+      serialForRecovery: targetDeviceId,
       onSuccess: async () => {
         await refreshInstalledApps(targetDeviceId)
       },
       onFailureText: `Unable to install ${releaseName} from vrSrc.`
+    })
+  }
+
+  async function downloadVrSrcToLibraryAndInstall(releaseName: string) {
+    const targetDeviceId = selectedDeviceId
+    if (!targetDeviceId) {
+      setVrSrcMessage({
+        text: 'Select a ready headset before downloading and installing from vrSrc.',
+        details: null,
+        tone: 'danger'
+      })
+      return
+    }
+
+    setVrSrcMessage(null)
+    await queueVrSrcTransferAction({
+      releaseName,
+      operation: 'download-to-library-and-install',
+      title: releaseName,
+      subtitle: 'vrSrc Download & Install',
+      execute: () => window.api.vrsrc.downloadToLibraryAndInstall(targetDeviceId, releaseName),
+      retryAfterSignatureMismatch: () => window.api.vrsrc.downloadToLibraryAndInstall(targetDeviceId, releaseName),
+      serialForRecovery: targetDeviceId,
+      onSuccess: async () => {
+        const [libraryIndex, backupIndex] = await Promise.all([
+          window.api.settings.getLocalLibraryIndex(),
+          window.api.settings.getBackupStorageIndex(),
+          refreshInstalledApps(targetDeviceId)
+        ])
+        setLocalLibraryIndex(libraryIndex)
+        setBackupStorageIndex(backupIndex)
+      },
+      onFailureText: `Unable to download and install ${releaseName} from vrSrc.`
     })
   }
 
@@ -2041,11 +2199,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           details: `Saved "${response.userName}" as the multiplayer username.`
         })
         setDeviceUserName(response.userName)
-        setGamesMessage({
-          text: 'Multiplayer username updated.',
-          details: null,
-          tone: 'success'
-        })
+        setGamesMessage(null)
         return
       }
 
@@ -2054,11 +2208,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: response.message
       })
-      setGamesMessage({
-        text: 'Unable to update the multiplayer username.',
-        details: response.message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error.'
       updateLiveQueueItem(queueId, {
@@ -2066,11 +2216,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: message
       })
-      setGamesMessage({
-        text: 'Unable to update the multiplayer username.',
-        details: message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } finally {
       setDeviceUserNameBusy(false)
     }
@@ -2436,11 +2582,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details: response.message
       })
       setSettingsMessage(response.message)
-      setGamesMessage({
-        text: response.message,
-        details: null,
-        tone: response.updated ? 'success' : 'danger'
-      })
+      setGamesMessage(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save the manual store ID.'
       setSettingsMessage(message)
@@ -2449,11 +2591,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: message
       })
-      setGamesMessage({
-        text: 'Unable to save the manual store ID.',
-        details: message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } finally {
       setSettingsBusy(false)
     }
@@ -2490,11 +2628,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details: response.message
       })
       setSettingsMessage(response.message)
-      setGamesMessage({
-        text: response.message,
-        details: null,
-        tone: response.updated ? 'success' : 'danger'
-      })
+      setGamesMessage(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save the manual metadata.'
       setSettingsMessage(message)
@@ -2503,11 +2637,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: message
       })
-      setGamesMessage({
-        text: 'Unable to save the manual metadata.',
-        details: message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } finally {
       setSettingsBusy(false)
     }
@@ -2604,11 +2734,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: response.message
       })
-      setGamesMessage({
-        text: response.message,
-        details: null,
-        tone: response.moved ? 'success' : 'danger'
-      })
+      setGamesMessage(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to move the selected backup item into the library.'
       updateLiveQueueItem(queueId, {
@@ -2616,11 +2742,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: message
       })
-      setGamesMessage({
-        text: 'Unable to move the selected backup item into the library.',
-        details: message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } finally {
       setBackupStorageActionBusyItemId(null)
     }
@@ -2648,11 +2770,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: response.message
       })
-      setGamesMessage({
-        text: response.message,
-        details: null,
-        tone: response.deleted ? 'success' : 'danger'
-      })
+      setGamesMessage(null)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to delete the selected backup item.'
       updateLiveQueueItem(queueId, {
@@ -2660,11 +2778,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: message
       })
-      setGamesMessage({
-        text: 'Unable to delete the selected backup item.',
-        details: message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } finally {
       setBackupStorageActionBusyItemId(null)
     }
@@ -2702,12 +2816,27 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       installedAppsSnapshot?.serial === selectedDeviceId
         ? new Set((installedAppsSnapshot.apps ?? []).map((app) => app.packageId.toLowerCase()))
         : null
+    const installedVersionsByPackageId =
+      installedAppsSnapshot?.serial === selectedDeviceId
+        ? new Map((installedAppsSnapshot.apps ?? []).map((app) => [app.packageId.toLowerCase(), app.version ?? null]))
+        : null
 
-    if (
+    const installedVersion =
+      indexedItem && installedVersionsByPackageId
+        ? indexedItem.packageIds
+            .map((packageId) => installedVersionsByPackageId.get(packageId.toLowerCase()) ?? null)
+            .find((value): value is string => Boolean(value)) ?? null
+        : null
+    const hasInstalledMatch =
       indexedItem &&
       installedPackageIds &&
       indexedItem.packageIds.some((packageId) => installedPackageIds.has(packageId.toLowerCase()))
-    ) {
+    const hasLocalUpgrade =
+      indexedItem &&
+      hasInstalledMatch &&
+      compareVersionValues(indexedItem.libraryVersion ?? indexedItem.libraryVersionCode, installedVersion) > 0
+
+    if (indexedItem && hasInstalledMatch && !hasLocalUpgrade) {
       setGamesMessage({
         text: 'This payload already appears in the installed inventory for the selected headset.',
         details: null,
@@ -2740,7 +2869,41 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     })
 
     try {
-      const response = await window.api.devices.installLocalLibraryItem(selectedDeviceId, itemId)
+      let response = await window.api.devices.installLocalLibraryItem(selectedDeviceId, itemId)
+      const recoveryPackageName = response.packageName ?? indexedItem?.packageIds[0] ?? null
+      if (isSignatureMismatchFailure(response) && recoveryPackageName) {
+        const confirmed = window.confirm(
+          `QuestVault could not update ${recoveryPackageName} because the installed app uses a different signing key.\n\nUninstall the existing app from the selected headset and retry the install?\n\nThis may remove the app's data and saves if they are not backed up first.`
+        )
+
+        if (confirmed) {
+          updateLiveQueueItem(queueId, {
+            phase: 'uninstalling',
+            progress: 52,
+            details: `Installed copy uses a different signature. Removing ${recoveryPackageName} before retrying...`
+          })
+
+          const uninstallResponse = await window.api.devices.uninstallInstalledApp(selectedDeviceId, recoveryPackageName)
+          if (!uninstallResponse.success) {
+            updateLiveQueueItem(queueId, {
+              phase: 'failed',
+              progress: 100,
+              details: uninstallResponse.details ?? uninstallResponse.message
+            })
+            setGamesMessage(null)
+            return
+          }
+
+          await refreshInstalledApps(selectedDeviceId)
+          updateLiveQueueItem(queueId, {
+            phase: 'installing',
+            progress: 58,
+            details: `Removed ${recoveryPackageName}. Retrying install...`
+          })
+          response = await window.api.devices.installLocalLibraryItem(selectedDeviceId, itemId)
+        }
+      }
+
       updateLiveQueueItem(queueId, {
         phase: response.success ? 'completed' : 'failed',
         progress: 100,
@@ -2748,11 +2911,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       })
 
       if (!response.success) {
-        setGamesMessage({
-          text: response.message,
-          details: response.details,
-          tone: 'danger'
-        })
+        setGamesMessage(null)
       }
 
       if (response.success) {
@@ -2772,11 +2931,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         progress: 100,
         details: message
       })
-      setGamesMessage({
-        text: 'Unable to install the selected local payload.',
-        details: message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } finally {
       gamesInstallBusyIdsRef.current = gamesInstallBusyIdsRef.current.filter((entry) => entry !== itemId)
       setGamesInstallBusyIds((current) => current.filter((entry) => entry !== itemId))
@@ -2821,7 +2976,39 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         artworkUrl: null
       })
 
-      const response = await window.api.devices.installManualPath(selectedDeviceId, sourcePath)
+      let response = await window.api.devices.installManualPath(selectedDeviceId, sourcePath)
+      if (isSignatureMismatchFailure(response) && response.packageName) {
+        const confirmed = window.confirm(
+          `QuestVault could not update ${response.packageName} because the installed app uses a different signing key.\n\nUninstall the existing app from the selected headset and retry the install?\n\nThis may remove the app's data and saves if they are not backed up first.`
+        )
+
+        if (confirmed) {
+          updateLiveQueueItem(queueId, {
+            phase: 'uninstalling',
+            progress: 52,
+            details: `Installed copy uses a different signature. Removing ${response.packageName} before retrying...`
+          })
+
+          const uninstallResponse = await window.api.devices.uninstallInstalledApp(selectedDeviceId, response.packageName)
+          if (!uninstallResponse.success) {
+            updateLiveQueueItem(queueId, {
+              phase: 'failed',
+              progress: 100,
+              details: uninstallResponse.details ?? uninstallResponse.message
+            })
+            setGamesMessage(null)
+            return
+          }
+
+          await refreshInstalledApps(selectedDeviceId)
+          updateLiveQueueItem(queueId, {
+            phase: 'installing',
+            progress: 58,
+            details: `Removed ${response.packageName}. Retrying install...`
+          })
+          response = await window.api.devices.installManualPath(selectedDeviceId, sourcePath)
+        }
+      }
 
       updateLiveQueueItem(queueId, {
         phase: response.success ? 'completed' : 'failed',
@@ -2830,31 +3017,16 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       })
 
       if (!response.success) {
-        setGamesMessage({
-          text: response.message,
-          details: response.details,
-          tone: 'danger'
-        })
+        setGamesMessage(null)
         return
       }
 
       await refreshInstalledApps(selectedDeviceId)
-      setGamesMessage({
-        text:
-          kind === 'apk'
-            ? `Installed APK file "${sourceName}".`
-            : `Installed folder payload "${sourceName}".`,
-        details: response.message,
-        tone: 'success'
-      })
+      setGamesMessage(null)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unable to complete the manual install.'
-      setGamesMessage({
-        text: 'Unable to complete the manual install.',
-        details: message,
-        tone: 'danger'
-      })
+      setGamesMessage(null)
     } finally {
       setManualInstallBusyKind(null)
     }
@@ -3427,6 +3599,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onToggleVrSrcPanel={() => setIsVrSrcPanelOpen((current) => !current)}
       onSyncVrSrcCatalog={syncVrSrcCatalog}
       onDownloadVrSrcToLibrary={downloadVrSrcToLibrary}
+      onDownloadVrSrcToLibraryAndInstall={downloadVrSrcToLibraryAndInstall}
       onInstallVrSrcNow={installVrSrcNow}
       onRefreshSaveBackups={refreshSaveBackups}
       onScanSavePackages={async () => {

@@ -136,6 +136,7 @@ interface WireframeShellProps {
   onToggleVrSrcPanel: () => void
   onSyncVrSrcCatalog: () => Promise<void>
   onDownloadVrSrcToLibrary: (releaseName: string) => Promise<void>
+  onDownloadVrSrcToLibraryAndInstall: (releaseName: string) => Promise<void>
   onInstallVrSrcNow: (releaseName: string) => Promise<void>
   onRefreshSaveBackups: () => Promise<void>
   onScanSavePackages: () => Promise<void>
@@ -423,7 +424,7 @@ function formatGameActionLabel(action: string): string {
   }
 
   if (action === 'Update') {
-    return 'Update Now'
+    return 'Install Local Upgrade'
   }
 
   return action
@@ -1620,6 +1621,7 @@ function GamesView(props: {
   onToggleVrSrcPanel: () => void
   onSyncVrSrcCatalog: () => Promise<void>
   onDownloadVrSrcToLibrary: (releaseName: string) => Promise<void>
+  onDownloadVrSrcToLibraryAndInstall: (releaseName: string) => Promise<void>
   onInstallVrSrcNow: (releaseName: string) => Promise<void>
   onSaveDeviceUserName: (userName: string) => Promise<void>
   onUninstallInstalledApp: (packageId: string) => Promise<void>
@@ -1662,6 +1664,7 @@ function GamesView(props: {
     onToggleVrSrcPanel,
     onSyncVrSrcCatalog,
     onDownloadVrSrcToLibrary,
+    onDownloadVrSrcToLibraryAndInstall,
     onInstallVrSrcNow,
     onSaveDeviceUserName,
     onUninstallInstalledApp,
@@ -2056,6 +2059,11 @@ function GamesView(props: {
   const selectedVrSrcMatchingLibraryItem = selectedVrSrcItem ? getMatchingVrSrcLibraryItem(selectedVrSrcItem) : null
   const selectedVrSrcHighestLibraryVersion =
     selectedVrSrcMatchingLibraryItem?.libraryVersion ?? selectedVrSrcMatchingLibraryItem?.libraryVersionCode ?? null
+  const selectedVrSrcLibraryCoversRemote = Boolean(
+    selectedVrSrcItem &&
+      selectedVrSrcMatchingLibraryItem &&
+      compareVersionValues(selectedVrSrcMatchingLibraryItem.libraryVersionCode, selectedVrSrcItem.versionCode) >= 0
+  )
   const selectedVrSrcDisplayRemoteVersion = selectedVrSrcItem
     ? selectedVrSrcItem.versionName?.trim()
       ? `v${selectedVrSrcItem.versionName.trim()}`
@@ -3378,24 +3386,39 @@ function GamesView(props: {
             <div className="stack-sm">
               <button
                 className="action-pill"
-                disabled={vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName)}
+                disabled={vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName) || selectedVrSrcLibraryCoversRemote}
                 onClick={() => void onDownloadVrSrcToLibrary(selectedVrSrcItem.releaseName)}
                 type="button"
               >
-                {vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName) ? 'Working…' : 'Add to Library'}
+                {vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName)
+                  ? 'Working…'
+                  : selectedVrSrcStatus?.isUpdate
+                    ? 'Update Library'
+                    : selectedVrSrcLibraryCoversRemote
+                      ? 'Already in Library'
+                      : 'Download Only'}
               </button>
               <button
                 className="action-pill"
                 disabled={vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName) || !selectedDeviceId}
-                onClick={() => void onInstallVrSrcNow(selectedVrSrcItem.releaseName)}
+                onClick={() => {
+                  if (selectedVrSrcLibraryCoversRemote && selectedVrSrcMatchingLibraryItem?.id) {
+                    void onInstallLocalLibraryItem(selectedVrSrcMatchingLibraryItem.id)
+                    return
+                  }
+
+                  void onDownloadVrSrcToLibraryAndInstall(selectedVrSrcItem.releaseName)
+                }}
                 title={
                   selectedDeviceId
-                    ? 'Download this vrSrc payload and install it to the selected headset'
-                    : 'Select a headset first to install directly from vrSrc'
+                    ? selectedVrSrcLibraryCoversRemote
+                      ? 'Install the strongest matching Local Library version to the selected headset'
+                      : 'Download this vrSrc payload into the Local Library, then install it to the selected headset'
+                    : 'Select a headset first to install from vrSrc or the Local Library'
                 }
                 type="button"
               >
-                Install Now
+                {selectedVrSrcLibraryCoversRemote ? 'Install Local Upgrade' : 'Download & Install'}
               </button>
             </div>
           </>
@@ -3833,7 +3856,7 @@ function GamesView(props: {
                         />
                       </svg>
                     </span>
-                    {selectedGameInstallBusy ? 'Installing…' : selectedGame.hasLibraryUpdate ? 'Update Now' : 'Install Now'}
+                    {selectedGameInstallBusy ? 'Installing…' : selectedGame.hasLibraryUpdate ? 'Install Local Upgrade' : 'Install Now'}
                   </button>
                 ) : null}
                 {selectedGame.isInstalled && selectedGamePrimaryPackageId ? (
@@ -6097,6 +6120,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onToggleVrSrcPanel,
     onSyncVrSrcCatalog,
     onDownloadVrSrcToLibrary,
+    onDownloadVrSrcToLibraryAndInstall,
     onInstallVrSrcNow,
     onRefreshSaveBackups,
     onScanSavePackages,
@@ -6395,6 +6419,7 @@ export function WireframeShell(props: WireframeShellProps) {
               onToggleVrSrcPanel={onToggleVrSrcPanel}
               onSyncVrSrcCatalog={onSyncVrSrcCatalog}
               onDownloadVrSrcToLibrary={onDownloadVrSrcToLibrary}
+              onDownloadVrSrcToLibraryAndInstall={onDownloadVrSrcToLibraryAndInstall}
               onInstallVrSrcNow={onInstallVrSrcNow}
               onSaveDeviceUserName={onSaveDeviceUserName}
               onUninstallInstalledApp={onUninstallInstalledApp}

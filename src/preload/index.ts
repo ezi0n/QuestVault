@@ -39,6 +39,7 @@ import type {
   SettingsSelectPathResponse,
   VrSrcCatalogResponse,
   VrSrcClearCacheResponse,
+  VrSrcDownloadAndInstallResponse,
   VrSrcDownloadToLibraryResponse,
   VrSrcItemDetailsResponse,
   VrSrcInstallNowResponse,
@@ -51,7 +52,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.5.3',
+  version: '0.5.4',
   ping: (): string => 'pong',
   dependencies: {
     getStatus: (): Promise<DependencyStatusResponse> => ipcRenderer.invoke('dependencies:get-status'),
@@ -139,6 +140,8 @@ const api = {
     clearCache: (): Promise<VrSrcClearCacheResponse> => ipcRenderer.invoke('vrsrc:clear-cache'),
     downloadToLibrary: (releaseName: string): Promise<VrSrcDownloadToLibraryResponse> =>
       ipcRenderer.invoke('vrsrc:download-to-library', releaseName),
+    downloadToLibraryAndInstall: (serial: string, releaseName: string): Promise<VrSrcDownloadAndInstallResponse> =>
+      ipcRenderer.invoke('vrsrc:download-to-library-and-install', serial, releaseName),
     installNow: (serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> =>
       ipcRenderer.invoke('vrsrc:install-now', serial, releaseName),
     pauseTransfer: (releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> =>

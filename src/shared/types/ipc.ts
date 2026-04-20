@@ -464,7 +464,19 @@ export interface VrSrcInstallNowResponse {
   details: string | null
 }
 
-export type VrSrcTransferOperation = 'download-to-library' | 'install-now'
+export interface VrSrcDownloadAndInstallResponse {
+  success: boolean
+  cancelled: boolean
+  releaseName: string
+  serial: string
+  sourcePath: string | null
+  targetPath: string | null
+  packageName: string | null
+  message: string
+  details: string | null
+}
+
+export type VrSrcTransferOperation = 'download-to-library' | 'download-to-library-and-install' | 'install-now'
 export type VrSrcTransferPhase = 'queued' | 'paused' | 'cancelled' | 'preparing' | 'downloading' | 'extracting' | 'installing'
 
 export interface VrSrcTransferProgressUpdate {

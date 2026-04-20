@@ -1,5 +1,7 @@
 # User Manual
 
+Current documented application version: `0.5.4`
+
 ## Overview
 
 QuestVault helps you manage Quest content across five main areas:

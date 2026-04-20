@@ -307,6 +307,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('vrsrc:download-to-library', async (_event, releaseName: string) =>
     vrSrcService.downloadToLibrary(releaseName)
   )
+  ipcMain.handle('vrsrc:download-to-library-and-install', async (_event, serial: string, releaseName: string) =>
+    vrSrcService.downloadToLibraryAndInstall(serial, releaseName)
+  )
   ipcMain.handle('vrsrc:install-now', async (_event, serial: string, releaseName: string) =>
     vrSrcService.installNow(serial, releaseName)
   )

@@ -108,6 +108,7 @@ interface ElectronApi {
     syncCatalog: () => Promise<VrSrcSyncResponse>
     clearCache: () => Promise<VrSrcClearCacheResponse>
     downloadToLibrary: (releaseName: string) => Promise<VrSrcDownloadToLibraryResponse>
+    downloadToLibraryAndInstall: (serial: string, releaseName: string) => Promise<VrSrcDownloadAndInstallResponse>
     installNow: (serial: string, releaseName: string) => Promise<VrSrcInstallNowResponse>
     pauseTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
     resumeTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
