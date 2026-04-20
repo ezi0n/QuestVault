@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.5.6`
+Current documented application version: `0.5.7`
 
 ## Runtime Shape
 
@@ -131,6 +131,8 @@ QuestVault now exposes several support popups/drawers instead of forcing everyth
 - `Orphaned OBB / Data`
 - item detail drawers
 - Live queue drawer
+
+Installed Inventory now uses the same portaled right-side drawer layer as the other content views so its details surface overlays the workspace consistently instead of rendering inside the inventory panel tree.
 
 This keeps maintenance tools accessible without permanently occupying the main workspace layout.
 

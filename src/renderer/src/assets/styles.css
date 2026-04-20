@@ -1804,11 +1804,24 @@ input {
 }
 
 .inventory-row-card {
-  cursor: default;
+  cursor: pointer;
   padding: 12px 14px;
   gap: 10px;
   min-height: 84px;
   animation: none;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.inventory-row-card:hover,
+.inventory-row-card:focus-within,
+.inventory-row-card.active {
+  border-color: rgba(118, 240, 224, 0.36);
+  box-shadow:
+    0 0 0 1px rgba(118, 240, 224, 0.12),
+    0 0 18px rgba(88, 212, 197, 0.08);
 }
 
 .inventory-row-title {
@@ -1936,6 +1949,20 @@ input {
   border: 1px solid var(--panel-line);
   border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.inventory-gallery-card:hover,
+.inventory-gallery-card:focus-within,
+.inventory-gallery-card.active {
+  border-color: rgba(118, 240, 224, 0.36);
+  box-shadow:
+    0 0 0 1px rgba(118, 240, 224, 0.12),
+    0 0 18px rgba(88, 212, 197, 0.08);
 }
 
 .inventory-gallery-hero-shell {
@@ -2158,6 +2185,18 @@ input {
 .inventory-gallery-action-pill.action-pill-danger:hover:not(:disabled) {
   background: #7e3d41;
   border-color: rgba(199, 105, 105, 0.98);
+}
+
+.inventory-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.inventory-drawer-actions .action-pill {
+  min-width: 132px;
+  justify-content: center;
 }
 
 .inventory-gallery-version {

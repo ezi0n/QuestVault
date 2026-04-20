@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.5.6`
+Current documented application version: `0.5.7`
 
 ## Overview
 
@@ -80,6 +80,7 @@ Use `Installed Inventory` to review what is currently on the headset.
 You can:
 
 - browse installed apps in grid or list mode
+- open an installed-app detail drawer from either layout
 - back up installed APKs
 - uninstall installed apps
 - review summary metrics for:

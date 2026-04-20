@@ -14,6 +14,7 @@
 
 - Headset-installed app browser with grid/list views.
 - Summary row for user-installed apps, system apps, total storage, storage free, and orphaned data.
+- Right-side installed-app detail drawer from both grid and list selections.
 - Installed item actions for backup and uninstall.
 
 ### Game Saves
@@ -41,6 +42,7 @@
 ## Cross-Cutting UX Features
 
 - Shared Live queue for scans, installs, downloads, dependency setup, backups, deletes, and failures.
+- Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
 - Shared close-pill language across support dialogs and drawers.
 - Support popups for maintenance tasks instead of large always-inline sections.
@@ -71,7 +73,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.5.6`
+Current documented release line: `0.5.7`
 
 ## Product Position
 

@@ -4279,6 +4279,7 @@ function InventoryView(props: {
     onBackupInstalledApp
   } = props
   const [sortMode, setSortMode] = useState<'name' | 'size'>('name')
+  const [selectedInventoryPackageId, setSelectedInventoryPackageId] = useState<string | null>(null)
   const adbReady = runtimeStatus === 'ready'
   const showAppsBanner = Boolean(deviceAppsMessage && deviceAppsMessage !== runtimeMessage)
   const activeLeftoverResponse =
@@ -4309,6 +4310,31 @@ function InventoryView(props: {
 
       return (left.label ?? left.inferredLabel).localeCompare(right.label ?? right.inferredLabel)
     })
+  const selectedInventoryApp =
+    selectedInventoryPackageId !== null
+      ? visibleApps.find((app) => app.packageId === selectedInventoryPackageId) ?? null
+      : null
+  const selectedInventorySummary = selectedInventoryApp
+    ? resolveInstalledPackageSummary(
+        selectedInventoryApp.packageId,
+        packageSummaryByPackageId,
+        installedMetaStoreMatchesByPackageId
+      )
+    : null
+  const selectedInventoryArtworkUri = resolveMetaStoreArtworkUri(selectedInventorySummary)
+  const selectedInventoryDisplayLabel =
+    selectedInventoryApp?.label ?? selectedInventoryApp?.inferredLabel ?? 'Installed app'
+
+  useEffect(() => {
+    if (!selectedInventoryPackageId) {
+      return
+    }
+
+    if (!selectedDeviceId || !visibleApps.some((app) => app.packageId === selectedInventoryPackageId)) {
+      setSelectedInventoryPackageId(null)
+    }
+  }, [selectedDeviceId, selectedInventoryPackageId, visibleApps])
+
   const drawerPortalTarget = typeof document !== 'undefined' ? document.body : null
   const inventoryResultsViewportHeight = 84 * 5 + 8 * 4
 
@@ -4435,7 +4461,15 @@ function InventoryView(props: {
                   const displayLabel = app.label ?? app.inferredLabel
 
                   return (
-                    <article className="inventory-gallery-card" key={app.packageId}>
+                    <article
+                      className={
+                        selectedInventoryPackageId === app.packageId
+                          ? 'inventory-gallery-card active'
+                          : 'inventory-gallery-card'
+                      }
+                      key={app.packageId}
+                      onClick={() => setSelectedInventoryPackageId(app.packageId)}
+                    >
                       <div className="inventory-gallery-hero-shell">
                         <div className="game-gallery-title-banner">
                           <strong>{displayLabel}</strong>
@@ -4462,7 +4496,10 @@ function InventoryView(props: {
                                 <button
                                   className="action-pill action-pill-ghost inventory-gallery-action-pill"
                                   disabled={deviceAppsBusy}
-                                  onClick={() => void onBackupInstalledApp(app.packageId)}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    void onBackupInstalledApp(app.packageId)
+                                  }}
                                   title="Back up this installed app to the configured local backup folder."
                                   type="button"
                                 >
@@ -4471,7 +4508,10 @@ function InventoryView(props: {
                                 <button
                                   className="action-pill action-pill-danger inventory-gallery-action-pill"
                                   disabled={deviceAppsBusy}
-                                  onClick={() => void onUninstallInstalledApp(app.packageId)}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    void onUninstallInstalledApp(app.packageId)
+                                  }}
                                   title="Uninstall this app from the selected headset."
                                   type="button"
                                 >
@@ -4509,7 +4549,15 @@ function InventoryView(props: {
                     const displayLabel = app.label ?? app.inferredLabel
 
                     return (
-                    <article className="table-row-card installed-app-list-grid inventory-row-card" key={app.packageId}>
+                    <article
+                      className={
+                        selectedInventoryPackageId === app.packageId
+                          ? 'table-row-card installed-app-list-grid inventory-row-card active'
+                          : 'table-row-card installed-app-list-grid inventory-row-card'
+                      }
+                      key={app.packageId}
+                      onClick={() => setSelectedInventoryPackageId(app.packageId)}
+                    >
                       <div className="game-row-primary">
                         {artworkUri ? (
                           <div className="game-thumb">
@@ -4544,7 +4592,10 @@ function InventoryView(props: {
                               <button
                                 className="status-pill status-pill-button"
                                 disabled={deviceAppsBusy}
-                                onClick={() => void onBackupInstalledApp(app.packageId)}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onBackupInstalledApp(app.packageId)
+                                }}
                                 title="Back up this installed app to the configured local backup folder."
                                 type="button"
                               >
@@ -4565,7 +4616,10 @@ function InventoryView(props: {
                               <button
                                 className="status-pill status-danger status-pill-button status-pill-button-danger"
                                 disabled={deviceAppsBusy}
-                                onClick={() => void onUninstallInstalledApp(app.packageId)}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onUninstallInstalledApp(app.packageId)
+                                }}
                                 title="Uninstall this app from the selected headset."
                                 type="button"
                               >
@@ -4605,6 +4659,155 @@ function InventoryView(props: {
         )}
       </section>
       </div>
+      {drawerPortalTarget
+        ? createPortal(
+            <>
+              <div
+                className={selectedInventoryApp ? 'games-drawer-backdrop visible' : 'games-drawer-backdrop'}
+                onClick={() => setSelectedInventoryPackageId(null)}
+              />
+              <aside className={selectedInventoryApp ? 'surface-panel detail-panel games-drawer open inventory-drawer' : 'surface-panel detail-panel games-drawer inventory-drawer'}>
+                <div className="games-drawer-header">
+                  <p className="eyebrow">Installed App</p>
+                  <button className="close-pill" onClick={() => setSelectedInventoryPackageId(null)} type="button">
+                    Close
+                  </button>
+                </div>
+                {selectedInventoryApp ? (
+                  <>
+                    <div className="games-drawer-artwork-stack">
+                      <div className="games-drawer-hero">
+                        {selectedInventoryArtworkUri ? (
+                          <img alt="" className="games-drawer-hero-image" src={selectedInventoryArtworkUri} />
+                        ) : (
+                          renderFallbackArtworkSurface(
+                            selectedInventoryDisplayLabel,
+                            selectedInventoryApp.packageId,
+                            'hero',
+                            'games-drawer-image-placeholder fallback-art-surface'
+                          )
+                        )}
+                      </div>
+                      <div className="games-drawer-title-row">
+                        <div className="games-drawer-art">
+                          {selectedInventoryArtworkUri ? (
+                            <img alt="" className="games-drawer-art-image" src={selectedInventoryArtworkUri} />
+                          ) : (
+                            renderFallbackArtworkSurface(
+                              selectedInventoryDisplayLabel,
+                              selectedInventoryApp.packageId,
+                              'cover',
+                              'games-drawer-image-placeholder compact fallback-art-surface'
+                            )
+                          )}
+                        </div>
+                        <div className="games-drawer-title-block">
+                          <h3>{selectedInventoryDisplayLabel}</h3>
+                          <p>
+                            {selectedInventorySummary?.publisherName ??
+                              selectedInventorySummary?.subtitle ??
+                              selectedInventoryApp.packageId}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="games-drawer-facts">
+                      <div className="signal-chip games-drawer-fact-wide">
+                        <span>Package</span>
+                        <strong>{selectedInventoryApp.packageId}</strong>
+                      </div>
+                      <div className={selectedInventoryApp.version ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
+                        <span>Installed Version</span>
+                        <strong>{selectedInventoryApp.version ?? 'Unavailable'}</strong>
+                      </div>
+                      {selectedInventorySummary?.version ? (
+                        <div className="signal-chip signal-chip-latest">
+                          <span>Store Version</span>
+                          <strong>{selectedInventorySummary.version}</strong>
+                        </div>
+                      ) : null}
+                      <div className="signal-chip">
+                        <span>Footprint</span>
+                        <strong>{formatBytes(selectedInventoryApp.totalFootprintBytes)}</strong>
+                      </div>
+                      <div className="signal-chip signal-chip-ready games-drawer-fact-wide">
+                        <span>Headset Status</span>
+                        <strong>Installed on headset</strong>
+                      </div>
+                      {selectedInventorySummary?.category ? (
+                        <div className="signal-chip games-drawer-fact-wide">
+                          <span>Category</span>
+                          <strong>{selectedInventorySummary.category}</strong>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="games-drawer-meta-stack">
+                      {selectedInventorySummary?.releaseDateLabel || selectedInventorySummary?.version ? (
+                        <div className="games-drawer-meta">
+                          {selectedInventorySummary.releaseDateLabel ? (
+                            <span className="meta-chip">{selectedInventorySummary.releaseDateLabel}</span>
+                          ) : null}
+                          {selectedInventorySummary.version ? (
+                            <span className="meta-chip">v{selectedInventorySummary.version}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {selectedInventorySummary?.genreNames.length ? (
+                        <div className="games-drawer-meta">
+                          {selectedInventorySummary.genreNames.map((genre) => (
+                            <span className="meta-chip" key={genre}>
+                              {genre}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="games-drawer-copy-stack">
+                      <p className="section-copy compact">
+                        {selectedInventorySummary
+                          ? `Review this installed headset app, compare its currently installed version against the matched store metadata, then back it up or uninstall it if needed.`
+                          : 'This installed app does not currently have a matched store metadata card, but you can still back it up or uninstall it from here.'}
+                      </p>
+                    </div>
+
+                    <div className="inventory-drawer-actions">
+                      {inventoryActionBusyPackageId === selectedInventoryApp.packageId ? (
+                        <span className="status-pill status-pending inventory-operation-pill" title="Operation in progress. Open Live Queue to follow the detailed status.">
+                          Operation In Progress
+                        </span>
+                      ) : (
+                        <>
+                          <button
+                            className="action-pill action-pill-ghost"
+                            disabled={deviceAppsBusy}
+                            onClick={() => void onBackupInstalledApp(selectedInventoryApp.packageId)}
+                            title="Back up this installed app to the configured local backup folder."
+                            type="button"
+                          >
+                            Backup
+                          </button>
+                          <button
+                            className="action-pill action-pill-danger"
+                            disabled={deviceAppsBusy}
+                            onClick={() => void onUninstallInstalledApp(selectedInventoryApp.packageId)}
+                            title="Uninstall this app from the selected headset."
+                            type="button"
+                          >
+                            Uninstall
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+              </aside>
+            </>,
+            drawerPortalTarget
+          )
+        : null}
     </section>
   )
 }
