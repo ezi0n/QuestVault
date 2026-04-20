@@ -5,6 +5,7 @@ import type {
   BackupStorageMoveItemResponse,
   DependencyBootstrapProgressUpdate,
   DependencyStatusResponse,
+  ReleaseCheckResponse,
   DeviceInstalledAppBackupResponse,
   DeviceInstalledAppActionResponse,
   DeviceAppsResponse,
@@ -52,8 +53,11 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.5.4',
+  version: '0.5.6',
   ping: (): string => 'pong',
+  app: {
+    checkForUpdates: (): Promise<ReleaseCheckResponse> => ipcRenderer.invoke('app:check-for-updates')
+  },
   dependencies: {
     getStatus: (): Promise<DependencyStatusResponse> => ipcRenderer.invoke('dependencies:get-status'),
     ensureReady: (): Promise<DependencyStatusResponse> => ipcRenderer.invoke('dependencies:ensure-ready'),

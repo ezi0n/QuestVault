@@ -1362,6 +1362,10 @@ function QueueRail(props: {
   const { items, isOpen, onClose, onPauseVrSrcTransfer, onResumeVrSrcTransfer, onCancelVrSrcTransfer } = props
 
   function formatQueueKind(kind: LiveQueueItem['kind']): string {
+    if (kind === 'update') {
+      return 'Update'
+    }
+
     if (kind === 'restore') {
       return 'Restore'
     }
@@ -1442,6 +1446,14 @@ function QueueRail(props: {
   }
 
   function getQueueKindPillClass(item: LiveQueueItem): string {
+    if (item.kind === 'update') {
+      if (item.phase === 'failed') {
+        return 'queue-kind-pill queue-kind-pill-danger'
+      }
+
+      return item.phase === 'completed' ? 'queue-kind-pill queue-kind-pill-ready' : 'queue-kind-pill queue-kind-pill-warm'
+    }
+
     if (item.kind === 'restore') {
       if (item.phase === 'completed') {
         return 'queue-kind-pill queue-kind-pill-ready'
@@ -1540,6 +1552,18 @@ function QueueRail(props: {
                 {formatQueuePhase(item.phase)}
               </span>
               {item.details ? <p className="queue-card-details">{item.details}</p> : null}
+              {item.actionLabel && item.actionUrl ? (
+                <div className="queue-card-actions">
+                  <a
+                    className="queue-card-action"
+                    href={item.actionUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    {item.actionLabel}
+                  </a>
+                </div>
+              ) : null}
               {item.transferControl?.kind === 'vrsrc' ? (
                 <div className="queue-card-actions">
                   {item.transferControl.canPause ? (

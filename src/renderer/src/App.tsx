@@ -15,6 +15,7 @@ import type {
   MetaStoreGameDetails,
   MetaStoreGameSummary,
   PrimaryTab,
+  ReleaseCheckResponse,
   SavePackagesScanResponse,
   SettingsDisplayModeKey,
   SettingsIndexedPathUpdate,
@@ -495,6 +496,7 @@ function App() {
   const metaStoreMatchesByItemIdRef = useRef<Record<string, MetaStoreGameSummary>>({})
   const dependencyQueueIdsRef = useRef(new Set<string>())
   const hasAppliedStartupTabRef = useRef(false)
+  const hasCheckedForUpdatesRef = useRef(false)
   const vrSrcInitialSyncAttemptedRef = useRef(false)
   const gamesInstallBusyIdsRef = useRef<string[]>([])
   const vrSrcActionBusyReleaseNamesRef = useRef<string[]>([])
@@ -541,7 +543,13 @@ function App() {
       transferControl?: LiveQueueItem['transferControl']
     }
   ): string {
-    const item: LiveQueueItem = { ...input, transferControl: input.transferControl ?? null, updatedAt: new Date().toISOString() }
+    const item: LiveQueueItem = {
+      ...input,
+      transferControl: input.transferControl ?? null,
+      actionLabel: input.actionLabel ?? null,
+      actionUrl: input.actionUrl ?? null,
+      updatedAt: new Date().toISOString()
+    }
     setLiveQueueItems((current) => {
       const withoutExisting = current.filter((entry) => entry.id !== item.id)
       return [item, ...withoutExisting].slice(0, 12)
@@ -820,6 +828,49 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
   useEffect(() => {
     void ensureManagedDependencies()
+  }, [])
+
+  useEffect(() => {
+    if (hasCheckedForUpdatesRef.current) {
+      return
+    }
+
+    hasCheckedForUpdatesRef.current = true
+
+    const queueId = enqueueLiveQueueItem({
+      id: createLiveQueueId('update', 'release-check'),
+      title: 'Update Check',
+      subtitle: 'GitHub Releases',
+      kind: 'update',
+      phase: 'scanning',
+      progress: 16,
+      details: 'Checking GitHub for a newer QuestVault release...',
+      artworkUrl: null,
+      actionLabel: null,
+      actionUrl: null
+    })
+
+    void (async () => {
+      try {
+        const response: ReleaseCheckResponse = await window.api.app.checkForUpdates()
+        updateLiveQueueItem(queueId, {
+          phase: response.success ? 'completed' : 'failed',
+          progress: 100,
+          details: buildLiveQueueDetails(response.message, response.details),
+          actionLabel: response.success && response.updateAvailable && response.releaseUrl ? 'Open Release' : null,
+          actionUrl: response.success && response.updateAvailable ? response.releaseUrl : null
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to check for updates.'
+        updateLiveQueueItem(queueId, {
+          phase: 'failed',
+          progress: 100,
+          details: message,
+          actionLabel: null,
+          actionUrl: null
+        })
+      }
+    })()
   }, [])
 
   useEffect(() => {

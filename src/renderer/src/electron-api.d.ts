@@ -4,6 +4,7 @@ import type {
   BackupStorageMoveItemResponse,
   DependencyBootstrapProgressUpdate,
   DependencyStatusResponse,
+  ReleaseCheckResponse,
   DeviceInstalledAppBackupResponse,
   DeviceInstalledAppActionResponse,
   DeviceAppsResponse,
@@ -52,6 +53,9 @@ import type {
 interface ElectronApi {
   version: string
   ping: () => string
+  app: {
+    checkForUpdates: () => Promise<ReleaseCheckResponse>
+  }
   dependencies: {
     getStatus: () => Promise<DependencyStatusResponse>
     ensureReady: () => Promise<DependencyStatusResponse>

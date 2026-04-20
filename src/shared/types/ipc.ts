@@ -39,6 +39,18 @@ export interface DependencyBootstrapProgressUpdate {
   path: string | null
 }
 
+export interface ReleaseCheckResponse {
+  success: boolean
+  currentVersion: string
+  latestVersion: string | null
+  latestTag: string | null
+  releaseUrl: string | null
+  publishedAt: string | null
+  updateAvailable: boolean
+  message: string
+  details: string | null
+}
+
 export interface DeviceSummary {
   id: string
   label: string
@@ -326,7 +338,7 @@ export interface ManualGameMetadataOverride {
   thumbnailUri: string | null
 }
 
-export type LiveQueueKind = 'install' | 'backup' | 'uninstall' | 'scan' | 'cleanup' | 'restore' | 'download'
+export type LiveQueueKind = 'install' | 'backup' | 'uninstall' | 'scan' | 'cleanup' | 'restore' | 'download' | 'update'
 export type LiveQueuePhase =
   | 'queued'
   | 'paused'
@@ -352,6 +364,8 @@ export interface LiveQueueItem {
   details: string | null
   artworkUrl: string | null
   updatedAt: string
+  actionLabel?: string | null
+  actionUrl?: string | null
   transferControl: LiveQueueTransferControl | null
 }
 
