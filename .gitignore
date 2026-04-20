@@ -3,3 +3,4 @@ development_only/
 out/
 release/
 node_modules/
+docs/vrsrc-release-md5.csv
