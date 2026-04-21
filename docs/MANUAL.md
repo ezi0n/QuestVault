@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.5.7`
+Current documented application version: `0.5.8`
 
 ## Overview
 
@@ -37,9 +37,9 @@ The search field matches:
 
 In grid mode, the scale control currently uses three fixed stops:
 
-- `0%` = 6 cards per row
-- `50%` = 5 cards per row
-- `100%` = 4 cards per row
+- `1.0x` = 4 cards per row
+- `1.25x` = 5 cards per row
+- `1.5x` = 6 cards per row
 
 ### Local item drawer
 
@@ -123,6 +123,7 @@ Use `Settings, and maintenance` for:
 - dependency inspection
 - diagnostics
 - orphaned-data review
+- headset app scan history across recent installed-app refreshes
 
 ### Managed Dependencies
 
@@ -145,6 +146,15 @@ Open `Orphaned OBB / Data` to:
 - scan headset leftovers
 - inspect orphaned paths
 - delete leftover data from apps that are no longer installed
+
+### Headset App Scan History
+
+The `Maintenance` section includes a compact chart showing:
+
+- apps present on the headset at each recent scan
+- apps removed since the previous scan
+
+Use `Refresh installed apps` in `Installed Inventory` to add new scan points to this history.
 
 ## Live Queue
 

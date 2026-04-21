@@ -16,6 +16,7 @@
 - Summary row for user-installed apps, system apps, total storage, storage free, and orphaned data.
 - Right-side installed-app detail drawer from both grid and list selections.
 - Installed item actions for backup and uninstall.
+- Installed-app scan history that feeds maintenance-side headset app history charts.
 
 ### Game Saves
 
@@ -38,6 +39,7 @@
 - Library diagnostics summary + popup.
 - Orphaned data summary + popup.
 - Path configuration for Local Library, Backup Storage, and Game Saves.
+- Compact headset app scan history chart for the last recent scans in Maintenance.
 
 ## Cross-Cutting UX Features
 
@@ -73,7 +75,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.5.7`
+Current documented release line: `0.5.8`
 
 ## Product Position
 

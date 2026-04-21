@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Documented application version: `0.5.7`
+Documented application version: `0.5.8`
 
 ## Packaging Targets
 
@@ -101,7 +101,7 @@ If packaging fails, classify the issue as one of:
 
 ## Current Validation Status
 
-Validated in this workspace during the current `0.4.x` line with:
+Validated in this workspace during the current `0.5.x` line with:
 
 ```bash
 pnpm typecheck

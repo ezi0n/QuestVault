@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process'
-import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { app } from 'electron'
 import type {
   DeviceInstalledAppBackupResponse,
   DeviceInstalledAppActionResponse,
@@ -18,6 +20,9 @@ import type {
   DeviceSummary,
   DeviceUserNameResponse,
   InstalledAppSummary,
+  InstalledAppHistoryDay,
+  InstalledAppHistoryResponse,
+  InstalledAppScanDelta,
   LocalLibraryIndexedItem
 } from '@shared/types/ipc'
 import { dependencyService } from './dependencyService'
@@ -39,11 +44,28 @@ interface InstallQueueHooks {
   onStarted?: () => void | Promise<void>
 }
 
+interface InstalledAppScanSnapshot {
+  serial: string
+  scannedAt: string
+  appCount: number
+  systemAppCount: number
+  packageIds: string[]
+}
+
+interface InstalledAppScanHistoryStore {
+  version: 1
+  snapshots: InstalledAppScanSnapshot[]
+}
+
+const INSTALLED_APP_SCAN_HISTORY_VERSION = 1
+const INSTALLED_APP_SCAN_HISTORY_LIMIT_PER_SERIAL = 90
+
 class DeviceService {
   private catalogNameMapPromise: Promise<Map<string, string>> | null = null
   private blockedLeftoverDeletes = new Map<string, string>()
   private installQueue: Promise<void> = Promise.resolve()
   private installQueueDepth = 0
+  private pendingJsonWrites = new Map<string, Promise<void>>()
 
   private async runQueuedInstall<T>(task: () => Promise<T>, hooks?: InstallQueueHooks): Promise<T> {
     const queuedBehindAnotherInstall = this.installQueueDepth > 0
@@ -66,6 +88,192 @@ class DeviceService {
       })
 
     return run
+  }
+
+  private getInstalledAppScanHistoryPath(): string {
+    return join(app.getPath('userData'), 'installed-app-scan-history.json')
+  }
+
+  private formatLocalDateKey(timestamp: string): string {
+    const value = new Date(timestamp)
+    if (Number.isNaN(value.getTime())) {
+      return timestamp.slice(0, 10)
+    }
+
+    const year = value.getFullYear()
+    const month = `${value.getMonth() + 1}`.padStart(2, '0')
+    const day = `${value.getDate()}`.padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  private async writeJsonFile(targetPath: string, value: unknown): Promise<void> {
+    const previousWrite = this.pendingJsonWrites.get(targetPath) ?? Promise.resolve()
+    const nextWrite = previousWrite
+      .catch(() => undefined)
+      .then(async () => {
+        await mkdir(dirname(targetPath), { recursive: true })
+        const tempPath = `${targetPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
+        await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+        await rename(tempPath, targetPath)
+      })
+
+    this.pendingJsonWrites.set(targetPath, nextWrite)
+
+    try {
+      await nextWrite
+    } finally {
+      if (this.pendingJsonWrites.get(targetPath) === nextWrite) {
+        this.pendingJsonWrites.delete(targetPath)
+      }
+    }
+  }
+
+  private async readInstalledAppScanHistoryStore(): Promise<InstalledAppScanHistoryStore> {
+    const historyPath = this.getInstalledAppScanHistoryPath()
+
+    try {
+      const raw = await readFile(historyPath, 'utf8')
+      const parsed = JSON.parse(raw) as Partial<InstalledAppScanHistoryStore>
+      const snapshots = Array.isArray(parsed.snapshots)
+        ? parsed.snapshots.filter((entry): entry is InstalledAppScanSnapshot => {
+            return (
+              Boolean(entry) &&
+              typeof entry.serial === 'string' &&
+              typeof entry.scannedAt === 'string' &&
+              typeof entry.appCount === 'number' &&
+              typeof entry.systemAppCount === 'number' &&
+              Array.isArray(entry.packageIds)
+            )
+          })
+        : []
+
+      return {
+        version: INSTALLED_APP_SCAN_HISTORY_VERSION,
+        snapshots
+      }
+    } catch {
+      return {
+        version: INSTALLED_APP_SCAN_HISTORY_VERSION,
+        snapshots: []
+      }
+    }
+  }
+
+  private buildInstalledAppScanDelta(
+    previousSnapshot: InstalledAppScanSnapshot | null,
+    nextSnapshot: InstalledAppScanSnapshot
+  ): InstalledAppScanDelta | null {
+    if (!previousSnapshot) {
+      return null
+    }
+
+    const previousPackages = new Set(previousSnapshot.packageIds.map((packageId) => packageId.toLowerCase()))
+    const currentPackages = new Set(nextSnapshot.packageIds.map((packageId) => packageId.toLowerCase()))
+
+    const addedPackages = nextSnapshot.packageIds.filter((packageId) => !previousPackages.has(packageId.toLowerCase()))
+    const removedPackages = previousSnapshot.packageIds.filter(
+      (packageId) => !currentPackages.has(packageId.toLowerCase())
+    )
+
+    return {
+      comparedToScannedAt: previousSnapshot.scannedAt,
+      previousAppCount: previousSnapshot.appCount,
+      currentAppCount: nextSnapshot.appCount,
+      addedCount: addedPackages.length,
+      removedCount: removedPackages.length,
+      addedPackages,
+      removedPackages
+    }
+  }
+
+  private buildInstalledAppHistory(
+    serial: string,
+    snapshots: InstalledAppScanSnapshot[]
+  ): InstalledAppHistoryResponse {
+    const serialSnapshots = snapshots
+      .filter((snapshot) => snapshot.serial === serial)
+      .slice()
+      .sort((left, right) => new Date(left.scannedAt).getTime() - new Date(right.scannedAt).getTime())
+
+    if (!serialSnapshots.length) {
+      return {
+        serial,
+        days: [],
+        latestScanAt: null,
+        message: 'No installed app scan history has been recorded yet.'
+      }
+    }
+
+    const scans = serialSnapshots.map((snapshot, index): InstalledAppHistoryDay => {
+      const previousSnapshot = index > 0 ? serialSnapshots[index - 1] ?? null : null
+      const delta = this.buildInstalledAppScanDelta(previousSnapshot, snapshot)
+
+      return {
+        date: this.formatLocalDateKey(snapshot.scannedAt),
+        scannedAt: snapshot.scannedAt,
+        appCount: snapshot.appCount,
+        systemAppCount: snapshot.systemAppCount,
+        addedCount: delta?.addedCount ?? 0,
+        removedCount: delta?.removedCount ?? 0
+      }
+    })
+
+    const recentDays = scans.slice(-30)
+
+    return {
+      serial,
+      days: recentDays,
+      latestScanAt: serialSnapshots[serialSnapshots.length - 1]?.scannedAt ?? null,
+      message:
+        recentDays.length >= 2
+          ? 'Showing apps present on the headset and removals across the latest installed-app scans.'
+          : 'Refresh installed apps again to build headset app scan history.'
+    }
+  }
+
+  private async recordInstalledAppScanSnapshot(
+    serial: string,
+    apps: InstalledAppSummary[],
+    systemAppCount: number,
+    scannedAt: string
+  ): Promise<{ change: InstalledAppScanDelta | null; history: InstalledAppHistoryResponse }> {
+    const historyPath = this.getInstalledAppScanHistoryPath()
+    const store = await this.readInstalledAppScanHistoryStore()
+    const normalizedPackageIds = Array.from(
+      new Set(apps.map((app) => app.packageId.trim()).filter(Boolean).sort((left, right) => left.localeCompare(right)))
+    )
+    const snapshot: InstalledAppScanSnapshot = {
+      serial,
+      scannedAt,
+      appCount: apps.length,
+      systemAppCount,
+      packageIds: normalizedPackageIds
+    }
+
+    const previousSnapshot =
+      store.snapshots
+        .filter((entry) => entry.serial === serial)
+        .sort((left, right) => new Date(right.scannedAt).getTime() - new Date(left.scannedAt).getTime())[0] ?? null
+
+    const change = this.buildInstalledAppScanDelta(previousSnapshot, snapshot)
+    const nextSnapshots = [...store.snapshots.filter((entry) => entry.serial !== serial)]
+    const serialSnapshots = [...store.snapshots.filter((entry) => entry.serial === serial), snapshot]
+      .sort((left, right) => new Date(left.scannedAt).getTime() - new Date(right.scannedAt).getTime())
+      .slice(-INSTALLED_APP_SCAN_HISTORY_LIMIT_PER_SERIAL)
+
+    nextSnapshots.push(...serialSnapshots)
+
+    const nextStore: InstalledAppScanHistoryStore = {
+      version: INSTALLED_APP_SCAN_HISTORY_VERSION,
+      snapshots: nextSnapshots
+    }
+
+    await this.writeJsonFile(historyPath, nextStore)
+
+    return {
+      change,
+      history: this.buildInstalledAppHistory(serial, nextStore.snapshots)
+    }
   }
 
   async listDevices(): Promise<DeviceListResponse> {
@@ -229,6 +437,8 @@ class DeviceService {
   async listInstalledApps(serial: string): Promise<DeviceAppsResponse> {
     const runtime = await this.resolveRuntime()
     const normalizedSerial = serial.trim()
+    const scannedAt = new Date().toISOString()
+    const emptyHistory = this.buildInstalledAppHistory(normalizedSerial, [])
 
     if (runtime.status !== 'ready' || !runtime.adbPath) {
       return {
@@ -236,7 +446,9 @@ class DeviceService {
         serial: normalizedSerial,
         apps: [],
         systemAppCount: 0,
-        scannedAt: new Date().toISOString()
+        change: null,
+        history: emptyHistory,
+        scannedAt
       }
     }
 
@@ -250,7 +462,9 @@ class DeviceService {
         serial: normalizedSerial,
         apps: [],
         systemAppCount: 0,
-        scannedAt: new Date().toISOString()
+        change: null,
+        history: emptyHistory,
+        scannedAt
       }
     }
 
@@ -259,13 +473,21 @@ class DeviceService {
         this.readInstalledApps(runtime.adbPath, normalizedSerial),
         this.readSystemAppCount(runtime.adbPath, normalizedSerial)
       ])
+      const { change, history } = await this.recordInstalledAppScanSnapshot(
+        normalizedSerial,
+        apps,
+        systemAppCount,
+        scannedAt
+      )
 
       return {
         runtime,
         serial: normalizedSerial,
         apps,
         systemAppCount,
-        scannedAt: new Date().toISOString()
+        change,
+        history,
+        scannedAt
       }
     } catch (error) {
       return {
@@ -277,7 +499,9 @@ class DeviceService {
         serial: normalizedSerial,
         apps: [],
         systemAppCount: 0,
-        scannedAt: new Date().toISOString()
+        change: null,
+        history: emptyHistory,
+        scannedAt
       }
     }
   }

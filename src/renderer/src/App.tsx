@@ -19,6 +19,7 @@ import type {
   SavePackagesScanResponse,
   SettingsDisplayModeKey,
   SettingsIndexedPathUpdate,
+  InstalledAppScanDelta,
   SettingsPathStatsResponse,
   SettingsPathKey,
   VrSrcCatalogResponse,
@@ -207,6 +208,29 @@ function buildVrSrcSyncLiveQueueDetails(response: {
       : `${response.message} No cached vrSrc catalog is available.`
 
   return buildLiveQueueDetails(fallbackMessage, response.details)
+}
+
+function buildInstalledAppChangeDetails(change: InstalledAppScanDelta | null): string | null {
+  if (!change || (!change.addedCount && !change.removedCount)) {
+    return null
+  }
+
+  const parts = [
+    `Apps present on the headset changed since the previous scan (${change.previousAppCount} -> ${change.currentAppCount}).`,
+    `New on headset: ${change.addedCount}, removed from headset: ${change.removedCount}.`
+  ]
+
+  if (change.addedPackages.length) {
+    const listed = change.addedPackages.slice(0, 4).join(', ')
+    parts.push(`Now present on headset: ${listed}${change.addedPackages.length > 4 ? ', …' : '.'}`)
+  }
+
+  if (change.removedPackages.length) {
+    const listed = change.removedPackages.slice(0, 4).join(', ')
+    parts.push(`No longer present on headset: ${listed}${change.removedPackages.length > 4 ? ', …' : '.'}`)
+  }
+
+  return parts.join(' ')
 }
 
 function buildVrSrcQueueId(operation: VrSrcTransferOperation, releaseName: string): string {
@@ -1526,7 +1550,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       kind: 'cleanup',
       phase: 'cleaning-up',
       progress: 16,
-      details: 'Clearing cached vrSrc metadata while preserving credentials...',
+      details: 'Clearing cached vrSrc metadata, downloads, and credentials...',
       artworkUrl: null
     })
 
@@ -1762,13 +1786,20 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       setDeviceAppsResponse(response)
       setDeviceAppsMessage(response.runtime.message)
       setInventoryMessage(null)
+      const installedAppChangeDetails = buildInstalledAppChangeDetails(response.change)
       updateLiveQueueItem(queueId, {
         phase: response.runtime.status === 'error' ? 'failed' : 'completed',
         progress: 100,
         details:
           response.runtime.status === 'error'
             ? response.runtime.message
-            : `${response.runtime.message} Resolved metadata for ${Object.keys(metadataMatches).length} installed package${Object.keys(metadataMatches).length === 1 ? '' : 's'}.`
+            : [
+                response.runtime.message,
+                installedAppChangeDetails,
+                `Resolved metadata for ${Object.keys(metadataMatches).length} installed package${Object.keys(metadataMatches).length === 1 ? '' : 's'}.`
+              ]
+                .filter(Boolean)
+                .join(' ')
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to load installed apps.'

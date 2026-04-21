@@ -87,11 +87,39 @@ export interface InstalledAppSummary {
   totalFootprintBytes: number | null
 }
 
+export interface InstalledAppScanDelta {
+  comparedToScannedAt: string
+  previousAppCount: number
+  currentAppCount: number
+  addedCount: number
+  removedCount: number
+  addedPackages: string[]
+  removedPackages: string[]
+}
+
+export interface InstalledAppHistoryDay {
+  date: string
+  scannedAt: string
+  appCount: number
+  systemAppCount: number
+  addedCount: number
+  removedCount: number
+}
+
+export interface InstalledAppHistoryResponse {
+  serial: string
+  days: InstalledAppHistoryDay[]
+  latestScanAt: string | null
+  message: string
+}
+
 export interface DeviceAppsResponse {
   runtime: DeviceRuntimeInfo
   serial: string
   apps: InstalledAppSummary[]
   systemAppCount: number
+  change: InstalledAppScanDelta | null
+  history: InstalledAppHistoryResponse
   scannedAt: string
 }
 

@@ -4083,7 +4083,7 @@ function ManagerView(props: {
   }
 
   return (
-    <section className="view-stack">
+    <section className="view-stack settings-view-stack">
       <div className="content-split">
         <div className="manager-primary-stack">
           <section className="surface-panel">
@@ -4396,7 +4396,7 @@ function InventoryView(props: {
       </section>
 
       <div className="inventory-content-frame">
-      <section className="surface-panel">
+      <section className="surface-panel settings-paths-panel">
         <div className="section-heading">
           <div>
             <p className="eyebrow">Installed Inventory</p>
@@ -5367,6 +5367,7 @@ function SettingsView(props: {
   localLibraryIndex: LocalLibraryScanResponse | null
   backupStorageIndex: LocalLibraryScanResponse | null
   gameSavesPathStats: SettingsPathStatsResponse | null
+  deviceAppsResponse: DeviceAppsResponse | null
   selectedDeviceId: string | null
   deviceLeftoverResponse: DeviceLeftoverScanResponse | null
   deviceLeftoverBusy: boolean
@@ -5375,11 +5376,9 @@ function SettingsView(props: {
   onOpenManagedDependencies: () => void
   onOpenLibraryDiagnostics: (filter?: 'all' | 'installReady' | 'missing') => void
   onOpenOrphanedDataDiscovery: () => void
-  onClearVrSrcCache: () => Promise<void>
   onChooseSettingsPath: (key: SettingsPathKey) => Promise<void>
   onClearSettingsPath: (key: SettingsPathKey) => Promise<void>
   onRescanLocalLibrary: () => Promise<void>
-  vrSrcMaintenanceBusy: boolean
   onRefreshLeftoverData: (serial: string) => Promise<void>
   onDeleteLeftoverData: (itemId: string) => Promise<void>
 }) {
@@ -5392,6 +5391,7 @@ function SettingsView(props: {
     localLibraryIndex,
     backupStorageIndex,
     gameSavesPathStats,
+    deviceAppsResponse,
     selectedDeviceId,
     deviceLeftoverResponse,
     deviceLeftoverBusy,
@@ -5400,14 +5400,69 @@ function SettingsView(props: {
     onOpenManagedDependencies,
     onOpenLibraryDiagnostics,
     onOpenOrphanedDataDiscovery,
-    onClearVrSrcCache,
     onChooseSettingsPath,
     onClearSettingsPath,
     onRescanLocalLibrary,
-    vrSrcMaintenanceBusy,
     onRefreshLeftoverData,
     onDeleteLeftoverData
   } = props
+  const installedAppHistory =
+    selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.history : null
+  const installedAppHistoryDays = (installedAppHistory?.days ?? []).slice(-7)
+  const maxHistoryValue = installedAppHistoryDays.reduce(
+    (highest, day) => Math.max(highest, day.appCount, day.removedCount),
+    1
+  )
+  const historyScaleMax = Math.max(1, Math.ceil(maxHistoryValue * 1.08))
+  const settingsHistoryChartWidth = 320
+  const settingsHistoryChartHeight = 72
+  const settingsHistoryChartPaddingX = 14
+  const settingsHistoryChartPaddingTop = 8
+  const settingsHistoryChartPaddingBottom = 16
+  const settingsHistoryPlotWidth = settingsHistoryChartWidth - settingsHistoryChartPaddingX * 2
+  const settingsHistoryPlotHeight =
+    settingsHistoryChartHeight - settingsHistoryChartPaddingTop - settingsHistoryChartPaddingBottom
+  const settingsHistoryStepX =
+    installedAppHistoryDays.length > 1 ? settingsHistoryPlotWidth / (installedAppHistoryDays.length - 1) : 0
+  const settingsHistoryPoints = installedAppHistoryDays.map((day, index) => {
+    const x = settingsHistoryChartPaddingX + settingsHistoryStepX * index
+    const presentY =
+      settingsHistoryChartPaddingTop +
+      settingsHistoryPlotHeight -
+      (day.appCount / historyScaleMax) * settingsHistoryPlotHeight
+    const removedY =
+      settingsHistoryChartPaddingTop +
+      settingsHistoryPlotHeight -
+      (day.removedCount / historyScaleMax) * settingsHistoryPlotHeight
+
+    const scannedAtDate = new Date(day.scannedAt)
+    const allScansSameDate = installedAppHistoryDays.every((entry) => entry.date === day.date)
+    const label = allScansSameDate
+      ? scannedAtDate.toLocaleTimeString(undefined, {
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      : scannedAtDate.toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric'
+        })
+
+    return {
+      day,
+      x,
+      presentY,
+      removedY,
+      label,
+      scannedAtLabel: scannedAtDate.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    }
+  })
+  const settingsHistoryAddedLine = settingsHistoryPoints.map((point) => `${point.x},${point.presentY}`).join(' ')
+  const settingsHistoryRemovedLine = settingsHistoryPoints.map((point) => `${point.x},${point.removedY}`).join(' ')
 
   const settingsStats = [
     {
@@ -5545,43 +5600,127 @@ function SettingsView(props: {
           </div>
         </div>
 
-        <p className="section-copy settings-section-copy">
-          Open runtime tooling, inspect library diagnostics, clear cached vrSrc metadata, and review orphaned data left on the headset.
-        </p>
-
         <div className="settings-maintenance-toolbar">
-          <div className="settings-maintenance-actions">
-            <button
-              className="status-pill status-pill-button"
-              onClick={onOpenManagedDependencies}
-              title="Open Managed Dependencies to review ADB and 7-Zip runtime readiness"
-              type="button"
-            >
-              <span className={`settings-maintenance-indicator is-${dependencyIndicatorTone}`} aria-hidden="true" />
-              <span>Managed Dependencies</span>
-            </button>
-            <button className="status-pill status-pill-button" onClick={() => onOpenLibraryDiagnostics('all')} type="button">
-              Library Diagnostics
-            </button>
-            <button
-              className="status-pill status-pill-button"
-              onClick={onOpenOrphanedDataDiscovery}
-              title="Open Orphaned Data Discovery to scan and remove leftover Android/obb and Android/data folders from the selected headset"
-              type="button"
-            >
-              Orphaned Data Discovery
-            </button>
+          <div className="settings-maintenance-content">
+            <p className="section-copy settings-section-copy settings-maintenance-copy">
+              Open runtime tooling, inspect library diagnostics, review orphaned data left
+              <br />
+              on the headset, and compare apps present versus removed across recent scans.
+            </p>
+
+            <div className="settings-maintenance-actions">
+              <button
+                className="status-pill status-pill-button"
+                onClick={onOpenManagedDependencies}
+                title="Open Managed Dependencies to review ADB and 7-Zip runtime readiness"
+                type="button"
+              >
+                <span className={`settings-maintenance-indicator is-${dependencyIndicatorTone}`} aria-hidden="true" />
+                <span>Managed Dependencies</span>
+              </button>
+              <button className="status-pill status-pill-button" onClick={() => onOpenLibraryDiagnostics('all')} type="button">
+                Library Diagnostics
+              </button>
+              <button
+                className="status-pill status-pill-button"
+                onClick={onOpenOrphanedDataDiscovery}
+                title="Open Orphaned Data Discovery to scan and remove leftover Android/obb and Android/data folders from the selected headset"
+                type="button"
+              >
+                Orphaned Data Discovery
+              </button>
+            </div>
           </div>
-          <div className="settings-maintenance-actions settings-maintenance-actions-end">
-            <button
-              className="status-pill status-pill-button status-pill-button-danger"
-              disabled={vrSrcMaintenanceBusy}
-              onClick={() => void onClearVrSrcCache()}
-              title="Clear cached vrSrc catalog metadata and downloads while keeping credentials, then rebuild it with Sync Source"
-              type="button"
-            >
-              {vrSrcMaintenanceBusy ? 'Clearing vrSrc Cache…' : 'Clear vrSrc Cache'}
-            </button>
+          <div className="settings-maintenance-history">
+            <div className="settings-maintenance-history-heading">
+              <strong>Headset App Scan History</strong>
+              <span>Last 7 scans</span>
+            </div>
+            {selectedDeviceId ? (
+              installedAppHistoryDays.length ? (
+                <div className="settings-maintenance-history-chart">
+                  <div
+                    className="settings-maintenance-history-plot"
+                    role="img"
+                    aria-label="Apps present on the headset versus removed from the headset over the last 7 scans"
+                  >
+                    <svg
+                      className="settings-maintenance-history-svg"
+                      viewBox={`0 0 ${settingsHistoryChartWidth} ${settingsHistoryChartHeight}`}
+                      preserveAspectRatio="none"
+                    >
+                      {[0.25, 0.5, 0.75].map((ratio) => (
+                        <line
+                          key={ratio}
+                          className="settings-maintenance-history-gridline"
+                          x1={settingsHistoryChartPaddingX}
+                          x2={settingsHistoryChartWidth - settingsHistoryChartPaddingX}
+                          y1={settingsHistoryChartPaddingTop + settingsHistoryPlotHeight * ratio}
+                          y2={settingsHistoryChartPaddingTop + settingsHistoryPlotHeight * ratio}
+                        />
+                      ))}
+                      {settingsHistoryPoints.length > 1 ? (
+                        <>
+                          <polyline className="settings-maintenance-history-line is-added" points={settingsHistoryAddedLine} />
+                          <polyline className="settings-maintenance-history-line is-removed" points={settingsHistoryRemovedLine} />
+                        </>
+                      ) : null}
+                      {settingsHistoryPoints.map((point) => (
+                        <g key={point.day.scannedAt}>
+                          <circle className="settings-maintenance-history-hit" cx={point.x} cy={point.presentY} r="9">
+                            <title>{`${point.scannedAtLabel}: ${point.day.appCount}`}</title>
+                          </circle>
+                          <circle className="settings-maintenance-history-dot is-added" cx={point.x} cy={point.presentY} r="3" />
+                          <circle className="settings-maintenance-history-hit" cx={point.x} cy={point.removedY} r="9" />
+                          <circle className="settings-maintenance-history-dot is-removed" cx={point.x} cy={point.removedY} r="3" />
+                        </g>
+                      ))}
+                    </svg>
+                    <div className="settings-maintenance-history-axis">
+                      {settingsHistoryPoints.map((point) => (
+                        <div className="settings-maintenance-history-axis-label" key={point.day.date}>
+                          {point.label}
+                        </div>
+                      ))}
+                    </div>
+                    <div
+                      className="settings-maintenance-history-hover-grid"
+                      style={{
+                        gridTemplateColumns: `repeat(${settingsHistoryPoints.length}, minmax(0, 1fr))`
+                      }}
+                    >
+                      {settingsHistoryPoints.map((point) => (
+                        <div
+                          className="settings-maintenance-history-hover-band"
+                          key={`hover-${point.day.scannedAt}`}
+                          title={`${point.scannedAtLabel}: ${point.day.appCount}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settings-maintenance-history-legend">
+                    <span className="settings-maintenance-history-legend-item">
+                      <span className="settings-maintenance-history-legend-swatch is-added" aria-hidden="true" />
+                      Present on headset
+                    </span>
+                    <span className="settings-maintenance-history-legend-item">
+                      <span className="settings-maintenance-history-legend-swatch is-removed" aria-hidden="true" />
+                      Removed from headset
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-state inventory-history-empty-state settings-maintenance-history-empty-state">
+                  <strong>No installed-app history yet.</strong>
+                  <p>Refresh installed apps to begin tracking added and removed titles across recent scans.</p>
+                </div>
+              )
+            ) : (
+              <div className="empty-state inventory-history-empty-state settings-maintenance-history-empty-state">
+                <strong>No device selected.</strong>
+                <p>Select a connected headset in Manager to load installed-app history.</p>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -6729,6 +6868,7 @@ export function WireframeShell(props: WireframeShellProps) {
               localLibraryIndex={localLibraryIndex}
               backupStorageIndex={backupStorageIndex}
               gameSavesPathStats={gameSavesPathStats}
+              deviceAppsResponse={deviceAppsResponse}
               selectedDeviceId={selectedDeviceId}
               deviceLeftoverResponse={deviceLeftoverResponse}
               deviceLeftoverBusy={deviceLeftoverBusy}
@@ -6740,11 +6880,9 @@ export function WireframeShell(props: WireframeShellProps) {
                 setIsLibraryDiagnosticsOpen(true)
               }}
               onOpenOrphanedDataDiscovery={() => setIsOrphanedDataOpen(true)}
-              onClearVrSrcCache={onClearVrSrcCache}
               onChooseSettingsPath={onChooseSettingsPath}
               onClearSettingsPath={onClearSettingsPath}
               onRescanLocalLibrary={onRescanLocalLibrary}
-              vrSrcMaintenanceBusy={vrSrcMaintenanceBusy}
               onRefreshLeftoverData={onRefreshLeftoverData}
               onDeleteLeftoverData={onDeleteLeftoverData}
             />

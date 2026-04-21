@@ -833,8 +833,14 @@ class VrSrcService {
     }
   }
 
-  private async resolveCredentials(logger?: VrSrcLogger): Promise<VrSrcCredentials> {
+  private async resolveCredentials(
+    logger?: VrSrcLogger,
+    options?: {
+      allowCachedFallback?: boolean
+    }
+  ): Promise<VrSrcCredentials> {
     await this.ensureDirectories()
+    const allowCachedFallback = options?.allowCachedFallback ?? true
 
     try {
       await logger?.debug('Resolving vrSrc credentials from Telegram.')
@@ -849,20 +855,64 @@ class VrSrcService {
       }
     } catch {
       // Fall back to cached credentials when Telegram resolution is unavailable.
-      await logger?.warn('Unable to resolve vrSrc credentials from Telegram. Falling back to cached credentials if available.')
+      if (allowCachedFallback) {
+        await logger?.warn('Unable to resolve vrSrc credentials from Telegram. Falling back to cached credentials if available.')
+      } else {
+        await logger?.warn('Unable to resolve vrSrc credentials from Telegram. Cached fallback is disabled for this operation.')
+      }
     }
 
-    const cached = await this.readCachedCredentials()
-    if (cached) {
-      await logger?.info('Using cached vrSrc credentials.', {
-        baseUriHost: new URL(cached.baseUri).host,
-        lastResolvedAt: cached.lastResolvedAt
-      })
-      return cached
+    if (allowCachedFallback) {
+      const cached = await this.readCachedCredentials()
+      if (cached) {
+        await logger?.info('Using cached vrSrc credentials.', {
+          baseUriHost: new URL(cached.baseUri).host,
+          lastResolvedAt: cached.lastResolvedAt
+        })
+        return cached
+      }
     }
 
-    await logger?.error('vrSrc credentials could not be resolved and no cached credentials were available.')
-    throw new Error('Unable to resolve vrSrc credentials from Telegram and no cached credentials are available.')
+    await logger?.error(
+      allowCachedFallback
+        ? 'vrSrc credentials could not be resolved and no cached credentials were available.'
+        : 'vrSrc credentials could not be freshly resolved from Telegram.'
+    )
+    throw new Error(
+      allowCachedFallback
+        ? 'Unable to resolve vrSrc credentials from Telegram and no cached credentials are available.'
+        : 'Unable to resolve fresh vrSrc credentials from Telegram.'
+    )
+  }
+
+  private async resetCachedState(
+    options?: {
+      includeDownloads?: boolean
+      includeCredentials?: boolean
+      logger?: VrSrcLogger
+      reason?: string
+    }
+  ): Promise<void> {
+    const includeDownloads = options?.includeDownloads ?? false
+    const includeCredentials = options?.includeCredentials ?? false
+    const logger = options?.logger
+
+    this.trailerVideoIdCache.clear()
+    await logger?.info('Resetting cached vrSrc state.', {
+      includeDownloads,
+      includeCredentials,
+      reason: options?.reason ?? null
+    })
+    await rm(this.getCatalogPath(), { force: true })
+    await rm(this.getMetaArchivePath(), { force: true })
+    await rm(this.getMetaExtractPath(), { recursive: true, force: true })
+    if (includeDownloads) {
+      await rm(this.getDownloadsPath(), { recursive: true, force: true })
+      await mkdir(this.getDownloadsPath(), { recursive: true })
+    }
+    if (includeCredentials) {
+      await rm(this.getCredentialsPath(), { force: true })
+    }
   }
 
   private readCatalogHeaderIndexes(headerLine: string): Record<string, number> {
@@ -1205,7 +1255,13 @@ class VrSrcService {
       try {
         await logger.info('vrSrc sync started.')
         await this.ensureDirectories()
-        const credentials = await this.resolveCredentials(logger)
+        await this.resetCachedState({
+          includeDownloads: false,
+          includeCredentials: true,
+          logger,
+          reason: 'Fresh sync requested.'
+        })
+        const credentials = await this.resolveCredentials(logger, { allowCachedFallback: false })
         const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
         await logger.debug('Resolved vrSrc sync target.', {
           baseUriHost: new URL(credentials.baseUri).host,
@@ -1278,19 +1334,18 @@ class VrSrcService {
     }
 
     try {
-      this.trailerVideoIdCache.clear()
-      await rm(this.getCatalogPath(), { force: true })
-      await rm(this.getMetaArchivePath(), { force: true })
-      await rm(this.getMetaExtractPath(), { recursive: true, force: true })
-      await rm(this.getDownloadsPath(), { recursive: true, force: true })
-      await mkdir(this.getDownloadsPath(), { recursive: true })
+      await this.resetCachedState({
+        includeDownloads: true,
+        includeCredentials: true,
+        reason: 'Manual cache clear requested.'
+      })
       const status = await this.buildStatus()
       const catalog = await this.readCatalog()
 
       return {
         success: true,
-        message: 'Cleared the cached vrSrc catalog and metadata.',
-        details: 'Credentials were preserved. Run Sync Source to rebuild the remote catalog from scratch.',
+        message: 'Cleared the cached vrSrc catalog, metadata, downloads, and credentials.',
+        details: 'Run Sync Source to resolve fresh vrSrc credentials and rebuild the remote catalog from scratch.',
         status,
         catalog
       }
