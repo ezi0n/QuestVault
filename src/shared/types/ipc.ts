@@ -568,6 +568,7 @@ export interface LocalLibraryIndexedItem {
   archiveCount: number
   libraryVersion: string | null
   libraryVersionCode: string | null
+  sourceLastUpdatedAt: string | null
   note: string
   manualStoreId: string | null
   manualStoreIdEdited: boolean

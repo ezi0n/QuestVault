@@ -1158,6 +1158,7 @@ class SettingsService {
         archiveCount: summary.archiveCount,
         libraryVersion: summary.primaryApkVersion,
         libraryVersionCode: summary.primaryApkVersionCode,
+        sourceLastUpdatedAt: null,
         note: this.formatDirectoryNote(summary),
         manualStoreId: null,
         manualStoreIdEdited: false,
@@ -1188,6 +1189,7 @@ class SettingsService {
       archiveCount: kind === 'archive' ? 1 : 0,
       libraryVersion: apkMetadata?.version ?? null,
       libraryVersionCode: apkMetadata?.versionCode ?? null,
+      sourceLastUpdatedAt: null,
       note: this.buildFileNote(kind),
       manualStoreId: null,
       manualStoreIdEdited: false,
@@ -1272,6 +1274,7 @@ class SettingsService {
       return {
         ...item,
         discoveryState,
+        sourceLastUpdatedAt: previousItem?.sourceLastUpdatedAt ?? null,
         manualStoreId: previousItem?.manualStoreId ?? null,
         manualStoreIdEdited: previousItem?.manualStoreIdEdited ?? false,
         manualMetadata: previousItem?.manualMetadata ?? null
@@ -1774,6 +1777,46 @@ class SettingsService {
       index: nextIndex,
       message: nextIndex.message
     }
+  }
+
+  async setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
+    absolutePath: string,
+    sourceLastUpdatedAt: string | null
+  ): Promise<LocalLibraryScanResponse | null> {
+    const currentSettings = await this.ensureSettingsLoaded()
+    const libraryPath = currentSettings.localLibraryPath
+    const storedIndex = await this.readStoredLocalLibraryIndex()
+
+    if (!storedIndex || !libraryPath || storedIndex.path !== libraryPath) {
+      return null
+    }
+
+    const normalizedAbsolutePath = this.normalizePath(absolutePath)
+    const targetItem = storedIndex.items.find((item) => this.normalizePath(item.absolutePath) === normalizedAbsolutePath)
+
+    if (!targetItem) {
+      return null
+    }
+
+    if ((targetItem.sourceLastUpdatedAt ?? null) === (sourceLastUpdatedAt ?? null)) {
+      return storedIndex
+    }
+
+    const nextItems = storedIndex.items.map((item) =>
+      item.id === targetItem.id
+        ? {
+            ...item,
+            sourceLastUpdatedAt: sourceLastUpdatedAt ?? null
+          }
+        : item
+    )
+
+    const nextIndex: LocalLibraryScanResponse = {
+      ...storedIndex,
+      items: nextItems
+    }
+
+    return this.saveLocalLibraryIndex(nextIndex)
   }
 
   private normalizeManualMetadataOverride(

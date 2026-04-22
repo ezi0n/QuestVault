@@ -40,6 +40,10 @@ interface UiNotice {
   tone: UiNoticeTone
 }
 
+interface SignatureMismatchDialogState {
+  packageName: string
+}
+
 function buildDeviceSnapshot(response: DeviceListResponse | null): Map<string, { label: string; state: string }> {
   return new Map((response?.devices ?? []).map((device) => [device.id, { label: device.label, state: device.state }]))
 }
@@ -503,6 +507,8 @@ function App() {
   const [vrSrcMaintenanceBusy, setVrSrcMaintenanceBusy] = useState(false)
   const [vrSrcActionBusyReleaseNames, setVrSrcActionBusyReleaseNames] = useState<string[]>([])
   const [vrSrcMessage, setVrSrcMessage] = useState<UiNotice | null>(null)
+  const [signatureMismatchDialog, setSignatureMismatchDialog] = useState<SignatureMismatchDialogState | null>(null)
+  const [signatureMismatchAcknowledged, setSignatureMismatchAcknowledged] = useState(false)
   const [saveGamesBusy, setSaveGamesBusy] = useState(false)
   const [saveGamesBatchBusy, setSaveGamesBatchBusy] = useState(false)
   const [saveGamesActionBusyPackageId, setSaveGamesActionBusyPackageId] = useState<string | null>(null)
@@ -524,6 +530,7 @@ function App() {
   const vrSrcInitialSyncAttemptedRef = useRef(false)
   const gamesInstallBusyIdsRef = useRef<string[]>([])
   const vrSrcActionBusyReleaseNamesRef = useRef<string[]>([])
+  const signatureMismatchConfirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
   const subtitle =
     activeTab === 'manager'
       ? 'ADB device operations, live devices and ADB runtime visibility'
@@ -561,6 +568,21 @@ function App() {
   const readyUsbDevice =
     readyDevices.find((device) => device.transport === 'usb' || device.transport === 'emulator') ?? null
   const deviceStatusWifiDisconnectTargetId = readyWifiDevice?.id ?? null
+
+  function resolveSignatureMismatchDialog(confirmed: boolean) {
+    signatureMismatchConfirmResolveRef.current?.(confirmed)
+    signatureMismatchConfirmResolveRef.current = null
+    setSignatureMismatchDialog(null)
+    setSignatureMismatchAcknowledged(false)
+  }
+
+  function requestSignatureMismatchConfirmation(packageName: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      signatureMismatchConfirmResolveRef.current = resolve
+      setSignatureMismatchDialog({ packageName })
+      setSignatureMismatchAcknowledged(false)
+    })
+  }
 
   function enqueueLiveQueueItem(
     input: Omit<LiveQueueItem, 'updatedAt' | 'transferControl'> & {
@@ -1476,9 +1498,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         response.packageName &&
         options.retryAfterSignatureMismatch
       ) {
-        const confirmed = window.confirm(
-          `QuestVault could not update ${response.packageName} because the installed app uses a different signing key.\n\nUninstall the existing app from the selected headset and retry the install?\n\nThis may remove the app's data and saves if they are not backed up first.`
-        )
+        const confirmed = await requestSignatureMismatchConfirmation(response.packageName)
 
         if (confirmed) {
           updateLiveQueueItem(queueId, {
@@ -2954,9 +2974,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       let response = await window.api.devices.installLocalLibraryItem(selectedDeviceId, itemId)
       const recoveryPackageName = response.packageName ?? indexedItem?.packageIds[0] ?? null
       if (isSignatureMismatchFailure(response) && recoveryPackageName) {
-        const confirmed = window.confirm(
-          `QuestVault could not update ${recoveryPackageName} because the installed app uses a different signing key.\n\nUninstall the existing app from the selected headset and retry the install?\n\nThis may remove the app's data and saves if they are not backed up first.`
-        )
+        const confirmed = await requestSignatureMismatchConfirmation(recoveryPackageName)
 
         if (confirmed) {
           updateLiveQueueItem(queueId, {
@@ -3060,9 +3078,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
       let response = await window.api.devices.installManualPath(selectedDeviceId, sourcePath)
       if (isSignatureMismatchFailure(response) && response.packageName) {
-        const confirmed = window.confirm(
-          `QuestVault could not update ${response.packageName} because the installed app uses a different signing key.\n\nUninstall the existing app from the selected headset and retry the install?\n\nThis may remove the app's data and saves if they are not backed up first.`
-        )
+        const confirmed = await requestSignatureMismatchConfirmation(response.packageName)
 
         if (confirmed) {
           updateLiveQueueItem(queueId, {
@@ -3578,7 +3594,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }, [settings?.backupPath, backupStorageIndex, localLibraryIndex])
 
   return (
-    <WireframeShell
+    <>
+      <WireframeShell
       activeTab={activeTab}
       onTabChange={setActiveTab}
       deviceStatus={deviceStatus}
@@ -3693,7 +3710,71 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       }}
       onRestoreSaveBackup={restoreSaveBackup}
       onDeleteSaveBackup={deleteSaveBackup}
-    />
+      />
+      {signatureMismatchDialog ? (
+        <>
+          <div className="library-scan-backdrop" onClick={() => resolveSignatureMismatchDialog(false)} />
+          <section
+            aria-label="Signature mismatch confirmation"
+            aria-modal="true"
+            className="library-support-dialog signature-mismatch-dialog surface-panel"
+            role="dialog"
+          >
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Warning</p>
+                <h2>Uninstall and Retry?</h2>
+                <p className="section-copy compact">
+                  QuestVault could not update <strong>{signatureMismatchDialog.packageName}</strong> because the
+                  installed app on the selected headset uses a different signing key.
+                </p>
+              </div>
+              <button className="close-pill" onClick={() => resolveSignatureMismatchDialog(false)} type="button">
+                Close
+              </button>
+            </div>
+
+            <div className="signature-mismatch-warning-card">
+              <strong>Signature mismatch detected</strong>
+              <span>
+                QuestVault must uninstall the currently installed copy before it can retry the install with the new
+                package.
+              </span>
+            </div>
+
+            <div className="signature-mismatch-warning-card is-danger">
+              <strong>Data and save warning</strong>
+              <span>
+                Uninstalling the existing app may remove its local data and saves if they are not already backed up.
+              </span>
+            </div>
+
+            <label className="signature-mismatch-acknowledge">
+              <input
+                checked={signatureMismatchAcknowledged}
+                onChange={(event) => setSignatureMismatchAcknowledged(event.target.checked)}
+                type="checkbox"
+              />
+              <span>I understand that uninstalling may remove app data and saves from the headset.</span>
+            </label>
+
+            <div className="signature-mismatch-actions">
+              <button className="close-pill" onClick={() => resolveSignatureMismatchDialog(false)} type="button">
+                Cancel
+              </button>
+              <button
+                className="action-pill action-pill-danger action-pill-hazard action-pill-hazard-white"
+                disabled={!signatureMismatchAcknowledged}
+                onClick={() => resolveSignatureMismatchDialog(true)}
+                type="button"
+              >
+                Uninstall and Retry
+              </button>
+            </div>
+          </section>
+        </>
+      ) : null}
+    </>
   )
 }
 

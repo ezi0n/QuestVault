@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.5.8`
+Current documented application version: `0.5.9`
 
 ## Overview
 
@@ -20,6 +20,7 @@ You can:
 
 - search the Local Library
 - browse in `Grid View` or `List View`
+- review Local Library status/catalog/new/update summary pills
 - review duplicate package families
 - install/update local items
 - open the vrSrc remote source panel
@@ -53,6 +54,17 @@ Selecting a local item opens a right-side drawer where you can inspect:
 - older local versions
 
 If older versions exist, choose a specific older version and delete it with confirmation.
+
+For install, uninstall, and delete actions, the drawer now closes immediately so the resulting work is visible in `Live`. Metadata and artwork extraction flows stay in the drawer.
+
+### Local Library list dates
+
+In `List View`, the Local Library includes a `Date` column.
+
+- primary source: retained Local Library source date
+- fallback source: matched vrSrc `lastUpdated` date when available
+- format: `DD-MM-YYYY`
+- sort modes: `Title` and `Date`
 
 ## vrSrc
 

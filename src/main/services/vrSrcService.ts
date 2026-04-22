@@ -1380,13 +1380,17 @@ class VrSrcService {
     }
 
     try {
+      const catalogItem = await this.findCatalogItem(releaseName)
       const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library')
       const importSourcePath = await this.resolveLibraryImportSource(sourcePath)
       const targetPath = await this.createUniqueLibraryTarget(libraryPath, releaseName)
       await cp(importSourcePath, targetPath, { recursive: true, force: false })
       await settingsService.rescanLocalLibrary()
+      await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
+        targetPath,
+        catalogItem?.lastUpdated ?? null
+      )
       await this.cleanupReleasePayload(sourcePath)
-      const catalogItem = await this.findCatalogItem(releaseName)
 
       return {
         success: true,
@@ -1446,11 +1450,16 @@ class VrSrcService {
     }
 
     try {
+      const catalogItem = await this.findCatalogItem(releaseName)
       const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library-and-install')
       const importSourcePath = await this.resolveLibraryImportSource(sourcePath)
       const targetPath = await this.createUniqueLibraryTarget(libraryPath, releaseName)
       await cp(importSourcePath, targetPath, { recursive: true, force: false })
       await settingsService.rescanLocalLibrary()
+      await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
+        targetPath,
+        catalogItem?.lastUpdated ?? null
+      )
 
       const installResponse = await deviceService.installManualPath(serial, targetPath, {
         onQueued: async () => {
@@ -1520,7 +1529,6 @@ class VrSrcService {
       })
 
       await this.cleanupReleasePayload(sourcePath)
-      const catalogItem = await this.findCatalogItem(releaseName)
 
       return {
         success: installResponse.success,

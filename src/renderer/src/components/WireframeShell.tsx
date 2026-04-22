@@ -186,13 +186,13 @@ const gameFilters = [
   { id: 'all', label: 'All' },
   { id: 'installed', label: 'Installed' },
   { id: 'updates', label: 'Updates' },
-  { id: 'ready', label: 'Ready to Install' },
+  { id: 'ready', label: 'In Library' },
   { id: 'offline', label: 'Backup Storage' },
   { id: 'unidentified', label: 'Review' }
 ] as const
 
 type GamesFilterId = (typeof gameFilters)[number]['id']
-type GamesSortKey = 'title' | 'size'
+type GamesSortKey = 'title' | 'date' | 'size'
 type GamesSortDirection = 'asc' | 'desc'
 type GamesDisplayMode = ViewDisplayMode
 
@@ -228,6 +228,8 @@ type LibraryGameRow = {
   heroImageUri: string | null
   thumbnailUri: string | null
   installReady: boolean
+  sourceLastUpdatedAt: string | null
+  modifiedAt: string | null
   kind: LocalLibraryIndexedItem['kind']
   relativePath: string
   duplicateGroupKey: string
@@ -782,6 +784,29 @@ function buildGameMetaMatchKey(source: LibraryGameRow['source'], itemId: string)
   return `${source}:${itemId}`
 }
 
+function selectLatestVrSrcTimestamp(current: string | null, candidate: string | null): string | null {
+  if (!candidate) {
+    return current
+  }
+
+  if (!current) {
+    return candidate
+  }
+
+  const currentTime = Date.parse(current)
+  const candidateTime = Date.parse(candidate)
+
+  if (Number.isNaN(candidateTime)) {
+    return current
+  }
+
+  if (Number.isNaN(currentTime) || candidateTime > currentTime) {
+    return candidate
+  }
+
+  return current
+}
+
 const settingsPathFields: {
   key: SettingsPathKey
   title: string
@@ -1245,6 +1270,36 @@ function formatDateLabel(value: string | null | undefined): string {
     month: 'short',
     day: 'numeric'
   })
+}
+
+function formatSortDateLabel(value: string | null | undefined): string {
+  if (!value) {
+    return '—'
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return '—'
+  }
+
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const year = date.getFullYear()
+  return `${day}-${month}-${year}`
+}
+
+function isWithinLastDays(value: string | null | undefined, days: number): boolean {
+  if (!value) {
+    return false
+  }
+
+  const parsed = Date.parse(value)
+  if (Number.isNaN(parsed)) {
+    return false
+  }
+
+  const now = Date.now()
+  return parsed >= now - days * 24 * 60 * 60 * 1000
 }
 
 function describeLibraryItemKind(item: LocalLibraryIndexedItem): string {
@@ -1752,6 +1807,15 @@ function GamesView(props: {
   const installedVersionsByPackageId = new Map(
     (deviceAppsResponse?.apps ?? []).map((app) => [app.packageId.toLowerCase(), app.version ?? null])
   )
+  const vrSrcLastUpdatedByPackageId = (vrSrcCatalog?.items ?? []).reduce((timestamps, item) => {
+    const packageId = item.packageName.trim().toLowerCase()
+    if (!packageId) {
+      return timestamps
+    }
+
+    timestamps.set(packageId, selectLatestVrSrcTimestamp(timestamps.get(packageId) ?? null, item.lastUpdated))
+    return timestamps
+  }, new Map<string, string | null>())
   const libraryGameRows = collapseLibraryGameRows(
     (localLibraryIndex?.items ?? [])
     .filter((item) => item.availability === 'present')
@@ -1766,6 +1830,11 @@ function GamesView(props: {
           packageIds
             .map((packageId) => installedVersionsByPackageId.get(packageId.toLowerCase()) ?? null)
             .find((value): value is string => Boolean(value)) ?? null
+        const inferredVrSrcLastUpdatedAt =
+          packageIds
+            .map((packageId) => vrSrcLastUpdatedByPackageId.get(packageId.toLowerCase()) ?? null)
+            .find((value): value is string => Boolean(value)) ?? null
+        const resolvedSourceLastUpdatedAt = item.sourceLastUpdatedAt ?? inferredVrSrcLastUpdatedAt ?? null
         const storeVersion = display.version
         const libraryVersion = item.libraryVersion
         const primaryVersionValue = libraryVersion ?? storeVersion
@@ -1783,7 +1852,7 @@ function GamesView(props: {
         filterTags.push('updates')
       }
 
-      if (item.installReady && !isInstalled) {
+      if (item.sourceLastUpdatedAt || item.installReady || item.kind === 'archive' || item.kind === 'folder' || item.kind === 'apk') {
         filterTags.push('ready')
       }
 
@@ -1851,6 +1920,8 @@ function GamesView(props: {
         filterTags,
         heroImageUri: display.heroImageUri,
         installReady: item.installReady,
+        sourceLastUpdatedAt: resolvedSourceLastUpdatedAt,
+        modifiedAt: item.modifiedAt ?? null,
         kind: item.kind,
         relativePath: item.relativePath,
         thumbnailUri: display.thumbnailUri,
@@ -1874,6 +1945,11 @@ function GamesView(props: {
           packageIds
             .map((packageId) => installedVersionsByPackageId.get(packageId.toLowerCase()) ?? null)
             .find((value): value is string => Boolean(value)) ?? null
+        const inferredVrSrcLastUpdatedAt =
+          packageIds
+            .map((packageId) => vrSrcLastUpdatedByPackageId.get(packageId.toLowerCase()) ?? null)
+            .find((value): value is string => Boolean(value)) ?? null
+        const resolvedSourceLastUpdatedAt = item.sourceLastUpdatedAt ?? inferredVrSrcLastUpdatedAt ?? null
         const storeVersion = display.version
         const libraryVersion = item.libraryVersion
         const primaryVersionValue = libraryVersion ?? storeVersion
@@ -1924,6 +2000,8 @@ function GamesView(props: {
           filterTags,
           heroImageUri: display.heroImageUri,
           installReady: false,
+          sourceLastUpdatedAt: resolvedSourceLastUpdatedAt,
+          modifiedAt: item.modifiedAt ?? null,
           kind: item.kind,
           relativePath: item.relativePath,
           thumbnailUri: display.thumbnailUri,
@@ -1935,6 +2013,7 @@ function GamesView(props: {
   )
 
   const combinedGameRows = [...libraryGameRows, ...backupGameRows]
+  const latestLibraryGameRows = selectLatestLibraryGameRows(libraryGameRows)
   const latestGameRows = selectLatestLibraryGameRows(combinedGameRows)
   const hasGamesSearchQuery = Boolean(gamesSearch.trim())
   const visibleGameRows = hasGamesSearchQuery ? combinedGameRows : latestGameRows
@@ -1946,6 +2025,17 @@ function GamesView(props: {
     return matchesSearchText(game.searchTerms, gamesSearch)
   })
   const sortedGameRows = [...filteredGameRows].sort((left, right) => {
+    if (gamesSortKey === 'date') {
+      const leftDate = left.sourceLastUpdatedAt ? Date.parse(left.sourceLastUpdatedAt) : Number.NEGATIVE_INFINITY
+      const rightDate = right.sourceLastUpdatedAt ? Date.parse(right.sourceLastUpdatedAt) : Number.NEGATIVE_INFINITY
+      const safeLeftDate = Number.isNaN(leftDate) ? Number.NEGATIVE_INFINITY : leftDate
+      const safeRightDate = Number.isNaN(rightDate) ? Number.NEGATIVE_INFINITY : rightDate
+
+      if (safeLeftDate !== safeRightDate) {
+        return gamesSortDirection === 'asc' ? safeLeftDate - safeRightDate : safeRightDate - safeLeftDate
+      }
+    }
+
     if (gamesSortKey === 'size') {
       const leftSize = left.sizeBytes ?? 0
       const rightSize = right.sizeBytes ?? 0
@@ -1955,6 +2045,12 @@ function GamesView(props: {
     const comparison = left.title.localeCompare(right.title, undefined, { sensitivity: 'base' })
     return gamesSortDirection === 'asc' ? comparison : -comparison
   })
+  const localLibraryAvailable = Boolean(settings?.localLibraryPath && localLibraryIndex?.path && localLibraryIndex?.scannedAt)
+  const localLibrarySummary = {
+    catalogCount: latestLibraryGameRows.length,
+    newCount: latestLibraryGameRows.filter((item) => isWithinLastDays(item.modifiedAt, 7)).length,
+    updateCount: latestLibraryGameRows.filter((item) => item.hasLibraryUpdate).length
+  }
   const libraryHighestVersionCodeByPackageId = (localLibraryIndex?.items ?? [])
     .filter((item) => item.availability === 'present')
     .reduce((versions, item) => {
@@ -2005,6 +2101,23 @@ function GamesView(props: {
     }
 
     const itemStatus = vrSrcItemStatusByReleaseName.get(item.releaseName)
+
+    if (gamesFilter === 'installed') {
+      if (!installedPackageIds.has(item.packageName.toLowerCase())) {
+        return false
+      }
+    } else if (gamesFilter === 'updates') {
+      if (!(itemStatus?.isUpdate ?? false)) {
+        return false
+      }
+    } else if (gamesFilter === 'ready') {
+      if (!(itemStatus?.isInLibrary ?? false)) {
+        return false
+      }
+    } else if (gamesFilter === 'offline' || gamesFilter === 'unidentified') {
+      return false
+    }
+
     if (vrSrcFilter === 'updates') {
       return itemStatus?.isUpdate ?? false
     }
@@ -2298,7 +2411,17 @@ function GamesView(props: {
     }
 
     setGamesSortKey(key)
-    setGamesSortDirection(key === 'size' ? 'desc' : 'asc')
+    setGamesSortDirection(key === 'title' ? 'asc' : 'desc')
+  }
+  const toggleLocalLibrarySortMode = () => {
+    if (gamesSortKey === 'date') {
+      setGamesSortKey('title')
+      setGamesSortDirection('asc')
+      return
+    }
+
+    setGamesSortKey('date')
+    setGamesSortDirection('desc')
   }
 
   useEffect(() => {
@@ -2458,6 +2581,7 @@ function GamesView(props: {
       return
     }
 
+    setSelectedGameId(null)
     setPurgeLowerVersionsBusy(true)
 
     try {
@@ -2465,6 +2589,33 @@ function GamesView(props: {
     } finally {
       setPurgeLowerVersionsBusy(false)
     }
+  }
+
+  async function installSelectedLocalLibraryItem() {
+    if (!selectedGame?.itemId) {
+      return
+    }
+
+    setSelectedGameId(null)
+    await onInstallLocalLibraryItem(selectedGame.itemId)
+  }
+
+  async function uninstallSelectedInstalledGame() {
+    if (!selectedGamePrimaryPackageId) {
+      return
+    }
+
+    setSelectedGameId(null)
+    await onUninstallInstalledApp(selectedGamePrimaryPackageId)
+  }
+
+  async function deleteSelectedLibraryItem() {
+    if (!selectedGame?.itemId) {
+      return
+    }
+
+    setSelectedGameId(null)
+    await onPurgeLibraryItem(selectedGame.itemId)
   }
 
   function updateManualMetadataField(field: keyof ManualGameMetadataOverride, value: string) {
@@ -2677,13 +2828,13 @@ function GamesView(props: {
                 onClick={() => setGamesFilter(filter.id)}
                 title={
                   filter.id === 'all'
-                    ? 'Show every title from the current Apps & Games catalog'
+                    ? 'Show every title across vrSrc, the Local Library, and backup storage'
                     : filter.id === 'installed'
-                      ? 'Show only titles already installed on the selected headset'
+                      ? 'Show vrSrc and Local Library titles already installed on the selected headset'
                       : filter.id === 'updates'
-                        ? 'Show installed titles where the Local Library contains a newer version that can be upgraded'
+                        ? 'Show vrSrc and Local Library titles where a newer version is available'
                         : filter.id === 'ready'
-                          ? 'Show titles that are ready to install from the Local Library'
+                          ? 'Show titles already present in the Local Library'
                           : filter.id === 'offline'
                             ? 'Show titles found in the Backups path only'
                             : 'Show titles that still need metadata identification'
@@ -3076,11 +3227,57 @@ function GamesView(props: {
       ) : null}
 
       <section className="surface-panel games-workspace-shell">
-        <p className="eyebrow games-workspace-eyebrow">Local Library</p>
-        <p className="games-workspace-copy">
+        <div className="games-workspace-header">
+          <div className="games-workspace-heading-row">
+            <div className="games-workspace-header-copy">
+              <p className="eyebrow games-workspace-eyebrow">Local Library</p>
+            </div>
+            <div className="games-workspace-summary-row">
+              <div
+                className="vrsrc-summary-pill"
+                title={localLibraryAvailable ? 'The Local Library path is configured and readable.' : 'The Local Library path is unavailable or has not been scanned yet.'}
+              >
+                <span className="eyebrow">Status</span>
+                <strong className="vrsrc-status-indicator-wrap">
+                  <span
+                    aria-label={localLibraryAvailable ? 'Accessible' : 'Unavailable'}
+                    className={
+                      localLibraryAvailable
+                        ? 'runtime-state-dot runtime-state-dot-ready'
+                        : 'runtime-state-dot runtime-state-dot-danger'
+                    }
+                    role="img"
+                  />
+                </strong>
+              </div>
+              <div className="vrsrc-summary-pill" title="Current count of titles present in the Local Library.">
+                <span className="eyebrow">Catalog</span>
+                <strong>{localLibrarySummary.catalogCount}</strong>
+              </div>
+              <div className="vrsrc-summary-pill" title="Titles whose Local Library file or folder timestamp falls within the last 7 days.">
+                <span className="eyebrow">New</span>
+                <strong>{localLibrarySummary.newCount}</strong>
+              </div>
+              <div className="vrsrc-summary-pill" title="Installed titles where the Local Library has a newer version ready to use.">
+                <span className="eyebrow">Updates</span>
+                <strong>{localLibrarySummary.updateCount}</strong>
+              </div>
+              <button
+                className="vrsrc-summary-pill"
+                onClick={toggleLocalLibrarySortMode}
+                title="Toggle Local Library sorting between title order and remote/source date order."
+                type="button"
+              >
+                <span className="eyebrow">Sort</span>
+                <strong>{gamesSortKey === 'date' ? 'Date' : 'Title'}</strong>
+              </button>
+            </div>
+          </div>
+          <p className="games-workspace-copy">
           <span>Browse what is already in your Local Library, then decide what to</span>
           <span>install, review, update, or clean up.</span>
-        </p>
+          </p>
+        </div>
         {displayMode === 'gallery' ? (
           <section className="games-gallery-surface">
             <div
@@ -3153,7 +3350,7 @@ function GamesView(props: {
           </section>
         ) : (
           <section className="games-table-surface">
-            <div className="table-header four-col">
+            <div className="table-header five-col games-table-header-five-col">
               <button
                 className={gamesSortKey === 'title' ? 'table-sort-button active' : 'table-sort-button'}
                 onClick={() => toggleGamesSort('title')}
@@ -3163,6 +3360,14 @@ function GamesView(props: {
                 <strong>{gamesSortKey === 'title' ? (gamesSortDirection === 'asc' ? '↑' : '↓') : '↕'}</strong>
               </button>
               <span>Version</span>
+              <button
+                className={gamesSortKey === 'date' ? 'table-sort-button active' : 'table-sort-button'}
+                onClick={() => toggleGamesSort('date')}
+                type="button"
+              >
+                <span>Date</span>
+                <strong>{gamesSortKey === 'date' ? (gamesSortDirection === 'asc' ? '↑' : '↓') : '↕'}</strong>
+              </button>
               <button
                 className={gamesSortKey === 'size' ? 'table-sort-button active' : 'table-sort-button'}
                 onClick={() => toggleGamesSort('size')}
@@ -3180,7 +3385,7 @@ function GamesView(props: {
             >
               {sortedGameRows.map((game) => (
                 <article
-                  className={selectedGameId === game.id ? 'table-row-card four-col game-row-card active' : 'table-row-card four-col game-row-card'}
+                  className={selectedGameId === game.id ? 'table-row-card five-col games-table-row-five-col game-row-card active' : 'table-row-card five-col games-table-row-five-col game-row-card'}
                   key={game.id}
                   onClick={() => {
                     setSelectedVrSrcReleaseName(null)
@@ -3220,6 +3425,7 @@ function GamesView(props: {
                       <span key={`${game.id}-${line}`}>{line}</span>
                     ))}
                   </div>
+                  <span className="games-date-cell">{formatSortDateLabel(game.sourceLastUpdatedAt)}</span>
                   <span className="games-size-cell">{game.size}</span>
                   {game.action === 'Installed' ? (
                     <span className="status-pill status-ready game-action-indicator">
@@ -3865,7 +4071,7 @@ function GamesView(props: {
                   <button
                     className="action-pill"
                     disabled={!selectedDeviceId || selectedGameInstallBusy}
-                    onClick={() => void onInstallLocalLibraryItem(selectedGame.itemId!)}
+                    onClick={() => void installSelectedLocalLibraryItem()}
                     type="button"
                   >
                     <span className="action-pill-icon" aria-hidden="true">
@@ -3887,7 +4093,7 @@ function GamesView(props: {
                   <button
                     className="action-pill action-pill-danger"
                     disabled={selectedGameUninstallBusy}
-                    onClick={() => void onUninstallInstalledApp(selectedGamePrimaryPackageId)}
+                    onClick={() => void uninstallSelectedInstalledGame()}
                     type="button"
                   >
                     <span className="action-pill-icon" aria-hidden="true">
@@ -3908,7 +4114,7 @@ function GamesView(props: {
                 <button
                   className="action-pill action-pill-danger action-pill-hazard action-pill-hazard-white"
                   disabled={selectedLibraryPurgeBusy}
-                  onClick={() => void onPurgeLibraryItem(selectedGame.itemId!)}
+                  onClick={() => void deleteSelectedLibraryItem()}
                   type="button"
                 >
                   <span className="action-pill-icon" aria-hidden="true">

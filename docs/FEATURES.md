@@ -9,6 +9,8 @@
 - Search-first workflow across local items, backup-storage entries, and metadata-enriched titles.
 - Version-family handling that collapses duplicate packages during browsing and expands matches during search.
 - Local detail drawer with install, metadata, version, and cleanup actions.
+- Local Library summary pills for status, catalog size, recent additions, update count, and title/date sorting.
+- Local Library list view date column with vrSrc-backed fallback dates for chronological sorting.
 
 ### Installed Inventory
 
@@ -46,9 +48,11 @@
 - Shared Live queue for scans, installs, downloads, dependency setup, backups, deletes, and failures.
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
+- Local detail drawers auto-close into Live for install/uninstall/delete actions while keeping extraction and metadata flows visible in-place.
 - Shared close-pill language across support dialogs and drawers.
 - Support popups for maintenance tasks instead of large always-inline sections.
 - Current icon system aligned across macOS, Windows, and Linux packaging assets.
+- Signature-mismatch install recovery now uses an in-app guarded confirmation dialog instead of a simple native OK/Cancel prompt.
 
 ## vrSrc-Specific Features
 
@@ -75,7 +79,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.5.8`
+Current documented release line: `0.5.9`
 
 ## Product Position
 

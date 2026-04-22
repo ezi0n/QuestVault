@@ -1297,6 +1297,7 @@ class DeviceService {
               archiveCount: 0,
               libraryVersion: null,
               libraryVersionCode: null,
+              sourceLastUpdatedAt: null,
               manualStoreId: null,
               manualStoreIdEdited: false,
               manualMetadata: null,

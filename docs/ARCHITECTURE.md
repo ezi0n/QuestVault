@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.5.8`
+Current documented application version: `0.5.9`
 
 ## Runtime Shape
 
@@ -52,6 +52,7 @@ The settings and indexing services own:
 - missing-entry tracking
 - stale index cleanup
 - manual metadata/store-id override support
+- source-date retention for Local Library items so remote update dates can be surfaced and sorted in Local Library views
 
 The local library index persists the app’s install-ready truth, while metadata enrichment remains additive.
 
