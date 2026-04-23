@@ -35,6 +35,7 @@
 - Install remote releases directly to the connected headset.
 - Resume interrupted remote downloads where possible.
 - Clean up staged downloads after successful handoff.
+- Prefer IPv4 on Windows for vrSrc remote requests when Cloudflare blocks the IPv6 path.
 - View a remote detail drawer with:
   - artwork
   - remote and library version comparison
@@ -79,6 +80,7 @@
 - Scan orphaned `/sdcard/Android/data` and `/sdcard/Android/obb` entries.
 - Delete leftover headset data from the orphaned-data popup.
 - Surface long-running operations, failures, and setup work through Live instead of inline banners wherever possible.
+- Fall back to generated artwork surfaces when remote or cached artwork URLs fail to load.
 
 ## Build and Packaging
 

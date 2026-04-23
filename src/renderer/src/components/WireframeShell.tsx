@@ -420,6 +420,36 @@ function renderFallbackArtworkSurface(
   )
 }
 
+function ResilientArtworkImage({
+  src,
+  alt = '',
+  className,
+  label,
+  artworkKey,
+  variant,
+  fallbackClassName
+}: {
+  src: string | null | undefined
+  alt?: string
+  className: string
+  label: string | null | undefined
+  artworkKey: string | null | undefined
+  variant: FallbackArtworkVariant
+  fallbackClassName: string
+}): ReactNode {
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  useEffect(() => {
+    setLoadFailed(false)
+  }, [src])
+
+  if (!src || loadFailed) {
+    return renderFallbackArtworkSurface(label, artworkKey, variant, fallbackClassName)
+  }
+
+  return <img alt={alt} className={className} onError={() => setLoadFailed(true)} src={src} />
+}
+
 function formatGameActionLabel(action: string): string {
   if (action === 'Install') {
     return 'Install Now'
@@ -3085,16 +3115,15 @@ function GamesView(props: {
                         tabIndex={0}
                       >
                         <div className="game-gallery-hero-shell">
-                          {item.artworkUrl ? (
-                            <img alt="" className="game-gallery-hero-image" src={item.artworkUrl} />
-                          ) : (
-                            renderFallbackArtworkSurface(
-                              item.name,
-                              item.releaseName,
-                              'gallery',
-                              'game-gallery-hero-placeholder fallback-art-surface'
-                            )
-                          )}
+                          <ResilientArtworkImage
+                            alt=""
+                            artworkKey={item.releaseName}
+                            className="game-gallery-hero-image"
+                            fallbackClassName="game-gallery-hero-placeholder fallback-art-surface"
+                            label={item.name}
+                            src={item.artworkUrl}
+                            variant="gallery"
+                          />
                           <div className="game-gallery-title-banner">
                             <strong>{item.name}</strong>
                           </div>
@@ -3155,7 +3184,15 @@ function GamesView(props: {
                         <div className="vrsrc-row-primary">
                           {item.artworkUrl ? (
                             <div className="vrsrc-thumb">
-                              <img alt="" className="vrsrc-thumb-image" src={item.artworkUrl} />
+                              <ResilientArtworkImage
+                                alt=""
+                                artworkKey={item.releaseName}
+                                className="vrsrc-thumb-image"
+                                fallbackClassName="vrsrc-thumb-placeholder fallback-art-surface"
+                                label={item.name}
+                                src={item.artworkUrl}
+                                variant="cover"
+                              />
                             </div>
                           ) : (
                             renderFallbackArtworkSurface(
@@ -3227,12 +3264,12 @@ function GamesView(props: {
       ) : null}
 
       <section className="surface-panel games-workspace-shell">
-        <div className="games-workspace-header">
-          <div className="games-workspace-heading-row">
-            <div className="games-workspace-header-copy">
+        <div className="vrsrc-header">
+          <div className="vrsrc-heading-row">
+            <div className="vrsrc-heading-copy">
               <p className="eyebrow games-workspace-eyebrow">Local Library</p>
             </div>
-            <div className="games-workspace-summary-row">
+            <div className="vrsrc-heading-actions">
               <div
                 className="vrsrc-summary-pill"
                 title={localLibraryAvailable ? 'The Local Library path is configured and readable.' : 'The Local Library path is unavailable or has not been scanned yet.'}
@@ -3273,7 +3310,7 @@ function GamesView(props: {
               </button>
             </div>
           </div>
-          <p className="games-workspace-copy">
+          <p className="vrsrc-subtitle">
           <span>Browse what is already in your Local Library, then decide what to</span>
           <span>install, review, update, or clean up.</span>
           </p>
@@ -3309,20 +3346,15 @@ function GamesView(props: {
                   }}
                 >
                   <div className="game-gallery-hero-shell">
-                    {game.heroImageUri ?? game.thumbnailUri ? (
-                      <img
-                        alt=""
-                        className="game-gallery-hero-image"
-                        src={game.heroImageUri ?? game.thumbnailUri ?? undefined}
-                      />
-                    ) : (
-                      renderFallbackArtworkSurface(
-                        game.title,
-                        game.itemId ?? game.id,
-                        'gallery',
-                        'game-gallery-hero-placeholder fallback-art-surface'
-                      )
-                    )}
+                    <ResilientArtworkImage
+                      alt=""
+                      artworkKey={game.itemId ?? game.id}
+                      className="game-gallery-hero-image"
+                      fallbackClassName="game-gallery-hero-placeholder fallback-art-surface"
+                      label={game.title}
+                      src={game.heroImageUri ?? game.thumbnailUri ?? undefined}
+                      variant="gallery"
+                    />
                     <div className="game-gallery-title-banner">
                       <strong>{game.title}</strong>
                     </div>
@@ -3402,18 +3434,17 @@ function GamesView(props: {
                   }}
                 >
                   <div className="game-row-primary">
-                    {game.thumbnailUri ? (
-                      <div className="game-thumb">
-                        <img alt="" className="game-thumb-image" src={game.thumbnailUri} />
-                      </div>
-                    ) : (
-                      renderFallbackArtworkSurface(
-                        game.title,
-                        game.itemId ?? game.id,
-                        'cover',
-                        'game-thumb-placeholder fallback-art-surface'
-                      )
-                    )}
+                    <div className="game-thumb">
+                      <ResilientArtworkImage
+                        alt=""
+                        artworkKey={game.itemId ?? game.id}
+                        className="game-thumb-image"
+                        fallbackClassName="game-thumb-placeholder fallback-art-surface"
+                        label={game.title}
+                        src={game.thumbnailUri}
+                        variant="cover"
+                      />
+                    </div>
                     <div className="row-title">
                       <strong>{game.title}</strong>
                       <p>{game.note}</p>
@@ -3499,29 +3530,27 @@ function GamesView(props: {
           <>
             <div className="games-drawer-artwork-stack">
               <div className="games-drawer-hero">
-                {selectedVrSrcItem.artworkUrl ? (
-                  <img alt="" className="games-drawer-hero-image" src={selectedVrSrcItem.artworkUrl} />
-                ) : (
-                  renderFallbackArtworkSurface(
-                    selectedVrSrcItem.name,
-                    selectedVrSrcItem.releaseName,
-                    'hero',
-                    'games-drawer-image-placeholder fallback-art-surface'
-                  )
-                )}
+                <ResilientArtworkImage
+                  alt=""
+                  artworkKey={selectedVrSrcItem.releaseName}
+                  className="games-drawer-hero-image"
+                  fallbackClassName="games-drawer-image-placeholder fallback-art-surface"
+                  label={selectedVrSrcItem.name}
+                  src={selectedVrSrcItem.artworkUrl}
+                  variant="hero"
+                />
               </div>
               <div className="games-drawer-title-row">
                 <div className="games-drawer-art">
-                  {selectedVrSrcItem.artworkUrl ? (
-                    <img alt="" className="games-drawer-art-image" src={selectedVrSrcItem.artworkUrl} />
-                  ) : (
-                    renderFallbackArtworkSurface(
-                      selectedVrSrcItem.name,
-                      selectedVrSrcItem.releaseName,
-                      'cover',
-                      'games-drawer-image-placeholder compact fallback-art-surface'
-                    )
-                  )}
+                  <ResilientArtworkImage
+                    alt=""
+                    artworkKey={selectedVrSrcItem.releaseName}
+                    className="games-drawer-art-image"
+                    fallbackClassName="games-drawer-image-placeholder compact fallback-art-surface"
+                    label={selectedVrSrcItem.name}
+                    src={selectedVrSrcItem.artworkUrl}
+                    variant="cover"
+                  />
                 </div>
                 <div className="games-drawer-title-block">
                   <h3>{selectedVrSrcItem.name}</h3>
@@ -3671,16 +3700,15 @@ function GamesView(props: {
                     : 'games-drawer-hero games-inline-edit-surface'
                 }
               >
-                {selectedGameHeroUri ? (
-                  <img alt="" className="games-drawer-hero-image" src={selectedGameHeroUri} />
-                ) : (
-                  renderFallbackArtworkSurface(
-                    effectiveSelectedGameDetails?.title ?? selectedGame.title,
-                    selectedGame.itemId ?? selectedGame.id,
-                    'hero',
-                    'games-drawer-image-placeholder fallback-art-surface'
-                  )
-                )}
+                <ResilientArtworkImage
+                  alt=""
+                  artworkKey={selectedGame.itemId ?? selectedGame.id}
+                  className="games-drawer-hero-image"
+                  fallbackClassName="games-drawer-image-placeholder fallback-art-surface"
+                  label={effectiveSelectedGameDetails?.title ?? selectedGame.title}
+                  src={selectedGameHeroUri}
+                  variant="hero"
+                />
                 {selectedGameHasNewerAvailableVersion ? (
                   <div className="games-drawer-hero-banner">
                     <strong>{selectedGameHeroUpdateBannerLabel}</strong>
@@ -3722,16 +3750,15 @@ function GamesView(props: {
                       : 'games-drawer-art games-inline-edit-surface'
                   }
                 >
-                  {selectedGameHeaderArtUri ? (
-                    <img alt="" className="games-drawer-art-image" src={selectedGameHeaderArtUri} />
-                  ) : (
-                    renderFallbackArtworkSurface(
-                      effectiveSelectedGameDetails?.title ?? selectedGame.title,
-                      selectedGame.itemId ?? selectedGame.id,
-                      'cover',
-                      'games-drawer-image-placeholder compact fallback-art-surface'
-                    )
-                  )}
+                  <ResilientArtworkImage
+                    alt=""
+                    artworkKey={selectedGame.itemId ?? selectedGame.id}
+                    className="games-drawer-art-image"
+                    fallbackClassName="games-drawer-image-placeholder compact fallback-art-surface"
+                    label={effectiveSelectedGameDetails?.title ?? selectedGame.title}
+                    src={selectedGameHeaderArtUri}
+                    variant="cover"
+                  />
                   <div
                     className={
                       manualMetadataEditorTarget === 'art'
@@ -4680,16 +4707,15 @@ function InventoryView(props: {
                         <div className="game-gallery-title-banner">
                           <strong>{displayLabel}</strong>
                         </div>
-                        {artworkUri ? (
-                          <img alt="" className="inventory-gallery-hero-image" src={artworkUri} />
-                        ) : (
-                          renderFallbackArtworkSurface(
-                            displayLabel,
-                            app.packageId,
-                            'gallery',
-                            'inventory-gallery-hero-placeholder fallback-art-surface'
-                          )
-                        )}
+                        <ResilientArtworkImage
+                          alt=""
+                          artworkKey={app.packageId}
+                          className="inventory-gallery-hero-image"
+                          fallbackClassName="inventory-gallery-hero-placeholder fallback-art-surface"
+                          label={displayLabel}
+                          src={artworkUri}
+                          variant="gallery"
+                        />
                         <div className="inventory-gallery-overlay">
                           <span className="inventory-gallery-meta">{formatBytes(app.totalFootprintBytes)}</span>
                           <div className="inventory-gallery-action-group">
@@ -4765,18 +4791,17 @@ function InventoryView(props: {
                       onClick={() => setSelectedInventoryPackageId(app.packageId)}
                     >
                       <div className="game-row-primary">
-                        {artworkUri ? (
-                          <div className="game-thumb">
-                            <img alt="" className="game-thumb-image" src={artworkUri} />
-                          </div>
-                        ) : (
-                          renderFallbackArtworkSurface(
-                            displayLabel,
-                            app.packageId,
-                            'cover',
-                            'game-thumb-placeholder fallback-art-surface'
-                          )
-                        )}
+                        <div className="game-thumb">
+                          <ResilientArtworkImage
+                            alt=""
+                            artworkKey={app.packageId}
+                            className="game-thumb-image"
+                            fallbackClassName="game-thumb-placeholder fallback-art-surface"
+                            label={displayLabel}
+                            src={artworkUri}
+                            variant="cover"
+                          />
+                        </div>
                         <div className="row-title inventory-row-title">
                           <strong>{displayLabel}</strong>
                           <p title={app.packageId}>{app.packageId}</p>
@@ -4883,29 +4908,27 @@ function InventoryView(props: {
                   <>
                     <div className="games-drawer-artwork-stack">
                       <div className="games-drawer-hero">
-                        {selectedInventoryArtworkUri ? (
-                          <img alt="" className="games-drawer-hero-image" src={selectedInventoryArtworkUri} />
-                        ) : (
-                          renderFallbackArtworkSurface(
-                            selectedInventoryDisplayLabel,
-                            selectedInventoryApp.packageId,
-                            'hero',
-                            'games-drawer-image-placeholder fallback-art-surface'
-                          )
-                        )}
+                        <ResilientArtworkImage
+                          alt=""
+                          artworkKey={selectedInventoryApp.packageId}
+                          className="games-drawer-hero-image"
+                          fallbackClassName="games-drawer-image-placeholder fallback-art-surface"
+                          label={selectedInventoryDisplayLabel}
+                          src={selectedInventoryArtworkUri}
+                          variant="hero"
+                        />
                       </div>
                       <div className="games-drawer-title-row">
                         <div className="games-drawer-art">
-                          {selectedInventoryArtworkUri ? (
-                            <img alt="" className="games-drawer-art-image" src={selectedInventoryArtworkUri} />
-                          ) : (
-                            renderFallbackArtworkSurface(
-                              selectedInventoryDisplayLabel,
-                              selectedInventoryApp.packageId,
-                              'cover',
-                              'games-drawer-image-placeholder compact fallback-art-surface'
-                            )
-                          )}
+                          <ResilientArtworkImage
+                            alt=""
+                            artworkKey={selectedInventoryApp.packageId}
+                            className="games-drawer-art-image"
+                            fallbackClassName="games-drawer-image-placeholder compact fallback-art-surface"
+                            label={selectedInventoryDisplayLabel}
+                            src={selectedInventoryArtworkUri}
+                            variant="cover"
+                          />
                         </div>
                         <div className="games-drawer-title-block">
                           <h3>{selectedInventoryDisplayLabel}</h3>
@@ -5337,16 +5360,15 @@ function GameSavesView(props: {
                     <div className="game-gallery-title-banner">
                       <strong>{card.title}</strong>
                     </div>
-                    {card.artworkUri ? (
-                      <img alt="" className="inventory-gallery-hero-image" src={card.artworkUri} />
-                    ) : (
-                      renderFallbackArtworkSurface(
-                        card.title,
-                        card.packageId,
-                        'gallery',
-                        'inventory-gallery-hero-placeholder fallback-art-surface'
-                      )
-                    )}
+                    <ResilientArtworkImage
+                      alt=""
+                      artworkKey={card.packageId}
+                      className="inventory-gallery-hero-image"
+                      fallbackClassName="inventory-gallery-hero-placeholder fallback-art-surface"
+                      label={card.title}
+                      src={card.artworkUri}
+                      variant="gallery"
+                    />
                     <div className="inventory-gallery-overlay save-games-gallery-overlay">
                       <span className="game-gallery-size save-games-gallery-meta">
                         {card.backupCount > 0 ? `${card.backupCount} ${card.backupCount === 1 ? 'Backup' : 'Backups'}` : 'No Backups'}
@@ -5395,35 +5417,29 @@ function GameSavesView(props: {
         {selectedCard ? (
           <>
             <div className="games-drawer-artwork-stack">
-              {selectedCard.artworkUri ? (
-                <div className="games-drawer-hero">
-                  <img alt="" className="games-drawer-hero-image" src={selectedCard.artworkUri} />
-                </div>
-              ) : (
-                <div className="games-drawer-hero">
-                  {renderFallbackArtworkSurface(
-                    selectedCard.title,
-                    selectedCard.packageId,
-                    'hero',
-                    'games-drawer-image-placeholder fallback-art-surface'
-                  )}
-                </div>
-              )}
+              <div className="games-drawer-hero">
+                <ResilientArtworkImage
+                  alt=""
+                  artworkKey={selectedCard.packageId}
+                  className="games-drawer-hero-image"
+                  fallbackClassName="games-drawer-image-placeholder fallback-art-surface"
+                  label={selectedCard.title}
+                  src={selectedCard.artworkUri}
+                  variant="hero"
+                />
+              </div>
               <div className="games-drawer-title-row">
-                {selectedCard.artworkUri ? (
-                  <div className="games-drawer-art">
-                    <img alt="" className="games-drawer-art-image" src={selectedCard.artworkUri} />
-                  </div>
-                ) : (
-                  <div className="games-drawer-art">
-                    {renderFallbackArtworkSurface(
-                      selectedCard.title,
-                      selectedCard.packageId,
-                      'cover',
-                      'games-drawer-image-placeholder compact fallback-art-surface'
-                    )}
-                  </div>
-                )}
+                <div className="games-drawer-art">
+                  <ResilientArtworkImage
+                    alt=""
+                    artworkKey={selectedCard.packageId}
+                    className="games-drawer-art-image"
+                    fallbackClassName="games-drawer-image-placeholder compact fallback-art-surface"
+                    label={selectedCard.title}
+                    src={selectedCard.artworkUri}
+                    variant="cover"
+                  />
+                </div>
                 <div className="games-drawer-title-block">
                   <h3>{selectedCard.title}</h3>
                   <p>{selectedCard.packageId}</p>

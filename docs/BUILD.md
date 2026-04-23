@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Documented application version: `0.5.9`
+Documented application version: `0.6.0`
 
 ## Packaging Targets
 
@@ -101,25 +101,31 @@ If packaging fails, classify the issue as one of:
 
 ## Current Validation Status
 
-Validated in this workspace during the current `0.5.x` line with:
+Validated in this workspace during the current `0.6.x` line with:
 
 ```bash
 pnpm typecheck
 pnpm build
-pnpm exec electron-builder --mac --arm64 --dir --publish never
-pnpm exec electron-builder --win --x64 --dir --publish never
-pnpm exec electron-builder --linux --x64 --dir --publish never
 CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --arm64 --publish never
+CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --x64 --publish never
+CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac --universal --publish never
+pnpm exec electron-builder --win --x64 --publish never
+pnpm exec electron-builder --win --arm64 --publish never
+pnpm exec electron-builder --linux --x64 --publish never
+pnpm exec electron-builder --linux --arm64 --publish never
 ```
 
 Observed outcomes:
 
 - TypeScript validation passed
 - Production build passed
-- macOS unpacked packaging passed
-- Windows unpacked packaging passed
-- Linux unpacked packaging passed
 - unsigned macOS arm64 packaged build passed
+- unsigned macOS x64 packaged build passed
+- unsigned macOS universal packaged build passed
+- unsigned Windows x64 packaged build passed
+- unsigned Windows arm64 packaged build passed
+- unsigned Linux x64 packaged build passed
+- unsigned Linux arm64 packaged build passed
 
 ## Current Icon Set
 

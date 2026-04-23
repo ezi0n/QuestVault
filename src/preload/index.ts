@@ -53,7 +53,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.5.9',
+  version: '0.6.0',
   ping: (): string => 'pong',
   app: {
     checkForUpdates: (): Promise<ReleaseCheckResponse> => ipcRenderer.invoke('app:check-for-updates')

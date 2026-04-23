@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.5.9`
+Current documented application version: `0.6.0`
 
 ## Overview
 
@@ -57,6 +57,8 @@ If older versions exist, choose a specific older version and delete it with conf
 
 For install, uninstall, and delete actions, the drawer now closes immediately so the resulting work is visible in `Live`. Metadata and artwork extraction flows stay in the drawer.
 
+When artwork links fail or a metadata source has no usable image, QuestVault now falls back to generated artwork surfaces instead of leaving the card or drawer blank.
+
 ### Local Library list dates
 
 In `List View`, the Local Library includes a `Date` column.
@@ -77,6 +79,8 @@ The current vrSrc flow lets you:
 - browse remote items in grid or list mode
 - add items to the Local Library
 - install items directly to the headset
+
+On Windows, vrSrc sync now prefers IPv4 for remote requests. This helps avoid Cloudflare `403 Forbidden` responses that were observed on some IPv6 request paths.
 
 Selecting a vrSrc item opens a remote detail drawer that can include:
 
@@ -181,3 +185,5 @@ The `Live` drawer is the main source of truth for long-running operations such a
 - failures and recovery states
 
 Success-only inline banners have been reduced in several areas in favor of Live.
+
+Installed-app refreshes are also deferred slightly after install and uninstall bursts so repeated device mutations do not flood Live with redundant refreshes.

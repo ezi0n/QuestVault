@@ -53,6 +53,8 @@
 - Support popups for maintenance tasks instead of large always-inline sections.
 - Current icon system aligned across macOS, Windows, and Linux packaging assets.
 - Signature-mismatch install recovery now uses an in-app guarded confirmation dialog instead of a simple native OK/Cancel prompt.
+- Installed-app refreshes are coalesced after install/uninstall bursts so device mutations settle before the next inventory refresh runs.
+- Broken artwork URLs now fall back to generated art surfaces across Apps & Games, Installed Inventory, and Game Saves.
 
 ## vrSrc-Specific Features
 
@@ -62,6 +64,7 @@
 - Remote notes and trailer embedding in the vrSrc drawer.
 - Add-to-library and install-now actions.
 - Managed dependency support for extraction tooling.
+- Windows vrSrc sync prefers IPv4 for remote requests to reduce Cloudflare 403 failures on affected networks.
 
 ## Maintenance Features
 
@@ -79,7 +82,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.5.9`
+Current documented release line: `0.6.0`
 
 ## Product Position
 

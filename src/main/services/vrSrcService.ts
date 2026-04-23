@@ -351,6 +351,18 @@ class VrSrcService {
     }
   }
 
+  private getVrSrcCurlNetworkArgs(): string[] {
+    // Prefer IPv4 on Windows for vrSrc requests. We have seen Cloudflare reject
+    // the Windows schannel + IPv6 path with a 403 while the same endpoint was
+    // reachable over IPv4.
+    return process.platform === 'win32' ? ['-4'] : []
+  }
+
+  private isCloudflareForbidden(message: string): boolean {
+    const normalized = message.toLowerCase()
+    return normalized.includes('403 forbidden') && normalized.includes('cloudflare')
+  }
+
   private async fileExists(path: string): Promise<boolean> {
     try {
       await stat(path)
@@ -362,7 +374,7 @@ class VrSrcService {
 
   private async fetchText(url: string, logger?: VrSrcLogger): Promise<string> {
     try {
-      const args = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
+      const args = ['-L', '--fail', ...this.getVrSrcCurlNetworkArgs(), '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
       if (logger) {
         args.push('-v')
       }
@@ -385,7 +397,7 @@ class VrSrcService {
 
   private async getRemoteContentLength(url: string, logger?: VrSrcLogger): Promise<number | null> {
     try {
-      const args = ['-L', '--fail', '-I', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
+      const args = ['-L', '--fail', '-I', ...this.getVrSrcCurlNetworkArgs(), '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
       if (logger) {
         args.push('-v')
       }
@@ -500,7 +512,15 @@ class VrSrcService {
           remoteContentLength
         })
         await new Promise<void>((resolve, reject) => {
-          const curlArgs = ['-L', '--fail', '-A', VR_SRC_USER_AGENT, '-H', 'accept: */*']
+          const curlArgs = [
+            '-L',
+            '--fail',
+            ...this.getVrSrcCurlNetworkArgs(),
+            '-A',
+            VR_SRC_USER_AGENT,
+            '-H',
+            'accept: */*'
+          ]
           if (logger) {
             curlArgs.push('--verbose')
           }
@@ -1293,6 +1313,9 @@ class VrSrcService {
         const catalog = await this.readCatalog()
         const status = await this.buildStatus()
         const errorMessage = error instanceof Error ? error.message : String(error)
+        const cloudflareHint = this.isCloudflareForbidden(errorMessage)
+          ? '\nvrSrc was reachable, but Cloudflare rejected the request. QuestVault now prefers IPv4 for vrSrc on Windows; if this persists, retry from another network.'
+          : ''
         const fallbackMessage = Boolean(catalog.syncedAt || catalog.items.length)
           ? `Sync failed and QuestVault is showing cached vrSrc data. See log: ${logger.logPath}`
           : `Sync failed before any cached vrSrc data was available. See log: ${logger.logPath}`
@@ -1304,7 +1327,7 @@ class VrSrcService {
         return {
           success: false,
           message: 'Unable to sync vrSrc.',
-          details: `${errorMessage}\n${fallbackMessage}`,
+          details: `${errorMessage}${cloudflareHint}\n${fallbackMessage}`,
           usedCachedCatalog: Boolean(catalog.syncedAt || catalog.items.length),
           status,
           catalog

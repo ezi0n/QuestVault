@@ -44,6 +44,8 @@ interface SignatureMismatchDialogState {
   packageName: string
 }
 
+const INSTALLED_APPS_REFRESH_IDLE_MS = 10_000
+
 function buildDeviceSnapshot(response: DeviceListResponse | null): Map<string, { label: string; state: string }> {
   return new Map((response?.devices ?? []).map((device) => [device.id, { label: device.label, state: device.state }]))
 }
@@ -531,6 +533,9 @@ function App() {
   const gamesInstallBusyIdsRef = useRef<string[]>([])
   const vrSrcActionBusyReleaseNamesRef = useRef<string[]>([])
   const signatureMismatchConfirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
+  const installedAppsMutationDepthRef = useRef(0)
+  const pendingInstalledAppsRefreshSerialRef = useRef<string | null>(null)
+  const installedAppsRefreshIdleTimerRef = useRef<number | null>(null)
   const subtitle =
     activeTab === 'manager'
       ? 'ADB device operations, live devices and ADB runtime visibility'
@@ -613,6 +618,50 @@ function App() {
   function findInstalledAppDisplayName(packageId: string): string {
     const match = deviceAppsResponse?.apps.find((app) => app.packageId === packageId)
     return match?.label ?? match?.inferredLabel ?? packageId
+  }
+
+  function clearInstalledAppsRefreshIdleTimer() {
+    if (installedAppsRefreshIdleTimerRef.current !== null) {
+      window.clearTimeout(installedAppsRefreshIdleTimerRef.current)
+      installedAppsRefreshIdleTimerRef.current = null
+    }
+  }
+
+  function queueInstalledAppsRefreshAfterIdle(serial: string) {
+    pendingInstalledAppsRefreshSerialRef.current = serial
+    clearInstalledAppsRefreshIdleTimer()
+
+    if (installedAppsMutationDepthRef.current > 0) {
+      return
+    }
+
+    installedAppsRefreshIdleTimerRef.current = window.setTimeout(() => {
+      const nextSerial = pendingInstalledAppsRefreshSerialRef.current
+      installedAppsRefreshIdleTimerRef.current = null
+      pendingInstalledAppsRefreshSerialRef.current = null
+
+      if (nextSerial) {
+        void refreshInstalledApps(nextSerial)
+      }
+    }, INSTALLED_APPS_REFRESH_IDLE_MS)
+  }
+
+  function beginInstalledAppsMutation(serial: string) {
+    pendingInstalledAppsRefreshSerialRef.current = serial
+    clearInstalledAppsRefreshIdleTimer()
+    installedAppsMutationDepthRef.current += 1
+  }
+
+  function endInstalledAppsMutation(serial: string, shouldRefreshInstalledApps: boolean) {
+    installedAppsMutationDepthRef.current = Math.max(0, installedAppsMutationDepthRef.current - 1)
+
+    if (shouldRefreshInstalledApps) {
+      pendingInstalledAppsRefreshSerialRef.current = serial
+    }
+
+    if (installedAppsMutationDepthRef.current === 0 && pendingInstalledAppsRefreshSerialRef.current) {
+      queueInstalledAppsRefreshAfterIdle(pendingInstalledAppsRefreshSerialRef.current)
+    }
   }
 
   function findIndexedItem(source: IndexedSourceKind, itemId: string): LocalLibraryIndexedItem | null {
@@ -1047,7 +1096,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
   useEffect(() => {
     const timeoutId = window.setInterval(() => {
-      const cutoff = Date.now() - 60_000
+      const cutoff = Date.now() - 30_000
       setLiveQueueItems((current) =>
         current.filter((item) => {
           if (item.phase !== 'completed' && item.phase !== 'failed') {
@@ -1106,6 +1155,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   useEffect(() => {
     deviceResponseRef.current = deviceResponse
   }, [deviceResponse])
+
+  useEffect(() => () => {
+    clearInstalledAppsRefreshIdleTimer()
+  }, [])
 
   useEffect(() => {
     if (!selectedDeviceId) {
@@ -1460,6 +1513,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       packageName?: string | null
     }>
     serialForRecovery?: string | null
+    onInstalledAppsChanged?: () => void
     onSuccess?: () => Promise<void>
     onFailureText: string
   }) {
@@ -1520,7 +1574,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             return
           }
 
-          await refreshInstalledApps(options.serialForRecovery)
+          options.onInstalledAppsChanged?.()
           updateLiveQueueItem(queueId, {
             phase: 'installing',
             progress: 58,
@@ -1622,6 +1676,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
 
     setVrSrcMessage(null)
+    beginInstalledAppsMutation(targetDeviceId)
+    let shouldRefreshInstalledApps = false
     await queueVrSrcTransferAction({
       releaseName,
       operation: 'install-now',
@@ -1630,11 +1686,15 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       execute: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
       retryAfterSignatureMismatch: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
       serialForRecovery: targetDeviceId,
+      onInstalledAppsChanged: () => {
+        shouldRefreshInstalledApps = true
+      },
       onSuccess: async () => {
-        await refreshInstalledApps(targetDeviceId)
+        shouldRefreshInstalledApps = true
       },
       onFailureText: `Unable to install ${releaseName} from vrSrc.`
     })
+    endInstalledAppsMutation(targetDeviceId, shouldRefreshInstalledApps)
   }
 
   async function downloadVrSrcToLibraryAndInstall(releaseName: string) {
@@ -1649,6 +1709,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
 
     setVrSrcMessage(null)
+    beginInstalledAppsMutation(targetDeviceId)
+    let shouldRefreshInstalledApps = false
     await queueVrSrcTransferAction({
       releaseName,
       operation: 'download-to-library-and-install',
@@ -1657,17 +1719,21 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       execute: () => window.api.vrsrc.downloadToLibraryAndInstall(targetDeviceId, releaseName),
       retryAfterSignatureMismatch: () => window.api.vrsrc.downloadToLibraryAndInstall(targetDeviceId, releaseName),
       serialForRecovery: targetDeviceId,
+      onInstalledAppsChanged: () => {
+        shouldRefreshInstalledApps = true
+      },
       onSuccess: async () => {
+        shouldRefreshInstalledApps = true
         const [libraryIndex, backupIndex] = await Promise.all([
           window.api.settings.getLocalLibraryIndex(),
-          window.api.settings.getBackupStorageIndex(),
-          refreshInstalledApps(targetDeviceId)
+          window.api.settings.getBackupStorageIndex()
         ])
         setLocalLibraryIndex(libraryIndex)
         setBackupStorageIndex(backupIndex)
       },
       onFailureText: `Unable to download and install ${releaseName} from vrSrc.`
     })
+    endInstalledAppsMutation(targetDeviceId, shouldRefreshInstalledApps)
   }
 
   useEffect(() => {
@@ -2959,6 +3025,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     gamesInstallBusyIdsRef.current = [...gamesInstallBusyIdsRef.current, itemId]
     setGamesInstallBusyIds((current) => [...current, itemId])
     setGamesMessage(null)
+    beginInstalledAppsMutation(selectedDeviceId)
+    let shouldRefreshInstalledApps = false
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('install', itemId),
       title: metaStoreMatchesByItemId[itemId]?.title ?? indexedItem?.name ?? 'Local payload install',
@@ -2994,7 +3062,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             return
           }
 
-          await refreshInstalledApps(selectedDeviceId)
+          shouldRefreshInstalledApps = true
           updateLiveQueueItem(queueId, {
             phase: 'installing',
             progress: 58,
@@ -3015,10 +3083,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       }
 
       if (response.success) {
+        shouldRefreshInstalledApps = true
         const [libraryIndex, backupIndex] = await Promise.all([
           window.api.settings.getLocalLibraryIndex(),
-          window.api.settings.getBackupStorageIndex(),
-          refreshInstalledApps(selectedDeviceId)
+          window.api.settings.getBackupStorageIndex()
         ])
         setLocalLibraryIndex(libraryIndex)
         setBackupStorageIndex(backupIndex)
@@ -3035,6 +3103,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     } finally {
       gamesInstallBusyIdsRef.current = gamesInstallBusyIdsRef.current.filter((entry) => entry !== itemId)
       setGamesInstallBusyIds((current) => current.filter((entry) => entry !== itemId))
+      endInstalledAppsMutation(selectedDeviceId, shouldRefreshInstalledApps)
     }
   }
 
@@ -3050,6 +3119,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
     setManualInstallBusyKind(kind)
     setGamesMessage(null)
+    beginInstalledAppsMutation(selectedDeviceId)
+    let shouldRefreshInstalledApps = false
 
     try {
       const sourcePath =
@@ -3098,7 +3169,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             return
           }
 
-          await refreshInstalledApps(selectedDeviceId)
+          shouldRefreshInstalledApps = true
           updateLiveQueueItem(queueId, {
             phase: 'installing',
             progress: 58,
@@ -3119,7 +3190,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         return
       }
 
-      await refreshInstalledApps(selectedDeviceId)
+      shouldRefreshInstalledApps = true
       setGamesMessage(null)
     } catch (error) {
       const message =
@@ -3127,6 +3198,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       setGamesMessage(null)
     } finally {
       setManualInstallBusyKind(null)
+      endInstalledAppsMutation(selectedDeviceId, shouldRefreshInstalledApps)
     }
   }
 
@@ -3142,6 +3214,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
     setInventoryActionBusyPackageId(packageId)
     setInventoryMessage(null)
+    beginInstalledAppsMutation(selectedDeviceId)
+    let shouldRefreshInstalledApps = false
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('uninstall', packageId),
       title: findInstalledAppDisplayName(packageId),
@@ -3170,7 +3244,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       }
 
       if (response.success) {
-        await refreshInstalledApps(selectedDeviceId)
+        shouldRefreshInstalledApps = true
       }
 
       if (response.success) {
@@ -3192,6 +3266,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       })
     } finally {
       setInventoryActionBusyPackageId(null)
+      endInstalledAppsMutation(selectedDeviceId, shouldRefreshInstalledApps)
     }
   }
 

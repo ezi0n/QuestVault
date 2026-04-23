@@ -23,6 +23,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Manual install entry points for APK files and folders.
 - One-click metadata refresh for indexed titles.
 - Detail drawer with artwork, description, category chips, versions, package ID, store ID, folder name, and install actions.
+- Resilient artwork fallback rendering so broken image links fall back to generated cover art instead of empty panels.
 
 ### Installed Inventory
 
@@ -59,7 +60,9 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Metadata-enriched artwork and descriptions where available.
 - Manual metadata override tools for local entries that lack clean store matches.
 - Background refresh patterns that keep the app usable while scans and enrichment continue.
+- Installed-app refreshes are now coalesced after install and uninstall bursts so Live stays readable during multi-step device operations.
 - Watcher-driven updates when indexed folders change on disk.
+- Windows vrSrc sync now prefers IPv4 for remote source requests to avoid Cloudflare 403 failures seen on some IPv6 paths.
 
 - [QuestVault Screenshots](screenshots/)
 
