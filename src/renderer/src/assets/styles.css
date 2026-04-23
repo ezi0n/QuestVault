@@ -1458,11 +1458,20 @@ input {
   cursor: pointer;
 }
 
-.filter-chip-button.active {
-  border-color: rgba(88, 212, 197, 0.28);
-  background: linear-gradient(135deg, rgba(88, 212, 197, 0.14), rgba(255, 143, 102, 0.08));
+.filter-chip-button.active,
+.filter-chip-button[aria-pressed='true'] {
+  background: linear-gradient(135deg, rgba(88, 212, 197, 0.15), rgba(255, 143, 102, 0.14));
+  border-color: rgba(255, 183, 94, 0.82);
   color: var(--ink);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 0 0 2px rgba(255, 168, 74, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.filter-chip-button.active:hover,
+.filter-chip-button[aria-pressed='true']:hover {
+  border-color: rgba(255, 193, 102, 0.92);
+  background: linear-gradient(135deg, rgba(88, 212, 197, 0.18), rgba(255, 143, 102, 0.18));
 }
 
 .games-search-shell {

@@ -26,6 +26,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Resilient artwork fallback rendering so broken image links fall back to generated cover art instead of empty panels.
 - Local, vrSrc, and save-management drawers now hand long-running actions off to the Live Queue more consistently so progress and blocked outcomes surface in one place.
 - Detail drawers across Local Library, vrSrc, Installed Inventory, and Game Saves are now more aligned, with shared rating strips, trailer embeds, richer metadata facts, and clearer section separation.
+- Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
 
 ### Installed Inventory
 

@@ -52,6 +52,7 @@
 - Shared Live queue for scans, installs, downloads, dependency setup, backups, deletes, and failures.
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
+- Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
 - Local detail drawers auto-close into Live for install/uninstall/delete actions while keeping extraction and metadata flows visible in-place.
 - vrSrc and Game Saves drawers now follow the same close-into-Live pattern for download, install, save scan, and backup actions.
 - Installed-app refresh progress now advances through visible background metadata work instead of freezing on a single generic state.
@@ -89,7 +90,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.6.2`
+Current documented release line: `0.6.3`
 
 ## Product Position
 

@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Documented application version: `0.6.2`
+Documented application version: `0.6.3`
 
 ## Packaging Targets
 

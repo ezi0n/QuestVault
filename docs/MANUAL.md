@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.2`
+Current documented application version: `0.6.3`
 
 ## Overview
 
@@ -24,6 +24,8 @@ You can:
 - review duplicate package families
 - install/update local items
 - open the vrSrc remote source panel
+
+Selected toolbar and filter pills in `Apps & Games`, `Installed Inventory`, and similar workspaces now use the same warm highlighted surround treatment as the active left-rail navigation item, making the current selection easier to spot at a glance.
 
 ### Search
 
