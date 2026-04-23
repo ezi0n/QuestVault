@@ -579,6 +579,9 @@ function applyManualMetadataOverride(
     category: override.category ?? details?.category ?? null,
     publisherName: override.publisherName ?? details?.publisherName ?? null,
     genreNames: overriddenGenres.length ? overriddenGenres : details?.genreNames ?? [],
+    gameModes: details?.gameModes ?? [],
+    supportedPlayerModes: details?.supportedPlayerModes ?? [],
+    comfortLevel: details?.comfortLevel ?? null,
     releaseDateLabel: override.releaseDateLabel ?? details?.releaseDateLabel ?? null,
     canonicalName: details?.canonicalName ?? null,
     thumbnail: nextThumbnail,
@@ -586,8 +589,10 @@ function applyManualMetadataOverride(
     portraitImage: details?.portraitImage ?? nextThumbnail,
     iconImage: details?.iconImage ?? nextThumbnail,
     logoImage: details?.logoImage ?? null,
+    youtubeTrailerVideoId: details?.youtubeTrailerVideoId ?? null,
     version: override.version ?? details?.version ?? fallback.version,
     versionCode: details?.versionCode ?? null,
+    supportedDevices: details?.supportedDevices ?? [],
     sizeBytes: details?.sizeBytes ?? null,
     ratingAverage: details?.ratingAverage ?? null,
     priceLabel: details?.priceLabel ?? null,
@@ -945,6 +950,23 @@ function formatBytes(value: number | null): string {
 
   const rounded = currentValue >= 100 || unitIndex === 0 ? Math.round(currentValue) : Number(currentValue.toFixed(1))
   return `${rounded} ${units[unitIndex]}`
+}
+
+function formatRatingAverage(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) {
+    return null
+  }
+
+  return `${Number(value).toFixed(1)}/5`
+}
+
+function getRatingFillPercentage(value: number | null | undefined): number {
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) {
+    return 0
+  }
+
+  const roundedToHalfStar = Math.round(Math.max(0, Math.min(5, Number(value))) * 2) / 2
+  return (roundedToHalfStar / 5) * 100
 }
 
 interface RichTextSegment {
@@ -2262,8 +2284,6 @@ function GamesView(props: {
     null
   const selectedVrSrcStatus = selectedVrSrcItem ? vrSrcItemStatusByReleaseName.get(selectedVrSrcItem.releaseName) : null
   const selectedVrSrcMatchingLibraryItem = selectedVrSrcItem ? getMatchingVrSrcLibraryItem(selectedVrSrcItem) : null
-  const selectedVrSrcHighestLibraryVersion =
-    selectedVrSrcMatchingLibraryItem?.libraryVersion ?? selectedVrSrcMatchingLibraryItem?.libraryVersionCode ?? null
   const selectedVrSrcLibraryCoversRemote = Boolean(
     selectedVrSrcItem &&
       selectedVrSrcMatchingLibraryItem &&
@@ -2274,21 +2294,6 @@ function GamesView(props: {
       ? `v${selectedVrSrcItem.versionName.trim()}`
       : `Code ${selectedVrSrcItem.versionCode}`
     : null
-  const selectedVrSrcStatusLabel = selectedVrSrcStatus?.isUpdate
-    ? 'Update'
-    : selectedVrSrcStatus?.isInLibrary
-      ? 'In Library'
-      : 'New'
-  const selectedVrSrcStatusClassName = selectedVrSrcStatus?.isUpdate
-    ? 'status-pill status-pending'
-    : selectedVrSrcStatus?.isInLibrary
-      ? 'status-pill status-ready'
-      : 'status-pill status-neutral'
-  const selectedVrSrcFactClassName = selectedVrSrcStatus?.isUpdate
-    ? 'signal-chip signal-chip-warm'
-    : selectedVrSrcStatus?.isInLibrary
-      ? 'signal-chip signal-chip-ready'
-      : 'signal-chip'
   const selectedVrSrcNote = selectedVrSrcDetails?.note ?? selectedVrSrcItem?.note ?? null
   const selectedVrSrcTrailerVideoId = selectedVrSrcDetails?.trailerVideoId ?? null
   const trailerEmbedOrigin =
@@ -2344,6 +2349,14 @@ function GamesView(props: {
     ? `Update available: ${formatVersionLabel(selectedGameStoreVersion) ?? selectedGameStoreVersion}`
     : 'Update available'
   const selectedGameFolderName = selectedGame?.kind === 'folder' ? getRelativePathBaseName(selectedGame.relativePath) : null
+  const selectedGameSupportedDevices = effectiveSelectedGameDetails?.supportedDevices ?? []
+  const selectedGameModes = effectiveSelectedGameDetails?.gameModes ?? []
+  const selectedGameSupportedPlayerModes = effectiveSelectedGameDetails?.supportedPlayerModes ?? []
+  const selectedGameComfortLevel = effectiveSelectedGameDetails?.comfortLevel ?? null
+  const selectedGameTrailerVideoId = effectiveSelectedGameDetails?.youtubeTrailerVideoId ?? null
+  const selectedGameRatingAverage = effectiveSelectedGameDetails?.ratingAverage ?? null
+  const selectedGameRatingLabel = formatRatingAverage(selectedGameRatingAverage)
+  const selectedGameRatingFillPercentage = getRatingFillPercentage(selectedGameRatingAverage)
   const selectedGameCategoryChips = effectiveSelectedGameDetails?.genreNames?.length
     ? effectiveSelectedGameDetails.genreNames
     : effectiveSelectedGameDetails?.category
@@ -3674,14 +3687,20 @@ function GamesView(props: {
                   <span>Remote Version</span>
                   <strong>{selectedVrSrcDisplayRemoteVersion ?? 'Unavailable'}</strong>
                 </div>
-                <div className={selectedVrSrcHighestLibraryVersion ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
-                  <span>Library Version</span>
-                  <strong>{selectedVrSrcHighestLibraryVersion ? (formatVersionLabel(selectedVrSrcHighestLibraryVersion) ?? selectedVrSrcHighestLibraryVersion) : 'Not Indexed'}</strong>
+                <div className="signal-chip">
+                  <span>Version Code</span>
+                  <strong>{selectedVrSrcItem.versionCode}</strong>
                 </div>
-                <div className={selectedVrSrcFactClassName}>
-                  <span>Status</span>
-                  <strong>{selectedVrSrcStatusLabel}</strong>
+                <div className="signal-chip">
+                  <span>Footprint</span>
+                  <strong>{selectedVrSrcItem.sizeLabel}</strong>
                 </div>
+                <div className="signal-chip">
+                  <span>Updated</span>
+                  <strong>{formatDateLabel(selectedVrSrcItem.lastUpdated)}</strong>
+                </div>
+              </div>
+              <div className="games-drawer-facts games-drawer-facts-secondary">
                 <div className="signal-chip games-drawer-fact-wide">
                   <span>Release</span>
                   <strong>{selectedVrSrcItem.releaseName}</strong>
@@ -3689,18 +3708,6 @@ function GamesView(props: {
                 <div className="signal-chip games-drawer-fact-wide">
                   <span>Package</span>
                   <strong>{selectedVrSrcItem.packageName}</strong>
-                </div>
-                <div className="signal-chip">
-                  <span>Footprint</span>
-                  <strong>{selectedVrSrcItem.sizeLabel}</strong>
-                </div>
-                <div className="signal-chip">
-                  <span>Version Code</span>
-                  <strong>{selectedVrSrcItem.versionCode}</strong>
-                </div>
-                <div className="signal-chip">
-                  <span>Updated</span>
-                  <strong>{formatDateLabel(selectedVrSrcItem.lastUpdated)}</strong>
                 </div>
               </div>
             </div>
@@ -3748,6 +3755,20 @@ function GamesView(props: {
         {selectedGame ? (
           <>
             <div className="games-drawer-artwork-stack">
+              {selectedGameRatingLabel ? (
+                <div className="games-rating-strip">
+                  <span className="games-rating-strip-label">Storefront Rating</span>
+                  <div className="games-rating-strip-body">
+                    <div aria-hidden="true" className="games-rating-stars">
+                      <span className="games-rating-stars-base">★★★★★</span>
+                      <span className="games-rating-stars-fill" style={{ width: `${selectedGameRatingFillPercentage}%` }}>
+                        ★★★★★
+                      </span>
+                    </div>
+                    <strong>{selectedGameRatingLabel}</strong>
+                  </div>
+                </div>
+              ) : null}
               <div
                 className={
                   manualMetadataEditorTarget === 'hero'
@@ -3896,6 +3917,40 @@ function GamesView(props: {
                 </div>
               </div>
             </div>
+            {selectedGameTrailerVideoId || selectedGameDetailsBusy ? (
+              <div className="games-drawer-sections">
+                <section className="games-drawer-section-card">
+                  <div className="games-drawer-media-header">
+                    <span>Trailer</span>
+                    {selectedGameTrailerVideoId ? (
+                      <a
+                        className="games-drawer-inline-link"
+                        href={`https://www.youtube.com/watch?v=${selectedGameTrailerVideoId}`}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        Open on YouTube
+                      </a>
+                    ) : null}
+                  </div>
+                  {selectedGameTrailerVideoId ? (
+                    <div className="games-drawer-video-shell">
+                      <iframe
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        src={`https://www.youtube-nocookie.com/embed/${selectedGameTrailerVideoId}?rel=0${trailerEmbedOrigin ? `&origin=${trailerEmbedOrigin}` : ''}`}
+                        title={`${selectedGame.title} trailer`}
+                      />
+                    </div>
+                  ) : (
+                    <p className="games-drawer-section-paragraph">
+                      {selectedGameDetailsBusy ? 'Searching for trailer…' : 'No trailer available for this title.'}
+                    </p>
+                  )}
+                </section>
+              </div>
+            ) : null}
             {selectedGame.source === 'library' && selectedGame.itemId ? (
               !selectedGame.isInstalled && !selectedDeviceId ? (
                 <p className="section-copy compact">Select a ready headset in Manager before using install actions for local payloads.</p>
@@ -4061,38 +4116,28 @@ function GamesView(props: {
                       <strong>{selectedGame.isInstalled ? 'Installed on headset' : 'Not installed on headset'}</strong>
                     </div>
                   ) : null}
-                  {selectedGamePrimaryPackageId ? (
-                    <div className="signal-chip games-drawer-fact-wide">
-                      <span>Package</span>
-                      <strong>{selectedGamePrimaryPackageId}</strong>
-                    </div>
-                  ) : null}
-                  {selectedGameStoreVersion || selectedGameLibraryVersion || selectedGameInstalledVersion ? (
+                  {selectedGameStoreVersion || selectedGameInstalledVersion || effectiveSelectedGameDetails?.sizeBytes ? (
                     <>
                       <div className="signal-chip signal-chip-latest">
                         <span>Latest Available</span>
                         <strong>{formatVersionLabel(selectedGameStoreVersion) ?? 'Unavailable'}</strong>
                       </div>
-                      <div className="signal-chip">
-                        <span>{selectedGame.source === 'backup' ? 'In Backup' : 'Version'}</span>
-                        <strong>{formatVersionLabel(selectedGameLibraryVersion) ?? 'Unavailable'}</strong>
-                      </div>
                       <div className={selectedGameInstalledVersion ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
                         <span>Installed</span>
                         <strong>{formatVersionLabel(selectedGameInstalledVersion) ?? 'Unavailable'}</strong>
                       </div>
+                      {effectiveSelectedGameDetails?.sizeBytes ? (
+                        <div className="signal-chip">
+                          <span>Footprint</span>
+                          <strong>{formatBytes(effectiveSelectedGameDetails.sizeBytes)}</strong>
+                        </div>
+                      ) : null}
                     </>
                   ) : null}
                   {(selectedGame.manualStoreIdEdited ? selectedGame.manualStoreId : effectiveSelectedGameDetails?.storeItemId) ? (
                     <div className={selectedGame.manualStoreIdEdited ? 'signal-chip signal-chip-warm' : 'signal-chip'}>
                       <span>{selectedGame.manualStoreIdEdited ? 'Store ID (Manual)' : 'Store ID'}</span>
                       <strong>{selectedGame.manualStoreIdEdited ? selectedGame.manualStoreId : effectiveSelectedGameDetails?.storeItemId}</strong>
-                    </div>
-                  ) : null}
-                  {selectedGameFolderName ? (
-                    <div className="signal-chip games-drawer-fact-wide">
-                      <span>Folder</span>
-                      <strong>{selectedGameFolderName}</strong>
                     </div>
                   ) : null}
                   {selectedGameHasHiddenVersions ? (
@@ -4105,10 +4150,42 @@ function GamesView(props: {
                       </strong>
                     </div>
                   ) : null}
-                  {effectiveSelectedGameDetails?.sizeBytes ? (
-                    <div className="signal-chip">
-                      <span>Footprint</span>
-                      <strong>{formatBytes(effectiveSelectedGameDetails.sizeBytes)}</strong>
+                </div>
+                <div className="games-drawer-facts games-drawer-facts-secondary">
+                  {selectedGameComfortLevel ? (
+                    <div className="signal-chip games-drawer-fact-wide">
+                      <span>Comfort Level</span>
+                      <strong>{selectedGameComfortLevel}</strong>
+                    </div>
+                  ) : null}
+                  {selectedGameModes.length ? (
+                    <div className="signal-chip games-drawer-fact-wide">
+                      <span>Game Modes</span>
+                      <strong>{selectedGameModes.join(', ')}</strong>
+                    </div>
+                  ) : null}
+                  {selectedGameSupportedPlayerModes.length ? (
+                    <div className="signal-chip games-drawer-fact-wide">
+                      <span>Supported Player Modes</span>
+                      <strong>{selectedGameSupportedPlayerModes.join(', ')}</strong>
+                    </div>
+                  ) : null}
+                  {selectedGameSupportedDevices.length ? (
+                    <div className="signal-chip games-drawer-fact-wide">
+                      <span>Supported Devices</span>
+                      <strong>{selectedGameSupportedDevices.join(', ')}</strong>
+                    </div>
+                  ) : null}
+                  {selectedGameFolderName ? (
+                    <div className="signal-chip games-drawer-fact-wide">
+                      <span>Folder</span>
+                      <strong>{selectedGameFolderName}</strong>
+                    </div>
+                  ) : null}
+                  {selectedGamePrimaryPackageId ? (
+                    <div className="signal-chip games-drawer-fact-wide">
+                      <span>Package</span>
+                      <strong>{selectedGamePrimaryPackageId}</strong>
                     </div>
                   ) : null}
                 </div>
@@ -4568,6 +4645,8 @@ function InventoryView(props: {
   } = props
   const [sortMode, setSortMode] = useState<'name' | 'size'>('name')
   const [selectedInventoryPackageId, setSelectedInventoryPackageId] = useState<string | null>(null)
+  const [selectedInventoryDetails, setSelectedInventoryDetails] = useState<MetaStoreGameDetails | null>(null)
+  const [selectedInventoryDetailsBusy, setSelectedInventoryDetailsBusy] = useState(false)
   const adbReady = runtimeStatus === 'ready'
   const showAppsBanner = Boolean(deviceAppsMessage && deviceAppsMessage !== runtimeMessage)
   const activeLeftoverResponse =
@@ -4609,9 +4688,33 @@ function InventoryView(props: {
         installedMetaStoreMatchesByPackageId
       )
     : null
-  const selectedInventoryArtworkUri = resolveMetaStoreArtworkUri(selectedInventorySummary)
+  const effectiveSelectedInventoryDetails = selectedInventoryDetails ?? selectedInventorySummary
+  const selectedInventoryArtworkUri = resolveMetaStoreArtworkUri(effectiveSelectedInventoryDetails)
   const selectedInventoryDisplayLabel =
     selectedInventoryApp?.label ?? selectedInventoryApp?.inferredLabel ?? 'Installed app'
+  const selectedInventoryTrailerVideoId = effectiveSelectedInventoryDetails?.youtubeTrailerVideoId ?? null
+  const selectedInventoryStoreVersion = effectiveSelectedInventoryDetails?.version ?? null
+  const selectedInventoryInstalledVersion = selectedInventoryApp?.version ?? null
+  const selectedInventoryRatingAverage = effectiveSelectedInventoryDetails?.ratingAverage ?? null
+  const selectedInventoryRatingLabel = formatRatingAverage(selectedInventoryRatingAverage)
+  const selectedInventoryRatingFillPercentage = getRatingFillPercentage(selectedInventoryRatingAverage)
+  const selectedInventorySupportedDevices = effectiveSelectedInventoryDetails?.supportedDevices ?? []
+  const selectedInventoryGameModes = effectiveSelectedInventoryDetails?.gameModes ?? []
+  const selectedInventorySupportedPlayerModes = effectiveSelectedInventoryDetails?.supportedPlayerModes ?? []
+  const selectedInventoryComfortLevel = effectiveSelectedInventoryDetails?.comfortLevel ?? null
+  const selectedInventoryMetaChipVersion = selectedInventoryInstalledVersion ?? selectedInventoryStoreVersion
+  const selectedInventoryShortDescription = selectedInventoryDetails?.shortDescription ?? null
+  const selectedInventoryDescription = formatGameDescription(selectedInventoryDetails?.longDescription)
+  const selectedInventoryCategoryChips = effectiveSelectedInventoryDetails?.genreNames?.length
+    ? effectiveSelectedInventoryDetails.genreNames
+    : effectiveSelectedInventoryDetails?.category
+      ? effectiveSelectedInventoryDetails.category
+          .split(/[,|]/)
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : []
+  const trailerEmbedOrigin =
+    typeof window !== 'undefined' && window.location.origin ? encodeURIComponent(window.location.origin) : null
 
   useEffect(() => {
     if (!selectedInventoryPackageId) {
@@ -4622,6 +4725,40 @@ function InventoryView(props: {
       setSelectedInventoryPackageId(null)
     }
   }, [selectedDeviceId, selectedInventoryPackageId, visibleApps])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadInventoryDetails() {
+      if (!selectedInventorySummary?.storeId) {
+        setSelectedInventoryDetails(null)
+        setSelectedInventoryDetailsBusy(false)
+        return
+      }
+
+      setSelectedInventoryDetailsBusy(true)
+      try {
+        const response = await window.api.metaStore.getDetails(selectedInventorySummary.storeId)
+        if (!cancelled) {
+          setSelectedInventoryDetails(response.details)
+        }
+      } catch {
+        if (!cancelled) {
+          setSelectedInventoryDetails(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedInventoryDetailsBusy(false)
+        }
+      }
+    }
+
+    void loadInventoryDetails()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedInventorySummary?.storeId])
 
   const drawerPortalTarget = typeof document !== 'undefined' ? document.body : null
   const inventoryResultsViewportHeight = 84 * 5 + 8 * 4
@@ -4962,6 +5099,20 @@ function InventoryView(props: {
                 {selectedInventoryApp ? (
                   <>
                     <div className="games-drawer-artwork-stack">
+                      {selectedInventoryRatingLabel ? (
+                        <div className="games-rating-strip">
+                          <span className="games-rating-strip-label">Storefront Rating</span>
+                          <div className="games-rating-strip-body">
+                            <div aria-hidden="true" className="games-rating-stars">
+                              <span className="games-rating-stars-base">★★★★★</span>
+                              <span className="games-rating-stars-fill" style={{ width: `${selectedInventoryRatingFillPercentage}%` }}>
+                                ★★★★★
+                              </span>
+                            </div>
+                            <strong>{selectedInventoryRatingLabel}</strong>
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="games-drawer-hero">
                         <ResilientArtworkImage
                           alt=""
@@ -4988,59 +5139,62 @@ function InventoryView(props: {
                         <div className="games-drawer-title-block">
                           <h3>{selectedInventoryDisplayLabel}</h3>
                           <p>
-                            {selectedInventorySummary?.publisherName ??
-                              selectedInventorySummary?.subtitle ??
+                            {effectiveSelectedInventoryDetails?.publisherName ??
+                              effectiveSelectedInventoryDetails?.subtitle ??
                               selectedInventoryApp.packageId}
                           </p>
                         </div>
                       </div>
-                    </div>
-
-                    <div className="games-drawer-facts">
-                      <div className="signal-chip games-drawer-fact-wide">
-                        <span>Package</span>
-                        <strong>{selectedInventoryApp.packageId}</strong>
-                      </div>
-                      <div className={selectedInventoryApp.version ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
-                        <span>Installed Version</span>
-                        <strong>{selectedInventoryApp.version ?? 'Unavailable'}</strong>
-                      </div>
-                      {selectedInventorySummary?.version ? (
-                        <div className="signal-chip signal-chip-latest">
-                          <span>Store Version</span>
-                          <strong>{selectedInventorySummary.version}</strong>
-                        </div>
-                      ) : null}
-                      <div className="signal-chip">
-                        <span>Footprint</span>
-                        <strong>{formatBytes(selectedInventoryApp.totalFootprintBytes)}</strong>
-                      </div>
-                      <div className="signal-chip signal-chip-ready games-drawer-fact-wide">
-                        <span>Headset Status</span>
-                        <strong>Installed on headset</strong>
-                      </div>
-                      {selectedInventorySummary?.category ? (
-                        <div className="signal-chip games-drawer-fact-wide">
-                          <span>Category</span>
-                          <strong>{selectedInventorySummary.category}</strong>
+                      {selectedInventoryTrailerVideoId || selectedInventoryDetailsBusy ? (
+                        <div className="games-drawer-sections">
+                          <section className="games-drawer-section-card">
+                            <div className="games-drawer-media-header">
+                              <span>Trailer</span>
+                              {selectedInventoryTrailerVideoId ? (
+                                <a
+                                  className="games-drawer-inline-link"
+                                  href={`https://www.youtube.com/watch?v=${selectedInventoryTrailerVideoId}`}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  Open on YouTube
+                                </a>
+                              ) : null}
+                            </div>
+                            {selectedInventoryTrailerVideoId ? (
+                              <div className="games-drawer-video-shell">
+                                <iframe
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                  allowFullScreen
+                                  referrerPolicy="strict-origin-when-cross-origin"
+                                  src={`https://www.youtube-nocookie.com/embed/${selectedInventoryTrailerVideoId}?rel=0${trailerEmbedOrigin ? `&origin=${trailerEmbedOrigin}` : ''}`}
+                                  title={`${selectedInventoryDisplayLabel} trailer`}
+                                />
+                              </div>
+                            ) : (
+                              <p className="games-drawer-section-paragraph">
+                                {selectedInventoryDetailsBusy ? 'Searching for trailer…' : 'No trailer available for this title.'}
+                              </p>
+                            )}
+                          </section>
                         </div>
                       ) : null}
                     </div>
 
                     <div className="games-drawer-meta-stack">
-                      {selectedInventorySummary?.releaseDateLabel || selectedInventorySummary?.version ? (
+                      {effectiveSelectedInventoryDetails?.releaseDateLabel || selectedInventoryMetaChipVersion ? (
                         <div className="games-drawer-meta">
-                          {selectedInventorySummary.releaseDateLabel ? (
-                            <span className="meta-chip">{selectedInventorySummary.releaseDateLabel}</span>
+                          {effectiveSelectedInventoryDetails?.releaseDateLabel ? (
+                            <span className="meta-chip">{effectiveSelectedInventoryDetails.releaseDateLabel}</span>
                           ) : null}
-                          {selectedInventorySummary.version ? (
-                            <span className="meta-chip">v{selectedInventorySummary.version}</span>
+                          {selectedInventoryMetaChipVersion ? (
+                            <span className="meta-chip">v{selectedInventoryMetaChipVersion}</span>
                           ) : null}
                         </div>
                       ) : null}
-                      {selectedInventorySummary?.genreNames.length ? (
+                      {selectedInventoryCategoryChips.length ? (
                         <div className="games-drawer-meta">
-                          {selectedInventorySummary.genreNames.map((genre) => (
+                          {selectedInventoryCategoryChips.map((genre) => (
                             <span className="meta-chip" key={genre}>
                               {genre}
                             </span>
@@ -5050,14 +5204,100 @@ function InventoryView(props: {
                     </div>
 
                     <div className="games-drawer-copy-stack">
-                      <p className="section-copy compact">
-                        {selectedInventorySummary
-                          ? `Review this installed headset app, compare its currently installed version against the matched store metadata, then back it up or uninstall it if needed.`
-                          : 'This installed app does not currently have a matched store metadata card, but you can still back it up or uninstall it from here.'}
-                      </p>
+                      {selectedInventoryShortDescription ? (
+                        <div className="games-drawer-copy-stack">
+                          {renderDescriptionBlocks(
+                            parseMarkdownBlocks(selectedInventoryShortDescription),
+                            'inventory-short-description',
+                            'section-copy compact'
+                          )}
+                        </div>
+                      ) : null}
+                      {selectedInventoryDescription.overview.length ? (
+                        <div className="games-drawer-copy-stack">
+                          {renderDescriptionBlocks(selectedInventoryDescription.overview, 'inventory-overview')}
+                        </div>
+                      ) : null}
+                      {selectedInventoryDescription.sections.length ? (
+                        <div className="games-drawer-sections">
+                          {selectedInventoryDescription.sections.map((section) => (
+                            <section className="games-drawer-section-card" key={section.title}>
+                              <span>{section.title}</span>
+                              <div className="games-drawer-section-card-content">
+                                {renderDescriptionBlocks(section.blocks, `inventory-section-${section.title}`, 'games-drawer-section-paragraph')}
+                              </div>
+                            </section>
+                          ))}
+                        </div>
+                      ) : null}
+                      {selectedInventoryDescription.links.length ? (
+                        <div className="games-drawer-facts">
+                          {selectedInventoryDescription.links.map((link) => (
+                            <div className="signal-chip" key={link}>
+                              <span>Link</span>
+                              <strong>{link.replace(/^https?:\/\//, '')}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
 
-                    <div className="inventory-drawer-actions">
+                    <div className="games-drawer-facts">
+                      {(selectedInventoryStoreVersion || selectedInventoryInstalledVersion || selectedInventoryApp.totalFootprintBytes) ? (
+                        <>
+                          <div className="signal-chip signal-chip-latest">
+                            <span>Latest Available</span>
+                            <strong>{formatVersionLabel(selectedInventoryStoreVersion) ?? 'Unavailable'}</strong>
+                          </div>
+                          <div className={selectedInventoryInstalledVersion ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
+                            <span>Installed</span>
+                            <strong>{formatVersionLabel(selectedInventoryInstalledVersion) ?? 'Unavailable'}</strong>
+                          </div>
+                          <div className="signal-chip">
+                            <span>Footprint</span>
+                            <strong>{formatBytes(selectedInventoryApp.totalFootprintBytes)}</strong>
+                          </div>
+                        </>
+                      ) : null}
+                      {effectiveSelectedInventoryDetails?.storeItemId ? (
+                        <div className="signal-chip">
+                          <span>Store ID</span>
+                          <strong>{effectiveSelectedInventoryDetails.storeItemId}</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="games-drawer-facts games-drawer-facts-secondary">
+                      {selectedInventoryComfortLevel ? (
+                        <div className="signal-chip games-drawer-fact-wide">
+                          <span>Comfort Level</span>
+                          <strong>{selectedInventoryComfortLevel}</strong>
+                        </div>
+                      ) : null}
+                      {selectedInventoryGameModes.length ? (
+                        <div className="signal-chip games-drawer-fact-wide">
+                          <span>Game Modes</span>
+                          <strong>{selectedInventoryGameModes.join(', ')}</strong>
+                        </div>
+                      ) : null}
+                      {selectedInventorySupportedPlayerModes.length ? (
+                        <div className="signal-chip games-drawer-fact-wide">
+                          <span>Supported Player Modes</span>
+                          <strong>{selectedInventorySupportedPlayerModes.join(', ')}</strong>
+                        </div>
+                      ) : null}
+                      {selectedInventorySupportedDevices.length ? (
+                        <div className="signal-chip games-drawer-fact-wide">
+                          <span>Supported Devices</span>
+                          <strong>{selectedInventorySupportedDevices.join(', ')}</strong>
+                        </div>
+                      ) : null}
+                      <div className="signal-chip games-drawer-fact-wide">
+                        <span>Package</span>
+                        <strong>{selectedInventoryApp.packageId}</strong>
+                      </div>
+                    </div>
+
+                    <div className="inventory-drawer-actions stack-sm">
                       {inventoryActionBusyPackageId === selectedInventoryApp.packageId ? (
                         <span className="status-pill status-pending inventory-operation-pill" title="Operation in progress. Open Live Queue to follow the detailed status.">
                           Operation In Progress
@@ -5110,6 +5350,7 @@ type SaveGamesCard = {
   packageId: string
   title: string
   artworkUri: string | null
+  metaStoreSummary: MetaStoreGameSummary | null
   isInstalled: boolean
   installedLabel: string | null
   liveStatus: 'available' | 'blocked' | 'none' | 'error' | null
@@ -5174,6 +5415,8 @@ function GameSavesView(props: {
   const [filter, setFilter] = useState<SaveGamesFilterId>('all')
   const [search, setSearch] = useState('')
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null)
+  const [selectedSaveDetails, setSelectedSaveDetails] = useState<MetaStoreGameDetails | null>(null)
+  const [selectedSaveDetailsBusy, setSelectedSaveDetailsBusy] = useState(false)
   const packageSummaryByPackageId = buildPackageSummaryLookup(
     localLibraryIndex,
     backupStorageIndex,
@@ -5241,6 +5484,7 @@ function GameSavesView(props: {
         packageId: installedApp?.packageId ?? latestBackup?.packageId ?? saveScan?.packageId ?? normalizedPackageId,
         title,
         artworkUri: resolveMetaStoreArtworkUri(summary),
+        metaStoreSummary: summary,
         isInstalled,
         installedLabel: installedApp?.label ?? installedApp?.inferredLabel ?? latestBackup?.appName ?? null,
         liveStatus: saveScan?.status ?? null,
@@ -5285,7 +5529,30 @@ function GameSavesView(props: {
     saveCards.find((card) => card.packageId === selectedPackageId) ??
     null
   const selectedCardRootsBytes = selectedCard?.liveRoots.reduce((sum, root) => sum + root.sizeBytes, 0) ?? 0
+  const effectiveSelectedSaveDetails = selectedSaveDetails ?? selectedCard?.metaStoreSummary ?? null
+  const selectedSaveArtworkUri = resolveMetaStoreArtworkUri(effectiveSelectedSaveDetails) ?? selectedCard?.artworkUri ?? null
+  const selectedSaveTrailerVideoId = effectiveSelectedSaveDetails?.youtubeTrailerVideoId ?? null
+  const selectedSaveStoreVersion = effectiveSelectedSaveDetails?.version ?? null
+  const selectedSaveRatingAverage = effectiveSelectedSaveDetails?.ratingAverage ?? null
+  const selectedSaveRatingLabel = formatRatingAverage(selectedSaveRatingAverage)
+  const selectedSaveRatingFillPercentage = getRatingFillPercentage(selectedSaveRatingAverage)
+  const selectedSaveSupportedDevices = effectiveSelectedSaveDetails?.supportedDevices ?? []
+  const selectedSaveGameModes = effectiveSelectedSaveDetails?.gameModes ?? []
+  const selectedSaveSupportedPlayerModes = effectiveSelectedSaveDetails?.supportedPlayerModes ?? []
+  const selectedSaveComfortLevel = effectiveSelectedSaveDetails?.comfortLevel ?? null
+  const selectedSaveCategoryChips = effectiveSelectedSaveDetails?.genreNames?.length
+    ? effectiveSelectedSaveDetails.genreNames
+    : effectiveSelectedSaveDetails?.category
+      ? effectiveSelectedSaveDetails.category
+          .split(/[,|]/)
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : []
+  const selectedSaveShortDescription = selectedSaveDetails?.shortDescription ?? null
+  const selectedSaveDescription = formatGameDescription(selectedSaveDetails?.longDescription)
   const drawerPortalTarget = typeof document !== 'undefined' ? document.body : null
+  const trailerEmbedOrigin =
+    typeof window !== 'undefined' && window.location.origin ? encodeURIComponent(window.location.origin) : null
   const saveGamesEmptyState =
     filter === 'blocked'
       ? {
@@ -5306,6 +5573,40 @@ function GameSavesView(props: {
 
     setSelectedPackageId(null)
   }, [selectedCard])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadSelectedSaveDetails() {
+      if (!selectedCard?.metaStoreSummary?.storeId) {
+        setSelectedSaveDetails(null)
+        setSelectedSaveDetailsBusy(false)
+        return
+      }
+
+      setSelectedSaveDetailsBusy(true)
+      try {
+        const response = await window.api.metaStore.getDetails(selectedCard.metaStoreSummary.storeId)
+        if (!cancelled) {
+          setSelectedSaveDetails(response.details)
+        }
+      } catch {
+        if (!cancelled) {
+          setSelectedSaveDetails(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedSaveDetailsBusy(false)
+        }
+      }
+    }
+
+    void loadSelectedSaveDetails()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedCard?.metaStoreSummary?.storeId])
 
   async function scanSelectedSavePackage() {
     if (!selectedCard) {
@@ -5492,6 +5793,20 @@ function GameSavesView(props: {
         {selectedCard ? (
           <>
             <div className="games-drawer-artwork-stack">
+              {selectedSaveRatingLabel ? (
+                <div className="games-rating-strip">
+                  <span className="games-rating-strip-label">Storefront Rating</span>
+                  <div className="games-rating-strip-body">
+                    <div aria-hidden="true" className="games-rating-stars">
+                      <span className="games-rating-stars-base">★★★★★</span>
+                      <span className="games-rating-stars-fill" style={{ width: `${selectedSaveRatingFillPercentage}%` }}>
+                        ★★★★★
+                      </span>
+                    </div>
+                    <strong>{selectedSaveRatingLabel}</strong>
+                  </div>
+                </div>
+              ) : null}
               <div className="games-drawer-hero">
                 <ResilientArtworkImage
                   alt=""
@@ -5499,7 +5814,7 @@ function GameSavesView(props: {
                   className="games-drawer-hero-image"
                   fallbackClassName="games-drawer-image-placeholder fallback-art-surface"
                   label={selectedCard.title}
-                  src={selectedCard.artworkUri}
+                  src={selectedSaveArtworkUri}
                   variant="hero"
                 />
               </div>
@@ -5511,22 +5826,103 @@ function GameSavesView(props: {
                     className="games-drawer-art-image"
                     fallbackClassName="games-drawer-image-placeholder compact fallback-art-surface"
                     label={selectedCard.title}
-                    src={selectedCard.artworkUri}
+                    src={selectedSaveArtworkUri}
                     variant="cover"
                   />
                 </div>
                 <div className="games-drawer-title-block">
                   <h3>{selectedCard.title}</h3>
-                  <p className="save-games-package-line">{renderBreakablePackageId(selectedCard.packageId)}</p>
+                  <p className="save-games-package-line">
+                    {effectiveSelectedSaveDetails?.publisherName ??
+                      effectiveSelectedSaveDetails?.subtitle ??
+                      renderBreakablePackageId(selectedCard.packageId)}
+                  </p>
                 </div>
               </div>
+              {selectedSaveTrailerVideoId || selectedSaveDetailsBusy ? (
+                <div className="games-drawer-sections">
+                  <section className="games-drawer-section-card">
+                    <div className="games-drawer-media-header">
+                      <span>Trailer</span>
+                      {selectedSaveTrailerVideoId ? (
+                        <a
+                          className="games-drawer-inline-link"
+                          href={`https://www.youtube.com/watch?v=${selectedSaveTrailerVideoId}`}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Open on YouTube
+                        </a>
+                      ) : null}
+                    </div>
+                    {selectedSaveTrailerVideoId ? (
+                      <div className="games-drawer-video-shell">
+                        <iframe
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          allowFullScreen
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          src={`https://www.youtube-nocookie.com/embed/${selectedSaveTrailerVideoId}?rel=0${trailerEmbedOrigin ? `&origin=${trailerEmbedOrigin}` : ''}`}
+                          title={`${selectedCard.title} trailer`}
+                        />
+                      </div>
+                    ) : (
+                      <p className="games-drawer-section-paragraph">
+                        {selectedSaveDetailsBusy ? 'Searching for trailer…' : 'No trailer available for this title.'}
+                      </p>
+                    )}
+                  </section>
+                </div>
+              ) : null}
             </div>
 
-            <div className="games-drawer-facts">
-              <div className="signal-chip games-drawer-fact-wide">
-                <span>Package</span>
-                <strong className="save-games-package-value">{renderBreakablePackageId(selectedCard.packageId)}</strong>
-              </div>
+            <div className="games-drawer-meta-stack">
+              {effectiveSelectedSaveDetails?.releaseDateLabel || selectedSaveStoreVersion ? (
+                <div className="games-drawer-meta">
+                  {effectiveSelectedSaveDetails?.releaseDateLabel ? (
+                    <span className="meta-chip">{effectiveSelectedSaveDetails.releaseDateLabel}</span>
+                  ) : null}
+                  {selectedSaveStoreVersion ? <span className="meta-chip">v{selectedSaveStoreVersion}</span> : null}
+                </div>
+              ) : null}
+              {selectedSaveCategoryChips.length ? (
+                <div className="games-drawer-meta">
+                  {selectedSaveCategoryChips.map((genre) => (
+                    <span className="meta-chip" key={genre}>
+                      {genre}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="games-drawer-copy-stack">
+              {selectedSaveShortDescription ? (
+                <div className="games-drawer-copy-stack">
+                  {renderDescriptionBlocks(
+                    parseMarkdownBlocks(selectedSaveShortDescription),
+                    'save-short-description',
+                    'section-copy compact'
+                  )}
+                </div>
+              ) : null}
+              {selectedSaveDescription.overview.length ? (
+                <div className="games-drawer-copy-stack">{renderDescriptionBlocks(selectedSaveDescription.overview, 'save-overview')}</div>
+              ) : null}
+              {selectedSaveDescription.sections.length ? (
+                <div className="games-drawer-sections">
+                  {selectedSaveDescription.sections.map((section) => (
+                    <section className="games-drawer-section-card" key={section.title}>
+                      <span>{section.title}</span>
+                      <div className="games-drawer-section-card-content">
+                        {renderDescriptionBlocks(section.blocks, `save-section-${section.title}`, 'games-drawer-section-paragraph')}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="games-drawer-facts save-games-ops-grid">
               <div className={selectedCard.isInstalled ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
                 <span>Headset Status</span>
                 <strong>{selectedCard.isInstalled ? 'Installed' : 'Not installed'}</strong>
@@ -5561,13 +5957,44 @@ function GameSavesView(props: {
                 <span>Backup Footprint</span>
                 <strong>{formatBytes(selectedCard.totalBackupBytes || null)}</strong>
               </div>
+            </div>
+
+            <div className="games-drawer-facts save-games-metadata-stack">
+              {selectedSaveComfortLevel ? (
+                <div className="signal-chip">
+                  <span>Comfort Level</span>
+                  <strong>{selectedSaveComfortLevel}</strong>
+                </div>
+              ) : null}
+              {selectedSaveGameModes.length ? (
+                <div className="signal-chip">
+                  <span>Game Modes</span>
+                  <strong>{selectedSaveGameModes.join(', ')}</strong>
+                </div>
+              ) : null}
+              {selectedSaveSupportedPlayerModes.length ? (
+                <div className="signal-chip">
+                  <span>Supported Player Modes</span>
+                  <strong>{selectedSaveSupportedPlayerModes.join(', ')}</strong>
+                </div>
+              ) : null}
+              {selectedSaveSupportedDevices.length ? (
+                <div className="signal-chip">
+                  <span>Supported Devices</span>
+                  <strong>{selectedSaveSupportedDevices.join(', ')}</strong>
+                </div>
+              ) : null}
               <div className="signal-chip">
-                <span>Live Footprint</span>
-                <strong>{formatBytes(selectedCardRootsBytes || null)}</strong>
+                <span>Package</span>
+                <strong className="save-games-package-value">{renderBreakablePackageId(selectedCard.packageId)}</strong>
               </div>
             </div>
 
-            {selectedCard.liveMessage ? <p className="section-copy compact">{selectedCard.liveMessage}</p> : null}
+            {selectedCard.liveMessage ? (
+              <div className="games-drawer-copy-stack">
+                <p className="section-copy compact">{selectedCard.liveMessage}</p>
+              </div>
+            ) : null}
 
             <div className="stack-sm">
               <button

@@ -23,6 +23,7 @@ import type {
   SettingsSelectPathResponse,
   ViewDisplayMode
 } from '@shared/types/ipc'
+import { parseVrSrcReleaseName } from '@shared/utils/vrsrcRelease'
 import { metaStoreService } from './metaStoreService'
 
 type ApkReaderModule = {
@@ -1135,6 +1136,9 @@ class SettingsService {
     }
     const fallbackName = basename(absolutePath)
     const relativePath = relative(basePath, absolutePath) || fallbackName
+    const releaseInfo = parseVrSrcReleaseName(
+      itemStats.isDirectory() ? fallbackName : basename(fallbackName, extname(fallbackName))
+    )
 
     if (itemStats.isDirectory()) {
       const summary = await this.summarizeDirectory(absolutePath)
@@ -1144,7 +1148,15 @@ class SettingsService {
         name,
         relativePath,
         absolutePath,
-        searchTerms: [name, fallbackName, relativePath, ...summary.searchTerms],
+        searchTerms: [
+          name,
+          fallbackName,
+          relativePath,
+          releaseInfo?.title ?? '',
+          releaseInfo?.versionName ?? '',
+          releaseInfo?.versionCode ?? '',
+          ...summary.searchTerms
+        ].filter(Boolean),
         packageIds: summary.packageIds,
         kind: 'folder',
         availability: 'present',
@@ -1156,8 +1168,8 @@ class SettingsService {
         apkCount: summary.apkCount,
         obbCount: summary.obbCount,
         archiveCount: summary.archiveCount,
-        libraryVersion: summary.primaryApkVersion,
-        libraryVersionCode: summary.primaryApkVersionCode,
+        libraryVersion: summary.primaryApkVersion ?? releaseInfo?.versionName ?? null,
+        libraryVersionCode: summary.primaryApkVersionCode ?? releaseInfo?.versionCode ?? null,
         sourceLastUpdatedAt: null,
         note: this.formatDirectoryNote(summary),
         manualStoreId: null,
@@ -1175,7 +1187,14 @@ class SettingsService {
       name,
       relativePath,
       absolutePath,
-      searchTerms: [name, relativePath, apkMetadata?.version ?? '', packageId ?? ''].filter(Boolean),
+      searchTerms: [
+        name,
+        relativePath,
+        releaseInfo?.title ?? '',
+        apkMetadata?.version ?? releaseInfo?.versionName ?? '',
+        apkMetadata?.versionCode ?? releaseInfo?.versionCode ?? '',
+        packageId ?? ''
+      ].filter(Boolean),
       packageIds: packageId ? [packageId] : [],
       kind,
       availability: 'present',
@@ -1187,8 +1206,8 @@ class SettingsService {
       apkCount: kind === 'apk' ? 1 : 0,
       obbCount: kind === 'obb' ? 1 : 0,
       archiveCount: kind === 'archive' ? 1 : 0,
-      libraryVersion: apkMetadata?.version ?? null,
-      libraryVersionCode: apkMetadata?.versionCode ?? null,
+      libraryVersion: apkMetadata?.version ?? releaseInfo?.versionName ?? null,
+      libraryVersionCode: apkMetadata?.versionCode ?? releaseInfo?.versionCode ?? null,
       sourceLastUpdatedAt: null,
       note: this.buildFileNote(kind),
       manualStoreId: null,

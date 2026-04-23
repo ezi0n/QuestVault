@@ -24,6 +24,7 @@ import type {
   InstalledMetaStoreIndexResponse,
   ManualGameMetadataOverride,
   MetaStoreDetailsResponse,
+  MetaStoreGameSummary,
   MetaStorePackageMatchResponse,
   MetaStoreSearchResponse,
   MetaStoreStatusResponse,
@@ -104,6 +105,9 @@ interface ElectronApi {
     peekCachedDetails: (storeId: string) => Promise<MetaStoreDetailsResponse>
     getInstalledPackageIndex: () => Promise<InstalledMetaStoreIndexResponse>
     refreshInstalledPackageIndex: (packageIds: string[]) => Promise<InstalledMetaStoreIndexResponse>
+    replaceInstalledPackageIndex: (
+      matchesByPackageId: Record<string, MetaStoreGameSummary>
+    ) => Promise<InstalledMetaStoreIndexResponse>
   }
   vrsrc: {
     getStatus: () => Promise<VrSrcStatusResponse>

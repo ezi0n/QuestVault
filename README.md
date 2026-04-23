@@ -25,12 +25,14 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Detail drawer with artwork, description, category chips, versions, package ID, store ID, folder name, and install actions.
 - Resilient artwork fallback rendering so broken image links fall back to generated cover art instead of empty panels.
 - Local, vrSrc, and save-management drawers now hand long-running actions off to the Live Queue more consistently so progress and blocked outcomes surface in one place.
+- Detail drawers across Local Library, vrSrc, Installed Inventory, and Game Saves are now more aligned, with shared rating strips, trailer embeds, richer metadata facts, and clearer section separation.
 
 ### Installed Inventory
 
 - Headset-installed apps and games inventory.
 - Independent grid/list display preference persistence.
 - Installed-state actions such as uninstall and backup.
+- Installed-app refresh now reuses the persisted installed metadata index and only hydrates packages that are still missing metadata after a scan.
 
 ### ADB Manager
 
@@ -47,6 +49,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Save restore from stored snapshots.
 - Save backup deletion.
 - Combined visibility for installed save targets and backup-only history.
+- Metadata-enriched save drawers with storefront rating, trailer support, descriptions, and player-mode / comfort / supported-device fields when a store match exists.
 
 ### Settings
 
@@ -63,9 +66,11 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Manual metadata override tools for local entries that lack clean store matches.
 - Background refresh patterns that keep the app usable while scans and enrichment continue.
 - Installed-app refreshes are now coalesced after install and uninstall bursts so Live stays readable during multi-step device operations.
+- Installed-app metadata refresh now begins from the persisted installed index, trims removed packages, and backfills only missing matches in the background.
 - Watcher-driven updates when indexed folders change on disk.
 - Windows vrSrc sync now prefers IPv4 for remote source requests to avoid Cloudflare 403 failures seen on some IPv6 paths.
 - Save drawer package IDs now wrap cleanly instead of forcing sideways scroll on long package names.
+- vrSrc-style `v<code>+<name>` release names are now parsed consistently during vrSrc sync and local indexing, which improves version fallback accuracy for vrSrc-style payload folders.
 
 - [QuestVault Screenshots](screenshots/)
 

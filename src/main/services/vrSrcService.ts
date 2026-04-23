@@ -19,6 +19,7 @@ import type {
   VrSrcTransferOperation,
   VrSrcTransferProgressUpdate
 } from '@shared/types/ipc'
+import { parseVrSrcReleaseName } from '@shared/utils/vrsrcRelease'
 import { settingsService } from './settingsService'
 import { deviceService } from './deviceService'
 import { dependencyService } from './dependencyService'
@@ -951,9 +952,7 @@ class VrSrcService {
   }
 
   private extractVersionNameFromReleaseName(releaseName: string): string | null {
-    const match = releaseName.match(/\sv\d+\+(.+?)(?:\s-\S.*|$)/i)
-    const candidate = match?.[1]?.trim() ?? null
-    return candidate ? candidate : null
+    return parseVrSrcReleaseName(releaseName)?.versionName ?? null
   }
 
   private async buildCatalog(logger?: VrSrcLogger): Promise<VrSrcCatalogResponse> {

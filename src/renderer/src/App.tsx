@@ -445,6 +445,9 @@ function buildSummaryFromDetails(details: MetaStoreGameDetails): MetaStoreGameSu
     category: details.category,
     publisherName: details.publisherName,
     genreNames: details.genreNames,
+    gameModes: details.gameModes ?? [],
+    supportedPlayerModes: details.supportedPlayerModes ?? [],
+    comfortLevel: details.comfortLevel ?? null,
     releaseDateLabel: details.releaseDateLabel,
     canonicalName: details.canonicalName,
     thumbnail: details.thumbnail,
@@ -452,8 +455,10 @@ function buildSummaryFromDetails(details: MetaStoreGameDetails): MetaStoreGameSu
     portraitImage: details.portraitImage,
     iconImage: details.iconImage,
     logoImage: details.logoImage,
+    youtubeTrailerVideoId: details.youtubeTrailerVideoId ?? null,
     version: details.version,
     versionCode: details.versionCode,
+    supportedDevices: details.supportedDevices ?? [],
     sizeBytes: details.sizeBytes,
     ratingAverage: details.ratingAverage,
     priceLabel: details.priceLabel,
@@ -1855,6 +1860,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
   async function refreshInstalledApps(serial: string) {
     setDeviceAppsBusy(true)
+    let handedOffMetadataRefresh = false
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('scan', `installed-apps-${serial}`),
       title: 'Installed Apps Refresh',
@@ -1868,25 +1874,83 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
     try {
       const response = await window.api.devices.listInstalledApps(serial)
-      const metadataMatches = await refreshInstalledAppMetadata(response)
       setDeviceAppsResponse(response)
       setDeviceAppsMessage(response.runtime.message)
       setInventoryMessage(null)
       const installedAppChangeDetails = buildInstalledAppChangeDetails(response.change)
+
+      if (response.runtime.status === 'error') {
+        updateLiveQueueItem(queueId, {
+          phase: 'failed',
+          progress: 100,
+          details: response.runtime.message
+        })
+        return
+      }
+
+      handedOffMetadataRefresh = true
+      setDeviceAppsBusy(false)
+      const installedPackageCount = response.apps.length
       updateLiveQueueItem(queueId, {
-        phase: response.runtime.status === 'error' ? 'failed' : 'completed',
-        progress: 100,
-        details:
-          response.runtime.status === 'error'
-            ? response.runtime.message
-            : [
-                response.runtime.message,
-                installedAppChangeDetails,
-                `Resolved metadata for ${Object.keys(metadataMatches).length} installed package${Object.keys(metadataMatches).length === 1 ? '' : 's'}.`
-              ]
-                .filter(Boolean)
-                .join(' ')
+        phase: 'scanning',
+        progress: 72,
+        details: [
+          response.runtime.message,
+          installedAppChangeDetails,
+          'Installed apps loaded. Checking cached metadata before any background refresh...'
+        ]
+          .filter(Boolean)
+          .join(' ')
       })
+
+      void refreshInstalledAppMetadata(response, ({ completed, total, resolvedCount, phase }) => {
+        const progressBase = 72
+        const progressSpan = 26
+        const normalizedTotal = Math.max(total, 1)
+        const nextProgress =
+          phase === 'persisting'
+            ? 99
+            : progressBase + Math.round((completed / normalizedTotal) * progressSpan)
+
+        updateLiveQueueItem(queueId, {
+          phase: 'scanning',
+          progress: Math.min(99, nextProgress),
+          details:
+            phase === 'persisting'
+              ? `Installed apps loaded. Saving refreshed metadata index (${resolvedCount}/${total})...`
+              : total > 0
+                ? `Installed apps loaded. Refreshing metadata in the background (${completed}/${total}, ${resolvedCount} matched)...`
+                : `Installed apps loaded. Installed metadata is already current (${resolvedCount}/${installedPackageCount} matched).`
+        })
+      })
+        .then((metadataMatches) => {
+          updateLiveQueueItem(queueId, {
+            phase: 'completed',
+            progress: 100,
+            details: [
+              response.runtime.message,
+              installedAppChangeDetails,
+              `Resolved metadata for ${Object.keys(metadataMatches).length} installed package${Object.keys(metadataMatches).length === 1 ? '' : 's'}.`
+            ]
+              .filter(Boolean)
+              .join(' ')
+          })
+        })
+        .catch((error) => {
+          const metadataMessage =
+            error instanceof Error ? error.message : 'Installed metadata refresh did not complete.'
+          updateLiveQueueItem(queueId, {
+            phase: 'completed',
+            progress: 100,
+            details: [
+              response.runtime.message,
+              installedAppChangeDetails,
+              `Installed apps loaded, but metadata is still pending: ${metadataMessage}`
+            ]
+              .filter(Boolean)
+              .join(' ')
+          })
+        })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to load installed apps.'
       setDeviceAppsMessage(message)
@@ -1896,29 +1960,107 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details: message
       })
     } finally {
-      setDeviceAppsBusy(false)
+      if (!handedOffMetadataRefresh) {
+        setDeviceAppsBusy(false)
+      }
     }
   }
 
   async function refreshInstalledAppMetadata(
-    response: DeviceAppsResponse | null
+    response: DeviceAppsResponse | null,
+    onProgress?: (update: {
+      completed: number
+      total: number
+      resolvedCount: number
+      phase: 'hydrating' | 'persisting'
+    }) => void
   ): Promise<Record<string, MetaStoreGameSummary>> {
     const packageIds = Array.from(
       new Set((response?.apps ?? []).map((app) => app.packageId.trim()).filter(Boolean))
     )
+    const normalizedPackageIds = packageIds.map((packageId) => packageId.toLowerCase())
+    const normalizedPackageIdSet = new Set(normalizedPackageIds)
 
     if (!packageIds.length) {
       setInstalledMetaStoreMatchesByPackageId({})
+      void window.api.metaStore.replaceInstalledPackageIndex({})
       return {}
     }
 
-    const matchesResponse = await window.api.metaStore.refreshInstalledPackageIndex(packageIds)
-    const normalizedMatches = Object.fromEntries(
-      Object.entries(matchesResponse.matches).map(([packageId, summary]) => [packageId.toLowerCase(), summary])
+    const installedIndexResponse = await window.api.metaStore.getInstalledPackageIndex()
+    const nextMatches: Record<string, MetaStoreGameSummary> = Object.fromEntries(
+      Object.entries(installedIndexResponse.matches)
+        .map(([packageId, summary]) => [packageId.toLowerCase(), summary] as const)
+        .filter(([packageId]) => normalizedPackageIdSet.has(packageId))
     )
 
-    setInstalledMetaStoreMatchesByPackageId(normalizedMatches)
-    return normalizedMatches
+    setInstalledMetaStoreMatchesByPackageId(nextMatches)
+
+    const missingPackageIds = packageIds.filter((packageId) => !nextMatches[packageId.toLowerCase()])
+    const cachedMissingMatches =
+      missingPackageIds.length > 0 ? await window.api.metaStore.peekCachedMatchesByPackageIds(missingPackageIds) : null
+
+    for (const [packageId, summary] of Object.entries(cachedMissingMatches?.matches ?? {})) {
+      nextMatches[packageId.toLowerCase()] = summary
+    }
+
+    if (cachedMissingMatches?.matches && Object.keys(cachedMissingMatches.matches).length > 0) {
+      setInstalledMetaStoreMatchesByPackageId((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          Object.entries(cachedMissingMatches.matches).map(([packageId, summary]) => [packageId.toLowerCase(), summary])
+        )
+      }))
+    }
+
+    const packageIdsNeedingHydration = packageIds.filter((packageId) => !nextMatches[packageId.toLowerCase()])
+
+    onProgress?.({
+      completed: 0,
+      total: packageIdsNeedingHydration.length,
+      resolvedCount: Object.keys(nextMatches).length,
+      phase: 'hydrating'
+    })
+
+    const chunkSize = 4
+    let completed = 0
+
+    for (let offset = 0; offset < packageIdsNeedingHydration.length; offset += chunkSize) {
+      const chunk = packageIdsNeedingHydration.slice(offset, offset + chunkSize)
+      const matchesResponse = await window.api.metaStore.getCachedMatchesByPackageIds(chunk)
+
+      for (const [packageId, summary] of Object.entries(matchesResponse.matches)) {
+        nextMatches[packageId.toLowerCase()] = summary
+      }
+
+      completed += chunk.length
+      setInstalledMetaStoreMatchesByPackageId((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          Object.entries(matchesResponse.matches).map(([packageId, summary]) => [packageId.toLowerCase(), summary])
+        )
+      }))
+      onProgress?.({
+        completed,
+        total: packageIdsNeedingHydration.length,
+        resolvedCount: Object.keys(nextMatches).length,
+        phase: 'hydrating'
+      })
+    }
+
+    onProgress?.({
+      completed: packageIdsNeedingHydration.length,
+      total: packageIdsNeedingHydration.length,
+      resolvedCount: Object.keys(nextMatches).length,
+      phase: 'persisting'
+    })
+
+    void window.api.metaStore.replaceInstalledPackageIndex(nextMatches).catch(() => {
+      // The UI already has the refreshed matches; persistence can fail independently.
+    })
+
+    setInstalledMetaStoreMatchesByPackageId(nextMatches)
+    return nextMatches
   }
 
   async function refreshLeftoverData(serial: string, announceInQueue = true) {

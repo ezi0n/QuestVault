@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { basename, dirname, extname, join } from 'node:path'
@@ -13,6 +13,7 @@ import type {
   MetaStoreSearchResponse,
   MetaStoreStatusResponse
 } from '@shared/types/ipc'
+import { parseVrSrcReleaseName } from '@shared/utils/vrsrcRelease'
 
 interface MetaStoreCache {
   summariesByStoreId: Record<string, MetaStoreGameSummary>
@@ -26,6 +27,16 @@ interface InstalledMetaStoreIndex {
 }
 
 type MetaStoreImageAsset = NonNullable<MetaStoreGameSummary['thumbnail']>
+
+interface StorefrontDetails {
+  supportedDevices: string[]
+  applicationSubCategory: string[]
+  gameModes: string[]
+  supportedPlayerModes: string[]
+  comfortLevel: string | null
+}
+
+type StorefrontAdditionalDetails = Pick<StorefrontDetails, 'gameModes' | 'supportedPlayerModes' | 'comfortLevel'>
 
 const EMPTY_CACHE: MetaStoreCache = {
   summariesByStoreId: {},
@@ -42,10 +53,13 @@ class MetaStoreService {
   private cachedStore: MetaStoreCache | null = null
   private cachedInstalledIndex: InstalledMetaStoreIndex | null = null
   private pendingHydrations = new Map<string, Promise<MetaStoreGameDetails | null>>()
+  private pendingStorefrontDetails = new Map<string, Promise<StorefrontAdditionalDetails | null>>()
   private pendingCacheWrite: Promise<void> = Promise.resolve()
   private pendingInstalledIndexWrite: Promise<void> = Promise.resolve()
 
   private readonly metaMetadataBaseUrl = 'https://raw.githubusercontent.com/threethan/MetaMetadata/main'
+  private readonly youtubeSearchUserAgent =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
   private getCachePath(): string {
     return join(app.getPath('userData'), 'meta-store-cache.json')
@@ -350,6 +364,344 @@ class MetaStoreService {
     return this.fetchJson<Record<string, unknown>>(`https://oculusdb.rui2015.me/api/v1/id/${storeItemId}`)
   }
 
+  private normalizeStringList(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return []
+    }
+
+    return value
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  }
+
+  private normalizeDelimitedList(value: string | null | undefined): string[] {
+    if (typeof value !== 'string') {
+      return []
+    }
+
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  }
+
+  private normalizeTrailerSearchKey(value: string): string {
+    return value.trim().toLowerCase()
+  }
+
+  private extractTrailerVideoIdFromHtml(html: string): string | null {
+    const matches = Array.from(html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g))
+    return matches[0]?.[1] ?? null
+  }
+
+  private async fetchTrailerVideoId(title: string | null | undefined): Promise<string | null> {
+    const normalizedTitle = title?.trim()
+    if (!normalizedTitle) {
+      return null
+    }
+
+    const cacheKey = this.normalizeTrailerSearchKey(normalizedTitle)
+    const cache = await this.ensureCacheLoaded()
+    const cachedDetails = Object.values(cache.detailsByStoreId).find(
+      (details) =>
+        typeof details.youtubeTrailerVideoId === 'string' &&
+        details.youtubeTrailerVideoId.trim().length > 0 &&
+        this.normalizeTrailerSearchKey(details.title) === cacheKey
+    )
+    if (cachedDetails) {
+      return cachedDetails.youtubeTrailerVideoId ?? null
+    }
+
+    try {
+      const query = encodeURIComponent(`${normalizedTitle} quest vr trailer`)
+      const response = await fetch(`https://www.youtube.com/results?search_query=${query}&hl=en`, {
+        headers: {
+          'accept': '*/*',
+          'user-agent': this.youtubeSearchUserAgent
+        }
+      })
+      if (!response.ok) {
+        return null
+      }
+
+      const html = await response.text()
+      return this.extractTrailerVideoIdFromHtml(html)
+    } catch {
+      return null
+    }
+  }
+
+  private buildSummaryFromDetails(details: MetaStoreGameDetails): MetaStoreGameSummary {
+    return {
+      storeId: details.storeId,
+      storeItemId: details.storeItemId,
+      packageId: details.packageId,
+      title: details.title,
+      subtitle: details.subtitle,
+      category: details.category,
+      publisherName: details.publisherName,
+      genreNames: details.genreNames,
+      gameModes: details.gameModes ?? [],
+      supportedPlayerModes: details.supportedPlayerModes ?? [],
+      comfortLevel: details.comfortLevel ?? null,
+      releaseDateLabel: details.releaseDateLabel,
+      canonicalName: details.canonicalName,
+      thumbnail: details.thumbnail,
+      heroImage: details.heroImage,
+      portraitImage: details.portraitImage,
+      iconImage: details.iconImage,
+      logoImage: details.logoImage,
+      youtubeTrailerVideoId: details.youtubeTrailerVideoId ?? null,
+      version: details.version,
+      versionCode: details.versionCode,
+      supportedDevices: details.supportedDevices ?? [],
+      sizeBytes: details.sizeBytes,
+      ratingAverage: details.ratingAverage,
+      priceLabel: details.priceLabel,
+      source: details.source,
+      fetchedAt: details.fetchedAt
+    }
+  }
+
+  private async backfillTrailerVideoIdIfMissing(
+    details: MetaStoreGameDetails,
+    cacheOverride?: MetaStoreCache
+  ): Promise<MetaStoreGameDetails> {
+    if (details.youtubeTrailerVideoId || !details.title) {
+      return details
+    }
+
+    const youtubeTrailerVideoId = await this.fetchTrailerVideoId(details.title)
+    if (!youtubeTrailerVideoId) {
+      return details
+    }
+
+    const enrichedDetails: MetaStoreGameDetails = {
+      ...details,
+      youtubeTrailerVideoId
+    }
+    const enrichedSummary = this.buildSummaryFromDetails(enrichedDetails)
+    const cache = cacheOverride ?? (await this.ensureCacheLoaded())
+    await this.saveCache({
+      summariesByStoreId: {
+        ...cache.summariesByStoreId,
+        [enrichedSummary.storeId]: enrichedSummary
+      },
+      detailsByStoreId: {
+        ...cache.detailsByStoreId,
+        [enrichedDetails.storeId]: enrichedDetails
+      },
+      lastUpdatedAt: new Date().toISOString()
+    })
+
+    return enrichedDetails
+  }
+
+  private parseStorefrontStructuredProduct(html: string): Pick<StorefrontDetails, 'supportedDevices' | 'applicationSubCategory'> | null {
+    const scriptMatches = html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)
+
+    for (const match of scriptMatches) {
+      const rawPayload = match[1]?.trim()
+
+      if (!rawPayload) {
+        continue
+      }
+
+      try {
+        const parsed = JSON.parse(rawPayload) as Record<string, unknown>
+        const graphEntries = Array.isArray(parsed['@graph']) ? parsed['@graph'] : [parsed]
+
+        for (const entry of graphEntries) {
+          if (!entry || typeof entry !== 'object') {
+            continue
+          }
+
+          const typeValue = (entry as Record<string, unknown>)['@type']
+          const types = Array.isArray(typeValue) ? typeValue : [typeValue]
+          if (!types.some((value) => value === 'SoftwareApplication')) {
+            continue
+          }
+
+          return {
+            supportedDevices: this.normalizeStringList((entry as Record<string, unknown>).availableOnDevice),
+            applicationSubCategory: this.normalizeStringList((entry as Record<string, unknown>).applicationSubCategory)
+          }
+        }
+      } catch {
+        continue
+      }
+    }
+
+    return null
+  }
+
+  private async fetchStorefrontStructuredProduct(storeItemId: string | null): Promise<Pick<StorefrontDetails, 'supportedDevices' | 'applicationSubCategory'> | null> {
+    const normalizedStoreItemId = storeItemId?.trim()
+
+    if (!normalizedStoreItemId) {
+      return null
+    }
+
+    try {
+      const response = await fetch(`https://www.meta.com/experiences/${encodeURIComponent(normalizedStoreItemId)}/`)
+      if (!response.ok) {
+        return null
+      }
+
+      const html = await response.text()
+      return this.parseStorefrontStructuredProduct(html)
+    } catch {
+      return null
+    }
+  }
+
+  private async waitForDelay(milliseconds: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, milliseconds)
+    })
+  }
+
+  private async fetchStorefrontAdditionalDetails(storeItemId: string | null): Promise<StorefrontAdditionalDetails | null> {
+    const normalizedStoreItemId = storeItemId?.trim()
+
+    if (!normalizedStoreItemId) {
+      return null
+    }
+
+    const existingPending = this.pendingStorefrontDetails.get(normalizedStoreItemId)
+    if (existingPending) {
+      const pendingResult = await existingPending
+      return pendingResult
+        ? {
+            gameModes: pendingResult.gameModes,
+            supportedPlayerModes: pendingResult.supportedPlayerModes,
+            comfortLevel: pendingResult.comfortLevel
+          }
+        : null
+    }
+
+    const storefrontPromise: Promise<StorefrontAdditionalDetails | null> = (async () => {
+      let browserWindow: BrowserWindow | null = null
+
+      try {
+        browserWindow = new BrowserWindow({
+          show: false,
+          width: 1280,
+          height: 1600,
+          skipTaskbar: true,
+          webPreferences: {
+            sandbox: true,
+            backgroundThrottling: false
+          }
+        })
+        browserWindow.setMenuBarVisibility(false)
+        browserWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+        browserWindow.webContents.setUserAgent(
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        )
+
+        await browserWindow.loadURL(`https://www.meta.com/en-gb/experiences/${encodeURIComponent(normalizedStoreItemId)}/`)
+
+        const extractDetails = async (): Promise<{ gameModes: string | null; supportedPlayerModes: string | null; comfortLevel: string | null } | null> => {
+          if (!browserWindow || browserWindow.isDestroyed()) {
+            return null
+          }
+
+          return browserWindow.webContents.executeJavaScript(
+            `(() => {
+              const normalize = (value) => String(value ?? '').replace(/\\s+/g, ' ').trim();
+              const labels = ['Game Modes', 'Supported Player Modes', 'Comfort level'];
+              const allNodes = [...document.querySelectorAll('*')];
+              const findValue = (label) => {
+                const normalizedLabel = label.toLowerCase();
+                const labelNode = allNodes.find((node) => normalize(node.textContent).toLowerCase() === normalizedLabel);
+                if (!labelNode) {
+                  return null;
+                }
+
+                let current = labelNode;
+                for (let depth = 0; depth < 6 && current; depth += 1) {
+                  const rowText = normalize(current.textContent);
+                  if (rowText && rowText.toLowerCase().startsWith(normalizedLabel) && rowText.length > label.length) {
+                    return rowText.slice(label.length).trim() || null;
+                  }
+                  current = current.parentElement;
+                }
+
+                return null;
+              };
+
+              const result = {
+                gameModes: findValue('Game Modes'),
+                supportedPlayerModes: findValue('Supported Player Modes'),
+                comfortLevel: findValue('Comfort level')
+              };
+
+              return result.gameModes || result.supportedPlayerModes || result.comfortLevel ? result : null;
+            })()`,
+            true
+          )
+        }
+
+        const deadline = Date.now() + 15000
+        while (Date.now() < deadline) {
+          const extracted = await extractDetails()
+          if (extracted) {
+            return {
+              gameModes: this.normalizeDelimitedList(extracted.gameModes),
+              supportedPlayerModes: this.normalizeDelimitedList(extracted.supportedPlayerModes),
+              comfortLevel: extracted.comfortLevel?.trim() || null
+            }
+          }
+
+          await this.waitForDelay(500)
+        }
+      } catch {
+        return null
+      } finally {
+        if (browserWindow && !browserWindow.isDestroyed()) {
+          browserWindow.destroy()
+        }
+      }
+
+      return null
+    })()
+
+    this.pendingStorefrontDetails.set(normalizedStoreItemId, storefrontPromise)
+
+    try {
+      return await storefrontPromise
+    } finally {
+      this.pendingStorefrontDetails.delete(normalizedStoreItemId)
+    }
+  }
+
+  private async fetchStorefrontDetails(storeItemId: string | null): Promise<StorefrontDetails | null> {
+    const normalizedStoreItemId = storeItemId?.trim()
+
+    if (!normalizedStoreItemId) {
+      return null
+    }
+
+    const [structuredProduct, additionalDetails] = await Promise.all([
+      this.fetchStorefrontStructuredProduct(normalizedStoreItemId),
+      this.fetchStorefrontAdditionalDetails(normalizedStoreItemId)
+    ])
+
+    if (!structuredProduct && !additionalDetails) {
+      return null
+    }
+
+    return {
+      supportedDevices: structuredProduct?.supportedDevices ?? [],
+      applicationSubCategory: structuredProduct?.applicationSubCategory ?? [],
+      gameModes: additionalDetails?.gameModes ?? [],
+      supportedPlayerModes: additionalDetails?.supportedPlayerModes ?? [],
+      comfortLevel: additionalDetails?.comfortLevel ?? null
+    }
+  }
+
   private extractVersionCode(value: unknown): string | null {
     if (typeof value === 'number' && Number.isFinite(value)) {
       return String(value)
@@ -385,6 +737,17 @@ class MetaStoreService {
     }
 
     return null
+  }
+
+  private hasRequiredRemoteDetailFields(details: MetaStoreGameDetails): boolean {
+    const candidate = details as unknown as Record<string, unknown>
+    return (
+      Object.prototype.hasOwnProperty.call(candidate, 'supportedDevices') &&
+      Object.prototype.hasOwnProperty.call(candidate, 'gameModes') &&
+      Object.prototype.hasOwnProperty.call(candidate, 'supportedPlayerModes') &&
+      Object.prototype.hasOwnProperty.call(candidate, 'comfortLevel') &&
+      Object.prototype.hasOwnProperty.call(candidate, 'youtubeTrailerVideoId')
+    )
   }
 
   private normalizeReleaseDateLabel(value: unknown): string | null {
@@ -457,6 +820,7 @@ class MetaStoreService {
         (typeof publicRecord?.id === 'string' && publicRecord.id) ||
         (typeof oculusDbRecord?.id === 'string' && oculusDbRecord.id) ||
         null
+      const storefrontDetails = await this.fetchStorefrontDetails(storeItemId)
       const title =
         (typeof publicRecord?.display_name === 'string' && publicRecord.display_name) ||
         (typeof oculusDbRecord?.displayName === 'string' && oculusDbRecord.displayName) ||
@@ -466,8 +830,13 @@ class MetaStoreService {
       const publisherName =
         (typeof oculusDbRecord?.publisher_name === 'string' && oculusDbRecord.publisher_name) || null
       const genreNames =
-        (Array.isArray(publicRecord?.genre_names) ? publicRecord.genre_names : Array.isArray(oculusDbRecord?.genre_names) ? oculusDbRecord.genre_names : [])
-          .filter((genre): genre is string => typeof genre === 'string' && genre.trim().length > 0)
+        (
+          Array.isArray(publicRecord?.genre_names)
+            ? publicRecord.genre_names
+            : Array.isArray(oculusDbRecord?.genre_names)
+              ? oculusDbRecord.genre_names
+              : storefrontDetails?.applicationSubCategory ?? []
+        ).filter((genre): genre is string => typeof genre === 'string' && genre.trim().length > 0)
       const category =
         (typeof publicRecord?.category_name === 'string' && publicRecord.category_name) ||
         (genreNames.length ? genreNames[0] : null)
@@ -509,6 +878,7 @@ class MetaStoreService {
         oculusDbRecord?.totalInstalledSpaceFormatted
       )
       const fetchedAt = new Date().toISOString()
+      const youtubeTrailerVideoId = await this.fetchTrailerVideoId(title)
 
       return {
         storeId: this.buildStoreIdFromRemote(storeItemId, resolvedPackageId),
@@ -536,8 +906,13 @@ class MetaStoreService {
           this.buildImageAsset(commonRecord?.icon) ||
           this.buildImageAsset(publicRecord?.icon_image),
         logoImage: this.buildImageAsset(commonRecord?.logo),
+        youtubeTrailerVideoId,
         version,
         versionCode,
+        supportedDevices: storefrontDetails?.supportedDevices ?? [],
+        gameModes: storefrontDetails?.gameModes ?? [],
+        supportedPlayerModes: storefrontDetails?.supportedPlayerModes ?? [],
+        comfortLevel: storefrontDetails?.comfortLevel ?? null,
         sizeBytes,
         ratingAverage,
         priceLabel,
@@ -546,7 +921,7 @@ class MetaStoreService {
         shortDescription,
         longDescription,
         languageNames: [],
-        interactionModeNames: genreNames,
+        interactionModeNames: storefrontDetails?.supportedPlayerModes ?? [],
         internetConnectionName: null,
         gamepadRequired: null,
         websiteUrl,
@@ -588,8 +963,10 @@ class MetaStoreService {
       (typeof oculusDbRecord.publisher_name === 'string' && oculusDbRecord.publisher_name) || null
     const genreNames = (Array.isArray(oculusDbRecord.genre_names) ? oculusDbRecord.genre_names : [])
       .filter((genre): genre is string => typeof genre === 'string' && genre.trim().length > 0)
+    const storefrontDetails = await this.fetchStorefrontDetails(storeItemId)
     const category = genreNames.length ? genreNames[0] : null
     const fetchedAt = new Date().toISOString()
+    const youtubeTrailerVideoId = await this.fetchTrailerVideoId(title)
 
     return {
       storeId: `meta:${storeItemId}`,
@@ -607,10 +984,15 @@ class MetaStoreService {
       portraitImage: null,
       iconImage: null,
       logoImage: null,
+      youtubeTrailerVideoId,
       version:
         (typeof oculusDbRecord.version === 'string' && oculusDbRecord.version) ||
         null,
       versionCode: this.extractVersionCode(oculusDbRecord.versionCode),
+      supportedDevices: storefrontDetails?.supportedDevices ?? [],
+      gameModes: storefrontDetails?.gameModes ?? [],
+      supportedPlayerModes: storefrontDetails?.supportedPlayerModes ?? [],
+      comfortLevel: storefrontDetails?.comfortLevel ?? null,
       sizeBytes: this.extractSizeBytes(
         oculusDbRecord.total_installed_space,
         oculusDbRecord.required_space_adjusted,
@@ -628,7 +1010,7 @@ class MetaStoreService {
       longDescription:
         (typeof oculusDbRecord.display_long_description === 'string' && oculusDbRecord.display_long_description) || null,
       languageNames: [],
-      interactionModeNames: genreNames,
+      interactionModeNames: storefrontDetails?.supportedPlayerModes ?? [],
       internetConnectionName: null,
       gamepadRequired: null,
       websiteUrl:
@@ -651,15 +1033,15 @@ class MetaStoreService {
     const hydrationPromise = (async () => {
       const cache = await this.ensureCacheLoaded()
       const existingDetails = this.findDetailsByPackageId(cache, normalizedPackageId)
-      if (existingDetails?.source === 'remote') {
-        return existingDetails
+      if (existingDetails?.source === 'remote' && this.hasRequiredRemoteDetailFields(existingDetails)) {
+        return this.backfillTrailerVideoIdIfMissing(existingDetails, cache)
       }
 
       const remoteDetails = await this.fetchRemoteMetadataByPackageId(normalizedPackageId)
       if (!remoteDetails) {
         return existingDetails ?? null
       }
-      const cachedRemoteDetails = await this.cacheDetailsImages(remoteDetails)
+      const cachedRemoteDetails = await this.backfillTrailerVideoIdIfMissing(await this.cacheDetailsImages(remoteDetails))
 
       const latestCache = await this.ensureCacheLoaded()
       const nextSummaries = { ...latestCache.summariesByStoreId }
@@ -675,6 +1057,9 @@ class MetaStoreService {
         category: cachedRemoteDetails.category,
         publisherName: cachedRemoteDetails.publisherName,
         genreNames: cachedRemoteDetails.genreNames,
+        gameModes: cachedRemoteDetails.gameModes ?? [],
+        supportedPlayerModes: cachedRemoteDetails.supportedPlayerModes ?? [],
+        comfortLevel: cachedRemoteDetails.comfortLevel ?? null,
         releaseDateLabel: cachedRemoteDetails.releaseDateLabel,
         canonicalName: cachedRemoteDetails.canonicalName,
         thumbnail: cachedRemoteDetails.thumbnail,
@@ -682,8 +1067,10 @@ class MetaStoreService {
         portraitImage: cachedRemoteDetails.portraitImage,
         iconImage: cachedRemoteDetails.iconImage,
         logoImage: cachedRemoteDetails.logoImage,
+        youtubeTrailerVideoId: cachedRemoteDetails.youtubeTrailerVideoId ?? null,
         version: cachedRemoteDetails.version,
         versionCode: cachedRemoteDetails.versionCode,
+        supportedDevices: cachedRemoteDetails.supportedDevices ?? [],
         sizeBytes: cachedRemoteDetails.sizeBytes,
         ratingAverage: cachedRemoteDetails.ratingAverage,
         priceLabel: cachedRemoteDetails.priceLabel,
@@ -715,11 +1102,8 @@ class MetaStoreService {
   }
 
   private buildDisplayTitleFromLibraryItem(item: LocalLibraryIndexedItem): string {
-    if (item.kind === 'apk') {
-      return basename(item.name, extname(item.name)) || item.name
-    }
-
-    return item.name
+    const rawTitle = item.kind === 'apk' ? basename(item.name, extname(item.name)) || item.name : item.name
+    return parseVrSrcReleaseName(rawTitle)?.title ?? rawTitle
   }
 
   private buildLocalSummaryFromLibraryItem(
@@ -736,6 +1120,9 @@ class MetaStoreService {
       category: 'Local Library',
       publisherName: null,
       genreNames: [],
+      gameModes: [],
+      supportedPlayerModes: [],
+      comfortLevel: null,
       releaseDateLabel: null,
       canonicalName: null,
       thumbnail: null,
@@ -743,8 +1130,10 @@ class MetaStoreService {
       portraitImage: null,
       iconImage: null,
       logoImage: null,
-      version: null,
-      versionCode: null,
+      youtubeTrailerVideoId: null,
+      version: item.libraryVersion ?? null,
+      versionCode: item.libraryVersionCode ?? null,
+      supportedDevices: [],
       sizeBytes: item.sizeBytes,
       ratingAverage: null,
       priceLabel: null,
@@ -797,7 +1186,13 @@ class MetaStoreService {
         summary.category,
         summary.packageId,
         summary.version,
-        summary.versionCode
+        summary.versionCode,
+        summary.publisherName,
+        summary.genreNames.join(', '),
+        summary.gameModes.join(', '),
+        summary.supportedPlayerModes.join(', '),
+        summary.supportedDevices.join(', '),
+        summary.comfortLevel
       ]
 
       return haystacks.some((value) => value?.toLowerCase().includes(normalizedQuery))
@@ -835,7 +1230,7 @@ class MetaStoreService {
     let cache = await this.ensureCacheLoaded()
     let details = cache.detailsByStoreId[normalizedStoreId] ?? null
 
-    if (!details || details.source !== 'remote') {
+    if (!details || details.source !== 'remote' || !this.hasRequiredRemoteDetailFields(details)) {
       const packageId =
         details?.packageId ||
         cache.summariesByStoreId[normalizedStoreId]?.packageId ||
@@ -860,6 +1255,9 @@ class MetaStoreService {
             category: cachedRemoteDetails.category,
             publisherName: cachedRemoteDetails.publisherName,
             genreNames: cachedRemoteDetails.genreNames,
+            gameModes: cachedRemoteDetails.gameModes ?? [],
+            supportedPlayerModes: cachedRemoteDetails.supportedPlayerModes ?? [],
+            comfortLevel: cachedRemoteDetails.comfortLevel ?? null,
             releaseDateLabel: cachedRemoteDetails.releaseDateLabel,
             canonicalName: cachedRemoteDetails.canonicalName,
             thumbnail: cachedRemoteDetails.thumbnail,
@@ -867,8 +1265,10 @@ class MetaStoreService {
             portraitImage: cachedRemoteDetails.portraitImage,
             iconImage: cachedRemoteDetails.iconImage,
             logoImage: cachedRemoteDetails.logoImage,
+            youtubeTrailerVideoId: cachedRemoteDetails.youtubeTrailerVideoId ?? null,
             version: cachedRemoteDetails.version,
             versionCode: cachedRemoteDetails.versionCode,
+            supportedDevices: cachedRemoteDetails.supportedDevices ?? [],
             sizeBytes: cachedRemoteDetails.sizeBytes,
             ratingAverage: cachedRemoteDetails.ratingAverage,
             priceLabel: cachedRemoteDetails.priceLabel,
@@ -891,6 +1291,10 @@ class MetaStoreService {
           details = cachedRemoteDetails
         }
       }
+    }
+
+    if (details) {
+      details = await this.backfillTrailerVideoIdIfMissing(details, cache)
     }
 
     return {
@@ -1006,6 +1410,31 @@ class MetaStoreService {
         ? `Indexed installed metadata for ${Object.keys(matches).length} of ${uniquePackageIds.length} package${uniquePackageIds.length === 1 ? '' : 's'}.`
         : 'No installed package IDs were provided for metadata indexing.',
       matches,
+      lastUpdatedAt
+    }
+  }
+
+  async replaceInstalledPackageIndex(matchesByPackageId: Record<string, MetaStoreGameSummary>): Promise<InstalledMetaStoreIndexResponse> {
+    const normalizedEntries = Object.entries(matchesByPackageId)
+      .map(([packageId, summary]) => [packageId.trim().toLowerCase(), summary] as const)
+      .filter(([packageId]) => packageId.length > 0)
+    const normalizedMatches: Record<string, MetaStoreGameSummary> = Object.fromEntries(
+      normalizedEntries
+    )
+    const lastUpdatedAt = new Date().toISOString()
+
+    await this.saveInstalledIndex({
+      matchesByPackageId: normalizedMatches,
+      lastUpdatedAt
+    })
+
+    return {
+      status: Object.values(normalizedMatches).some((match) => match.source === 'remote') ? 'ready' : 'cache-only',
+      packageIds: Object.keys(normalizedMatches),
+      message: Object.keys(normalizedMatches).length
+        ? `Stored installed metadata for ${Object.keys(normalizedMatches).length} package${Object.keys(normalizedMatches).length === 1 ? '' : 's'}.`
+        : 'Cleared the installed metadata index.',
+      matches: normalizedMatches,
       lastUpdatedAt
     }
   }

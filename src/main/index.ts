@@ -299,6 +299,11 @@ app.whenReady().then(async () => {
   ipcMain.handle('meta-store:refresh-installed-package-index', async (_event, packageIds: string[]) =>
     metaStoreService.refreshInstalledPackageIndex(packageIds)
   )
+  ipcMain.handle(
+    'meta-store:replace-installed-package-index',
+    async (_event, matchesByPackageId: Record<string, import('@shared/types/ipc').MetaStoreGameSummary>) =>
+      metaStoreService.replaceInstalledPackageIndex(matchesByPackageId)
+  )
   ipcMain.handle('vrsrc:get-status', async () => vrSrcService.getStatus())
   ipcMain.handle('vrsrc:get-catalog', async () => vrSrcService.getCatalog())
   ipcMain.handle('vrsrc:get-item-details', async (_event, releaseName: string, gameName: string) =>

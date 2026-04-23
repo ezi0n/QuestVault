@@ -19,6 +19,8 @@
 - Open a rich local item drawer with:
   - artwork
   - descriptions
+  - storefront rating
+  - supported devices / comfort / player modes when available
   - package ID
   - version information
   - store ID
@@ -39,7 +41,7 @@
 - Hand remote drawer actions off to the Live queue for download/update/install visibility and blocked outcomes.
 - View a remote detail drawer with:
   - artwork
-  - remote and library version comparison
+  - remote version / version code / release metadata
   - release metadata
   - notes
   - trailer embed when available
@@ -53,6 +55,7 @@
 - Back up installed APKs.
 - Uninstall installed apps.
 - Review storage and leftover-data summary metrics above the inventory surface.
+- Reuse cached installed metadata matches on repeat refreshes and only hydrate packages that are still missing metadata after the scan.
 
 ## Game Saves
 
@@ -64,6 +67,7 @@
 - Delete save snapshots.
 - Browse saves in grid or list mode with status-aware cards.
 - Wrap long package identifiers cleanly in the save drawer instead of overflowing horizontally.
+- Review save drawers with storefront rating, trailer, descriptions, comfort level, game modes, supported player modes, and supported devices when a metadata match exists.
 
 ## Settings and Maintenance
 

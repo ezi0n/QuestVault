@@ -30,6 +30,11 @@ import { headsetActionLogService, type HeadsetActionContext } from './headsetAct
 
 const execFileAsync = promisify(execFile)
 const PLATFORM_PACKAGE_PREFIXES = ['com.android.', 'com.oculus.', 'com.meta.', 'com.facebook.']
+const INSTALLED_APP_LIST_TIMEOUT_MS = 15_000
+const INSTALLED_APP_VERSION_LOOKUP_TIMEOUT_MS = 4_000
+const INSTALLED_APP_SIZE_SCAN_TIMEOUT_MS = 20_000
+const INSTALLED_APP_SYSTEM_COUNT_TIMEOUT_MS = 8_000
+const INSTALLED_APP_VERSION_LOOKUP_CONCURRENCY = 6
 
 interface ParsedDeviceRow {
   id: string

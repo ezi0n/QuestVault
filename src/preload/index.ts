@@ -24,6 +24,7 @@ import type {
   LocalLibraryScanResponse,
   ManualGameMetadataOverride,
   MetaStoreDetailsResponse,
+  MetaStoreGameSummary,
   InstalledMetaStoreIndexResponse,
   MetaStorePackageMatchResponse,
   MetaStoreSearchResponse,
@@ -53,7 +54,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.6.1',
+  version: '0.6.2',
   ping: (): string => 'pong',
   app: {
     checkForUpdates: (): Promise<ReleaseCheckResponse> => ipcRenderer.invoke('app:check-for-updates')
@@ -133,7 +134,11 @@ const api = {
     getInstalledPackageIndex: (): Promise<InstalledMetaStoreIndexResponse> =>
       ipcRenderer.invoke('meta-store:get-installed-package-index'),
     refreshInstalledPackageIndex: (packageIds: string[]): Promise<InstalledMetaStoreIndexResponse> =>
-      ipcRenderer.invoke('meta-store:refresh-installed-package-index', packageIds)
+      ipcRenderer.invoke('meta-store:refresh-installed-package-index', packageIds),
+    replaceInstalledPackageIndex: (
+      matchesByPackageId: Record<string, MetaStoreGameSummary>
+    ): Promise<InstalledMetaStoreIndexResponse> =>
+      ipcRenderer.invoke('meta-store:replace-installed-package-index', matchesByPackageId)
   },
   vrsrc: {
     getStatus: (): Promise<VrSrcStatusResponse> => ipcRenderer.invoke('vrsrc:get-status'),

@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.1`
+Current documented application version: `0.6.2`
 
 ## Overview
 
@@ -50,6 +50,8 @@ Selecting a local item opens a right-side drawer where you can inspect:
 - versions
 - install state
 - store ID
+- storefront rating when available
+- supported devices, comfort, and player-mode metadata when available
 - artwork and description
 - older local versions
 
@@ -86,10 +88,13 @@ On Windows, vrSrc sync now prefers IPv4 for remote requests. This helps avoid Cl
 
 Selecting a vrSrc item opens a remote detail drawer that can include:
 
-- remote/library version comparison
+- remote version and version code
+- footprint and updated date
 - notes
 - trailer embed
 - release details
+
+If a matching local payload already covers the selected vrSrc release, the drawer now routes the outcome through `Live` instead of relying only on inline drawer messaging.
 
 ## Installed Inventory
 
@@ -101,6 +106,7 @@ You can:
 - open an installed-app detail drawer from either layout
 - back up installed APKs
 - uninstall installed apps
+- review storefront rating, trailer, genres, comfort, game modes, player modes, and supported devices when metadata exists
 - review summary metrics for:
   - user installed apps
   - system apps
@@ -177,6 +183,8 @@ The `Maintenance` section includes a compact chart showing:
 - apps removed since the previous scan
 
 Use `Refresh installed apps` in `Installed Inventory` to add new scan points to this history.
+
+Installed-app metadata refresh now starts from the persisted installed metadata index. Repeat refreshes reuse known matches, remove packages that are no longer installed, and only hydrate packages that are still missing metadata. The installed list becomes usable as soon as the scan finishes, while the remaining metadata work continues in the background and reports progress in `Live`.
 
 ## Live Queue
 

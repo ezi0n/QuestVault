@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.6.1`
+Current documented application version: `0.6.2`
 
 ## Runtime Shape
 
@@ -64,6 +64,11 @@ Meta metadata is cached separately and layered onto local and installed items. I
 - artwork
 - descriptions
 - categories
+- storefront rating
+- supported devices
+- game modes / player modes
+- comfort level
+- trailer reuse across workspaces
 - store matching
 - version comparison context
 
@@ -106,6 +111,8 @@ The renderer is centered around `App.tsx` and `WireframeShell.tsx`.
   Renders the main shell, workspaces, support popups, shared drawers, and workspace-specific toolbars.
 
 The renderer now also coalesces installed-app refreshes after mutation-heavy flows and uses resilient artwork fallbacks so failed remote images do not collapse core UI surfaces.
+
+Installed-app metadata refresh now starts from the persisted installed metadata index, filters it to the currently scanned packages, and only hydrates packages that are still missing matches. This keeps repeat refreshes accurate without paying the cost of fully re-enriching every installed package on every scan.
 
 Drawer action handoff is now more uniform across workspaces: Local Library, vrSrc, and Game Saves close their detail drawers before long-running install, download, scan, or backup flows so the Live queue becomes the single visible progress surface.
 
@@ -167,6 +174,7 @@ QuestVault treats data sources separately:
 - browsing collapses to the newest visible representative
 - active search can reveal matching variants
 - older local versions are selectable in the drawer and can be deleted one at a time with confirmation
+- vrSrc-style `v<code>+<name>` release names can also seed local-library version fallback data when manifest metadata is incomplete
 
 ## Event Flow
 

@@ -289,6 +289,9 @@ export interface MetaStoreGameSummary {
   category: string | null
   publisherName: string | null
   genreNames: string[]
+  gameModes: string[]
+  supportedPlayerModes: string[]
+  comfortLevel: string | null
   releaseDateLabel: string | null
   canonicalName: string | null
   storeItemId: string | null
@@ -297,8 +300,10 @@ export interface MetaStoreGameSummary {
   portraitImage: MetaStoreImageAsset | null
   iconImage: MetaStoreImageAsset | null
   logoImage: MetaStoreImageAsset | null
+  youtubeTrailerVideoId: string | null
   version: string | null
   versionCode: string | null
+  supportedDevices: string[]
   sizeBytes: number | null
   ratingAverage: number | null
   priceLabel: string | null

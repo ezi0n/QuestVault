@@ -9,6 +9,7 @@
 - Search-first workflow across local items, backup-storage entries, and metadata-enriched titles.
 - Version-family handling that collapses duplicate packages during browsing and expands matches during search.
 - Local detail drawer with install, metadata, version, and cleanup actions.
+- Shared detail-drawer polish across Local Library, vrSrc, Installed Inventory, and Game Saves with clearer fact-group separation, rating strips, trailer support, and richer metadata presentation.
 - Local Library summary pills for status, catalog size, recent additions, update count, and title/date sorting.
 - Local Library list view date column with vrSrc-backed fallback dates for chronological sorting.
 
@@ -19,6 +20,7 @@
 - Right-side installed-app detail drawer from both grid and list selections.
 - Installed item actions for backup and uninstall.
 - Installed-app scan history that feeds maintenance-side headset app history charts.
+- Installed metadata refresh now reuses the persisted installed index and only hydrates missing packages after each headset scan.
 
 ### Game Saves
 
@@ -27,6 +29,7 @@
 - Backup-only history visibility.
 - Snapshot backup, restore, and delete flows.
 - Save item detail drawer / support workflows where applicable.
+- Metadata-enriched save drawers with storefront review content and aligned action layout.
 
 ### ADB Manager
 
@@ -51,6 +54,7 @@
 - Shared drawer pattern for item detail interaction.
 - Local detail drawers auto-close into Live for install/uninstall/delete actions while keeping extraction and metadata flows visible in-place.
 - vrSrc and Game Saves drawers now follow the same close-into-Live pattern for download, install, save scan, and backup actions.
+- Installed-app refresh progress now advances through visible background metadata work instead of freezing on a single generic state.
 - Shared close-pill language across support dialogs and drawers.
 - Support popups for maintenance tasks instead of large always-inline sections.
 - Current icon system aligned across macOS, Windows, and Linux packaging assets.
@@ -85,7 +89,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.6.1`
+Current documented release line: `0.6.2`
 
 ## Product Position
 
