@@ -23,6 +23,7 @@
 ### Game Saves
 
 - Save backup discovery for installed headset titles.
+- Per-title drawer scans that target only the selected package, while the toolbar scan still performs a full headset-wide save scan.
 - Backup-only history visibility.
 - Snapshot backup, restore, and delete flows.
 - Save item detail drawer / support workflows where applicable.
@@ -49,12 +50,14 @@
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
 - Local detail drawers auto-close into Live for install/uninstall/delete actions while keeping extraction and metadata flows visible in-place.
+- vrSrc and Game Saves drawers now follow the same close-into-Live pattern for download, install, save scan, and backup actions.
 - Shared close-pill language across support dialogs and drawers.
 - Support popups for maintenance tasks instead of large always-inline sections.
 - Current icon system aligned across macOS, Windows, and Linux packaging assets.
 - Signature-mismatch install recovery now uses an in-app guarded confirmation dialog instead of a simple native OK/Cancel prompt.
 - Installed-app refreshes are coalesced after install/uninstall bursts so device mutations settle before the next inventory refresh runs.
 - Broken artwork URLs now fall back to generated art surfaces across Apps & Games, Installed Inventory, and Game Saves.
+- Long package identifiers in the Game Saves drawer now wrap instead of causing horizontal drawer scroll.
 
 ## vrSrc-Specific Features
 
@@ -82,7 +85,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.6.0`
+Current documented release line: `0.6.1`
 
 ## Product Position
 

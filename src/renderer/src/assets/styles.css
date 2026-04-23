@@ -5014,6 +5014,51 @@ input {
   pointer-events: auto;
 }
 
+.save-games-drawer {
+  width: min(396px, calc(100vw - 28px));
+  overflow-x: hidden;
+}
+
+.save-games-drawer .games-drawer-artwork-stack,
+.save-games-drawer .games-drawer-title-row,
+.save-games-drawer .games-drawer-title-block,
+.save-games-drawer .games-drawer-facts,
+.save-games-drawer .save-snapshot-list,
+.save-games-drawer .save-snapshot-stack,
+.save-games-drawer .save-snapshot-card,
+.save-games-drawer .save-snapshot-card-actions {
+  min-width: 0;
+}
+
+.save-games-drawer .games-drawer-title-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: flex-start;
+}
+
+.save-games-drawer .games-drawer-art {
+  flex: 0 0 auto;
+}
+
+.save-games-drawer .games-drawer-title-block {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.save-games-drawer .games-drawer-title-block h3 {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.save-games-drawer .save-games-package-line,
+.save-games-drawer .save-games-package-value {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
 .games-drawer-header {
   display: flex;
   align-items: start;

@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.0`
+Current documented application version: `0.6.1`
 
 ## Overview
 
@@ -80,6 +80,8 @@ The current vrSrc flow lets you:
 - add items to the Local Library
 - install items directly to the headset
 
+For download, update, and install actions, the vrSrc drawer now closes immediately so the transfer or install state is visible in `Live` right away. If the selected payload is already in the Local Library or cannot proceed, those outcomes are also surfaced through `Live` instead of only inline workspace banners.
+
 On Windows, vrSrc sync now prefers IPv4 for remote requests. This helps avoid Cloudflare `403 Forbidden` responses that were observed on some IPv6 request paths.
 
 Selecting a vrSrc item opens a remote detail drawer that can include:
@@ -117,6 +119,10 @@ You can:
 - restore snapshots
 - delete outdated snapshots
 - review installed save targets and backup-only history together
+
+From a save drawer, `Scan headset saves` now scans only the selected title. The toolbar `Scan headset saves` action remains the full-headset scan.
+
+Save drawer action buttons such as `Scan headset saves` and `Back Up Current Save` now close the drawer first and reveal the `Live` drawer, matching the Local Library and vrSrc action flow.
 
 ## ADB Manager
 

@@ -1987,7 +1987,16 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
   }
 
-  async function scanSavePackages(announceInQueue = true): Promise<SavePackagesScanResponse | null> {
+  async function scanSavePackages(
+    announceInQueue = true,
+    packagesOverride?: Array<{ packageId: string; appName: string | null }>,
+    options?: {
+      queueTitle?: string
+      queueSubtitle?: string | null
+      queueDetails?: string
+      mergeResults?: boolean
+    }
+  ): Promise<SavePackagesScanResponse | null> {
     if (!selectedDeviceId) {
       setSaveGamesMessage({
         text: 'Select a ready headset in ADB Manager before scanning save data.',
@@ -1997,10 +2006,12 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       return null
     }
 
-    const packages = (deviceAppsResponse?.apps ?? []).map((app) => ({
-      packageId: app.packageId,
-      appName: app.label ?? app.inferredLabel
-    }))
+    const packages =
+      packagesOverride ??
+      (deviceAppsResponse?.apps ?? []).map((app) => ({
+        packageId: app.packageId,
+        appName: app.label ?? app.inferredLabel
+      }))
 
     if (!packages.length) {
       setSaveGamesMessage({
@@ -2015,19 +2026,36 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     const queueId = announceInQueue
       ? enqueueLiveQueueItem({
           id: createLiveQueueId('scan', `save-scan-${selectedDeviceId}`),
-          title: 'Save data scan',
-          subtitle: selectedDeviceId,
+          title: options?.queueTitle ?? 'Save data scan',
+          subtitle: options?.queueSubtitle ?? selectedDeviceId,
           kind: 'scan',
           phase: 'scanning',
           progress: 24,
-          details: 'Scanning installed packages for external save data...',
+          details: options?.queueDetails ?? 'Scanning installed packages for external save data...',
           artworkUrl: null
         })
       : null
 
     try {
       const response = await window.api.savegames.scanPackages(selectedDeviceId, packages)
-      setSaveScanResponse(response)
+      setSaveScanResponse((current) => {
+        if (!options?.mergeResults) {
+          return response
+        }
+
+        const mergedResults = new Map<string, SavePackagesScanResponse['results'][number]>()
+        for (const entry of current?.results ?? []) {
+          mergedResults.set(entry.packageId.toLowerCase(), entry)
+        }
+        for (const entry of response.results) {
+          mergedResults.set(entry.packageId.toLowerCase(), entry)
+        }
+
+        return {
+          ...response,
+          results: Array.from(mergedResults.values())
+        }
+      })
       setSaveGamesMessage(
         response.runtime.status === 'error'
           ? {
@@ -2116,7 +2144,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         if (refreshAfter) {
           await refreshSaveBackups()
           if (saveScanResponse) {
-            await scanSavePackages(false)
+            await scanSavePackages(
+              false,
+              [{ packageId, appName }],
+              {
+                mergeResults: true
+              }
+            )
           }
         }
       }
@@ -2957,16 +2991,26 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       return
     }
 
+    const indexedItem = localLibraryIndex?.items.find((item) => item.id === itemId) ?? null
+    const queueTitle = metaStoreMatchesByItemId[itemId]?.title ?? indexedItem?.name ?? 'Local payload install'
+    const queueSubtitle = resolveQueueSubtitleFromSummary(metaStoreMatchesByItemId[itemId])
+    const queueArtworkUrl = resolveQueueArtworkFromSummary(metaStoreMatchesByItemId[itemId])
+
     if (!selectedDeviceId) {
-      setGamesMessage({
-        text: 'Select a ready headset in Manager before installing a local payload.',
-        details: null,
-        tone: 'danger'
+      enqueueLiveQueueItem({
+        id: createLiveQueueId('install', `blocked-no-device-${itemId}`),
+        title: queueTitle,
+        subtitle: queueSubtitle,
+        kind: 'install',
+        phase: 'failed',
+        progress: 100,
+        details: 'Select a ready headset in Manager before installing a local payload.',
+        artworkUrl: queueArtworkUrl
       })
+      setGamesMessage(null)
       return
     }
 
-    const indexedItem = localLibraryIndex?.items.find((item) => item.id === itemId) ?? null
     let installedAppsSnapshot = deviceAppsResponse
 
     if (!installedAppsSnapshot || installedAppsSnapshot.serial !== selectedDeviceId) {
@@ -3005,11 +3049,17 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       compareVersionValues(indexedItem.libraryVersion ?? indexedItem.libraryVersionCode, installedVersion) > 0
 
     if (indexedItem && hasInstalledMatch && !hasLocalUpgrade) {
-      setGamesMessage({
-        text: 'This payload already appears in the installed inventory for the selected headset.',
-        details: null,
-        tone: 'info'
+      enqueueLiveQueueItem({
+        id: createLiveQueueId('install', `noop-installed-${itemId}`),
+        title: queueTitle,
+        subtitle: queueSubtitle,
+        kind: 'install',
+        phase: 'completed',
+        progress: 100,
+        details: 'This payload already appears in the installed inventory for the selected headset.',
+        artworkUrl: queueArtworkUrl
       })
+      setGamesMessage(null)
       return
     }
 
@@ -3029,13 +3079,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     let shouldRefreshInstalledApps = false
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('install', itemId),
-      title: metaStoreMatchesByItemId[itemId]?.title ?? indexedItem?.name ?? 'Local payload install',
-      subtitle: resolveQueueSubtitleFromSummary(metaStoreMatchesByItemId[itemId]),
+      title: queueTitle,
+      subtitle: queueSubtitle,
       kind: 'install',
       phase: 'installing',
       progress: 34,
       details: installPhaseMessage,
-      artworkUrl: resolveQueueArtworkFromSummary(metaStoreMatchesByItemId[itemId])
+      artworkUrl: queueArtworkUrl
     })
 
     try {
@@ -3778,6 +3828,18 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onRefreshSaveBackups={refreshSaveBackups}
       onScanSavePackages={async () => {
         await scanSavePackages(true)
+      }}
+      onScanSavePackage={async (packageId, appName) => {
+        await scanSavePackages(
+          true,
+          [{ packageId, appName }],
+          {
+            queueTitle: appName ?? packageId,
+            queueSubtitle: 'Save data scan',
+            queueDetails: `Scanning ${packageId} for external save data...`,
+            mergeResults: true
+          }
+        )
       }}
       onBackupAllSavePackages={backupAllSavePackages}
       onBackupSavePackage={async (packageId, appName) => {

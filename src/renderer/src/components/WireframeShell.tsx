@@ -140,6 +140,7 @@ interface WireframeShellProps {
   onInstallVrSrcNow: (releaseName: string) => Promise<void>
   onRefreshSaveBackups: () => Promise<void>
   onScanSavePackages: () => Promise<void>
+  onScanSavePackage: (packageId: string, appName: string | null) => Promise<void>
   onBackupAllSavePackages: () => Promise<void>
   onBackupSavePackage: (packageId: string, appName: string | null) => Promise<void>
   onRestoreSaveBackup: (packageId: string, backupId: string, appName: string | null) => Promise<void>
@@ -1316,6 +1317,43 @@ function formatSortDateLabel(value: string | null | undefined): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const year = date.getFullYear()
   return `${day}-${month}-${year}`
+}
+
+function renderBreakablePackageId(value: string): ReactNode[] {
+  const parts: ReactNode[] = []
+  let buffer = ''
+
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value[index]
+    const previous = index > 0 ? value[index - 1] : ''
+    const next = index + 1 < value.length ? value[index + 1] : ''
+
+    const shouldBreakBeforeCurrent =
+      index > 0 &&
+      /[A-Z]/.test(current) &&
+      /[a-z0-9]/.test(previous) &&
+      next !== ''
+
+    if (shouldBreakBeforeCurrent && buffer) {
+      parts.push(buffer)
+      parts.push(<wbr key={`pkg-break-camel-${index}`} />)
+      buffer = ''
+    }
+
+    buffer += current
+
+    if (current === '.' || current === '_' || current === '-') {
+      parts.push(buffer)
+      parts.push(<wbr key={`pkg-break-delim-${index}`} />)
+      buffer = ''
+    }
+  }
+
+  if (buffer) {
+    parts.push(buffer)
+  }
+
+  return parts
 }
 
 function isWithinLastDays(value: string | null | undefined, days: number): boolean {
@@ -2648,6 +2686,30 @@ function GamesView(props: {
     await onPurgeLibraryItem(selectedGame.itemId)
   }
 
+  async function downloadSelectedVrSrcToLibrary() {
+    if (!selectedVrSrcItem) {
+      return
+    }
+
+    setSelectedVrSrcReleaseName(null)
+    await onDownloadVrSrcToLibrary(selectedVrSrcItem.releaseName)
+  }
+
+  async function downloadSelectedVrSrcToLibraryAndInstall() {
+    if (!selectedVrSrcItem) {
+      return
+    }
+
+    if (selectedVrSrcLibraryCoversRemote && selectedVrSrcMatchingLibraryItem?.id) {
+      setSelectedVrSrcReleaseName(null)
+      await onInstallLocalLibraryItem(selectedVrSrcMatchingLibraryItem.id)
+      return
+    }
+
+    setSelectedVrSrcReleaseName(null)
+    await onDownloadVrSrcToLibraryAndInstall(selectedVrSrcItem.releaseName)
+  }
+
   function updateManualMetadataField(field: keyof ManualGameMetadataOverride, value: string) {
     setManualMetadataDraft((current) => ({
       ...current,
@@ -3646,7 +3708,7 @@ function GamesView(props: {
               <button
                 className="action-pill"
                 disabled={vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName) || selectedVrSrcLibraryCoversRemote}
-                onClick={() => void onDownloadVrSrcToLibrary(selectedVrSrcItem.releaseName)}
+                onClick={() => void downloadSelectedVrSrcToLibrary()}
                 type="button"
               >
                 {vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName)
@@ -3660,14 +3722,7 @@ function GamesView(props: {
               <button
                 className="action-pill"
                 disabled={vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName) || !selectedDeviceId}
-                onClick={() => {
-                  if (selectedVrSrcLibraryCoversRemote && selectedVrSrcMatchingLibraryItem?.id) {
-                    void onInstallLocalLibraryItem(selectedVrSrcMatchingLibraryItem.id)
-                    return
-                  }
-
-                  void onDownloadVrSrcToLibraryAndInstall(selectedVrSrcItem.releaseName)
-                }}
+                onClick={() => void downloadSelectedVrSrcToLibraryAndInstall()}
                 title={
                   selectedDeviceId
                     ? selectedVrSrcLibraryCoversRemote
@@ -5086,6 +5141,7 @@ function GameSavesView(props: {
   saveGamesMessage: UiNotice | null
   onRefreshSaveBackups: () => Promise<void>
   onScanSavePackages: () => Promise<void>
+  onScanSavePackage: (packageId: string, appName: string | null) => Promise<void>
   onBackupAllSavePackages: () => Promise<void>
   onBackupSavePackage: (packageId: string, appName: string | null) => Promise<void>
   onRestoreSaveBackup: (packageId: string, backupId: string, appName: string | null) => Promise<void>
@@ -5109,6 +5165,7 @@ function GameSavesView(props: {
     saveGamesMessage,
     onRefreshSaveBackups,
     onScanSavePackages,
+    onScanSavePackage,
     onBackupAllSavePackages,
     onBackupSavePackage,
     onRestoreSaveBackup,
@@ -5249,6 +5306,24 @@ function GameSavesView(props: {
 
     setSelectedPackageId(null)
   }, [selectedCard])
+
+  async function scanSelectedSavePackage() {
+    if (!selectedCard) {
+      return
+    }
+
+    setSelectedPackageId(null)
+    await onScanSavePackage(selectedCard.packageId, selectedCard.installedLabel)
+  }
+
+  async function backupSelectedSavePackage() {
+    if (!selectedCard) {
+      return
+    }
+
+    setSelectedPackageId(null)
+    await onBackupSavePackage(selectedCard.packageId, selectedCard.installedLabel)
+  }
 
   return (
     <section className="view-stack">
@@ -5407,7 +5482,7 @@ function GameSavesView(props: {
         ? createPortal(
             <>
       <div className={selectedCard ? 'games-drawer-backdrop visible' : 'games-drawer-backdrop'} onClick={() => setSelectedPackageId(null)} />
-      <aside className={selectedCard ? 'surface-panel detail-panel games-drawer open' : 'surface-panel detail-panel games-drawer'}>
+      <aside className={selectedCard ? 'surface-panel detail-panel games-drawer open save-games-drawer' : 'surface-panel detail-panel games-drawer save-games-drawer'}>
         <div className="games-drawer-header">
           <p className="eyebrow">Details</p>
           <button className="close-pill" onClick={() => setSelectedPackageId(null)} type="button">
@@ -5442,7 +5517,7 @@ function GameSavesView(props: {
                 </div>
                 <div className="games-drawer-title-block">
                   <h3>{selectedCard.title}</h3>
-                  <p>{selectedCard.packageId}</p>
+                  <p className="save-games-package-line">{renderBreakablePackageId(selectedCard.packageId)}</p>
                 </div>
               </div>
             </div>
@@ -5450,7 +5525,7 @@ function GameSavesView(props: {
             <div className="games-drawer-facts">
               <div className="signal-chip games-drawer-fact-wide">
                 <span>Package</span>
-                <strong>{selectedCard.packageId}</strong>
+                <strong className="save-games-package-value">{renderBreakablePackageId(selectedCard.packageId)}</strong>
               </div>
               <div className={selectedCard.isInstalled ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
                 <span>Headset Status</span>
@@ -5498,7 +5573,7 @@ function GameSavesView(props: {
               <button
                 className="action-pill action-pill-ghost"
                 disabled={saveGamesBusy || saveGamesBatchBusy || !selectedDeviceId}
-                onClick={() => void onScanSavePackages()}
+                onClick={() => void scanSelectedSavePackage()}
                 type="button"
               >
                 {saveGamesBusy ? 'Scanning saves…' : 'Scan headset saves'}
@@ -5511,7 +5586,7 @@ function GameSavesView(props: {
                   saveGamesBatchBusy ||
                   saveGamesActionBusyPackageId === selectedCard.packageId
                 }
-                onClick={() => void onBackupSavePackage(selectedCard.packageId, selectedCard.installedLabel)}
+                onClick={() => void backupSelectedSavePackage()}
                 type="button"
               >
                 {saveGamesActionBusyPackageId === selectedCard.packageId ? 'Backing up saves…' : 'Back Up Current Save'}
@@ -6712,6 +6787,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onInstallVrSrcNow,
     onRefreshSaveBackups,
     onScanSavePackages,
+    onScanSavePackage,
     onBackupAllSavePackages,
     onBackupSavePackage,
     onRestoreSaveBackup,
@@ -7036,6 +7112,7 @@ export function WireframeShell(props: WireframeShellProps) {
               saveGamesMessage={saveGamesMessage}
               onRefreshSaveBackups={onRefreshSaveBackups}
               onScanSavePackages={onScanSavePackages}
+              onScanSavePackage={onScanSavePackage}
               onBackupAllSavePackages={onBackupAllSavePackages}
               onBackupSavePackage={onBackupSavePackage}
               onRestoreSaveBackup={onRestoreSaveBackup}

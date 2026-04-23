@@ -24,6 +24,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - One-click metadata refresh for indexed titles.
 - Detail drawer with artwork, description, category chips, versions, package ID, store ID, folder name, and install actions.
 - Resilient artwork fallback rendering so broken image links fall back to generated cover art instead of empty panels.
+- Local, vrSrc, and save-management drawers now hand long-running actions off to the Live Queue more consistently so progress and blocked outcomes surface in one place.
 
 ### Installed Inventory
 
@@ -42,6 +43,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 
 - Live save scan of the selected headset.
 - Save backup creation.
+- Per-title headset save scans from the drawer, without forcing a full save scan across the headset.
 - Save restore from stored snapshots.
 - Save backup deletion.
 - Combined visibility for installed save targets and backup-only history.
@@ -63,6 +65,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Installed-app refreshes are now coalesced after install and uninstall bursts so Live stays readable during multi-step device operations.
 - Watcher-driven updates when indexed folders change on disk.
 - Windows vrSrc sync now prefers IPv4 for remote source requests to avoid Cloudflare 403 failures seen on some IPv6 paths.
+- Save drawer package IDs now wrap cleanly instead of forcing sideways scroll on long package names.
 
 - [QuestVault Screenshots](screenshots/)
 

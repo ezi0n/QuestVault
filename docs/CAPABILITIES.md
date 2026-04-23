@@ -36,6 +36,7 @@
 - Resume interrupted remote downloads where possible.
 - Clean up staged downloads after successful handoff.
 - Prefer IPv4 on Windows for vrSrc remote requests when Cloudflare blocks the IPv6 path.
+- Hand remote drawer actions off to the Live queue for download/update/install visibility and blocked outcomes.
 - View a remote detail drawer with:
   - artwork
   - remote and library version comparison
@@ -56,11 +57,13 @@
 ## Game Saves
 
 - Scan save-capable headset packages.
+- Scan only the selected title from the save drawer while keeping the toolbar scan as the full-headset save scan.
 - Surface installed save targets and backup-only history in one workspace.
 - Create save snapshots from the headset.
 - Restore snapshots back to the headset.
 - Delete save snapshots.
 - Browse saves in grid or list mode with status-aware cards.
+- Wrap long package identifiers cleanly in the save drawer instead of overflowing horizontally.
 
 ## Settings and Maintenance
 
