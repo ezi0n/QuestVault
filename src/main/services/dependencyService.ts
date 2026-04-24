@@ -22,7 +22,9 @@ const execFileAsync = promisify(execFile)
 class DependencyService {
   private adbInstallPromise: Promise<ManagedDependencySummary> | null = null
   private sevenZipInstallPromise: Promise<ManagedDependencySummary> | null = null
+  private rcloneInstallPromise: Promise<string> | null = null
   private bootstrapProgressListeners = new Set<(update: DependencyBootstrapProgressUpdate) => void>()
+  private readonly minimumRcloneVersion = '1.73.5'
 
   onBootstrapProgress(listener: (update: DependencyBootstrapProgressUpdate) => void): () => void {
     this.bootstrapProgressListeners.add(listener)
@@ -60,6 +62,20 @@ class DependencyService {
 
   async ensureSevenZip(): Promise<ManagedDependencySummary> {
     return this.ensureSevenZipDependency()
+  }
+
+  async ensureRclonePath(): Promise<string> {
+    if (this.rcloneInstallPromise) {
+      return this.rcloneInstallPromise
+    }
+
+    this.rcloneInstallPromise = this.ensureRclonePathInternal()
+
+    try {
+      return await this.rcloneInstallPromise
+    } finally {
+      this.rcloneInstallPromise = null
+    }
   }
 
   private emitBootstrapProgress(
@@ -209,6 +225,67 @@ class DependencyService {
     }
   }
 
+  private async ensureRclonePathInternal(): Promise<string> {
+    const managedRclonePath = this.getManagedRclonePath()
+    if (await this.isExecutablePresent(managedRclonePath)) {
+      const managedVersion = await this.readRcloneVersion(managedRclonePath)
+      if (managedVersion && this.isVersionAtLeast(managedVersion, this.minimumRcloneVersion)) {
+        return managedRclonePath
+      }
+
+      await rm(managedRclonePath, { force: true }).catch(() => undefined)
+    }
+
+    const systemRclonePath = await this.findExecutableOnPath(process.platform === 'win32' ? ['rclone.exe', 'rclone'] : ['rclone'])
+    if (systemRclonePath) {
+      const systemVersion = await this.readRcloneVersion(systemRclonePath)
+      if (systemVersion && this.isVersionAtLeast(systemVersion, this.minimumRcloneVersion)) {
+        return systemRclonePath
+      }
+    }
+
+    await mkdir(this.getRcloneDir(), { recursive: true })
+    await this.downloadAndInstallRclone()
+    await this.ensureExecutablePermissions(managedRclonePath)
+
+    if (await this.isExecutablePresent(managedRclonePath)) {
+      return managedRclonePath
+    }
+
+    throw new Error('Unable to prepare rclone for vrSrc downloads.')
+  }
+
+  private async readRcloneVersion(binaryPath: string): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync(binaryPath, ['version'], {
+        maxBuffer: 256 * 1024
+      })
+      const match = stdout.match(/rclone v(\d+\.\d+\.\d+)/i)
+      return match?.[1] ?? null
+    } catch {
+      return null
+    }
+  }
+
+  private isVersionAtLeast(candidate: string, minimum: string): boolean {
+    const candidateParts = candidate.split('.').map((part) => Number.parseInt(part, 10) || 0)
+    const minimumParts = minimum.split('.').map((part) => Number.parseInt(part, 10) || 0)
+    const length = Math.max(candidateParts.length, minimumParts.length)
+
+    for (let index = 0; index < length; index += 1) {
+      const candidateValue = candidateParts[index] ?? 0
+      const minimumValue = minimumParts[index] ?? 0
+      if (candidateValue > minimumValue) {
+        return true
+      }
+      if (candidateValue < minimumValue) {
+        return false
+      }
+    }
+
+    return true
+  }
+
   private async downloadAndInstallPlatformTools(): Promise<void> {
     const archivePath = join(tmpdir(), `questvault-platform-tools-${Date.now()}.zip`)
     const extractDir = join(tmpdir(), `questvault-platform-tools-${Date.now()}`)
@@ -262,8 +339,58 @@ class DependencyService {
     }
   }
 
+  private async downloadAndInstallRclone(): Promise<void> {
+    const archivePath = join(tmpdir(), `questvault-rclone-${Date.now()}.zip`)
+    const extractDir = join(tmpdir(), `questvault-rclone-${Date.now()}`)
+
+    try {
+      await this.downloadUrlToFile(await this.getRcloneUrl(), archivePath)
+      await mkdir(extractDir, { recursive: true })
+      await extractZip(archivePath, { dir: extractDir })
+
+      const extractedBinaryPath = await this.findExtractedRcloneBinary(extractDir)
+      if (!extractedBinaryPath) {
+        throw new Error('Downloaded rclone archive did not contain the expected executable.')
+      }
+
+      await rm(this.getRcloneDir(), { recursive: true, force: true })
+      await mkdir(this.getRcloneDir(), { recursive: true })
+      await cp(extractedBinaryPath, this.getManagedRclonePath(), { force: true })
+    } finally {
+      await rm(archivePath, { force: true }).catch(() => undefined)
+      await rm(extractDir, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
+
   private async findExtractedSevenZipBinary(rootPath: string): Promise<string | null> {
     const candidateNames = ['7zz', '7z']
+    const queue: string[] = [rootPath]
+
+    while (queue.length) {
+      const currentPath = queue.shift()
+      if (!currentPath) {
+        continue
+      }
+
+      const entries = await readdir(currentPath, { withFileTypes: true })
+      for (const entry of entries) {
+        const entryPath = join(currentPath, entry.name)
+        if (entry.isDirectory()) {
+          queue.push(entryPath)
+          continue
+        }
+
+        if (candidateNames.includes(entry.name)) {
+          return entryPath
+        }
+      }
+    }
+
+    return null
+  }
+
+  private async findExtractedRcloneBinary(rootPath: string): Promise<string | null> {
+    const candidateNames = process.platform === 'win32' ? ['rclone.exe'] : ['rclone']
     const queue: string[] = [rootPath]
 
     while (queue.length) {
@@ -368,6 +495,61 @@ class DependencyService {
       : 'https://github.com/ip7z/7zip/releases/download/26.00/7z2600-linux-x64.tar.xz'
   }
 
+  private async getRcloneUrl(): Promise<string> {
+    const fallbackVersion = 'v1.73.5'
+
+    try {
+      const response = await fetch('https://api.github.com/repos/rclone/rclone/releases/latest', {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'QuestVault'
+        }
+      })
+
+      if (response.ok) {
+        const payload = (await response.json()) as {
+          tag_name?: string
+          assets?: Array<{
+            name?: string
+            browser_download_url?: string
+          }>
+        }
+        const version = typeof payload.tag_name === 'string' && payload.tag_name ? payload.tag_name : fallbackVersion
+        const assetName = this.getRcloneAssetName(version)
+        const asset = payload.assets?.find((entry) => entry?.name === assetName)
+        if (asset?.browser_download_url) {
+          return asset.browser_download_url
+        }
+      }
+    } catch {
+      // Fall back to the pinned URL below.
+    }
+
+    return this.getPinnedRcloneUrl(fallbackVersion)
+  }
+
+  private getPinnedRcloneUrl(version: string): string {
+    return `https://downloads.rclone.org/${version}/${this.getRcloneAssetName(version)}`
+  }
+
+  private getRcloneAssetName(version: string): string {
+    if (process.platform === 'win32') {
+      return process.arch === 'arm64'
+        ? `rclone-${version}-windows-arm64.zip`
+        : `rclone-${version}-windows-amd64.zip`
+    }
+
+    if (process.platform === 'darwin') {
+      return process.arch === 'arm64'
+        ? `rclone-${version}-osx-arm64.zip`
+        : `rclone-${version}-osx-amd64.zip`
+    }
+
+    return process.arch === 'arm64'
+      ? `rclone-${version}-linux-arm64.zip`
+      : `rclone-${version}-linux-amd64.zip`
+  }
+
   private getBinRoot(): string {
     return join(app.getPath('userData'), 'bin')
   }
@@ -378,6 +560,15 @@ class DependencyService {
 
   private getSevenZipDir(): string {
     return join(this.getBinRoot(), '7zip')
+  }
+
+  private getRcloneDir(): string {
+    return join(this.getBinRoot(), 'rclone')
+  }
+
+  private getManagedRclonePath(): string {
+    const binaryName = process.platform === 'win32' ? 'rclone.exe' : 'rclone'
+    return join(this.getRcloneDir(), binaryName)
   }
 
   private buildDependencySummary(

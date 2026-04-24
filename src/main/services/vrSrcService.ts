@@ -35,6 +35,11 @@ type VrSrcCredentials = {
   lastResolvedAt: string
 }
 
+type VrSrcRemotePayloadFile = {
+  fileName: string
+  sizeBytes: number | null
+}
+
 type VrSrcTransferCommand = 'none' | 'pause' | 'cancel'
 type VrSrcTransferLifecycle = 'running' | 'paused' | 'cancelled'
 type VrSrcLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
@@ -316,11 +321,30 @@ class VrSrcService {
     return value.replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'sync'
   }
 
+  private async pruneLogs(maxRetained: number): Promise<void> {
+    try {
+      const entries = await readdir(this.getLogsPath(), { withFileTypes: true })
+      const logNames = entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.log'))
+        .map((entry) => entry.name)
+        .sort((left, right) => right.localeCompare(left))
+
+      await Promise.all(
+        logNames.slice(maxRetained).map((name) =>
+          rm(join(this.getLogsPath(), name), { force: true }).catch(() => undefined)
+        )
+      )
+    } catch {
+      // Log retention must never block vrSrc operations.
+    }
+  }
+
   private async createLogger(scope: string): Promise<VrSrcLogger> {
     await mkdir(this.getLogsPath(), { recursive: true })
     const logPath = join(this.getLogsPath(), `${new Date().toISOString().replace(/[:.]/g, '-')}-${this.sanitizeLogSuffix(scope)}.log`)
 
     await writeFile(logPath, '', 'utf8')
+    await this.pruneLogs(4)
 
     return {
       logPath,
@@ -338,6 +362,10 @@ class VrSrcService {
   }
 
   private async logCurlOutput(logger: VrSrcLogger | undefined, source: string, output: string): Promise<void> {
+    await this.logCommandOutput(logger, source, output)
+  }
+
+  private async logCommandOutput(logger: VrSrcLogger | undefined, source: string, output: string): Promise<void> {
     if (!logger) {
       return
     }
@@ -350,6 +378,28 @@ class VrSrcService {
     for (const line of lines) {
       await logger.debug(`${source} curl`, line)
     }
+  }
+
+  private getRcloneConfigPath(): string {
+    return process.platform === 'win32' ? 'NUL' : '/dev/null'
+  }
+
+  private async getRclonePath(): Promise<string> {
+    return dependencyService.ensureRclonePath()
+  }
+
+  private getVrSrcRcloneArgs(baseUri: string): string[] {
+    return [
+      '--config',
+      this.getRcloneConfigPath(),
+      '--http-url',
+      this.ensureTrailingSlash(baseUri),
+      '--tpslimit',
+      '1.0',
+      '--tpslimit-burst',
+      '3',
+      '--no-check-certificate'
+    ]
   }
 
   private getVrSrcCurlNetworkArgs(): string[] {
@@ -422,6 +472,63 @@ class VrSrcService {
           : ''
       await this.logCurlOutput(logger, 'content-length', stderr)
       return null
+    }
+  }
+
+  private async calculatePathSize(targetPath: string): Promise<number> {
+    try {
+      const targetStat = await stat(targetPath)
+      if (targetStat.isFile()) {
+        return targetStat.size
+      }
+
+      if (!targetStat.isDirectory()) {
+        return 0
+      }
+    } catch {
+      return 0
+    }
+
+    let totalBytes = 0
+    const entries = await readdir(targetPath, { withFileTypes: true })
+    for (const entry of entries) {
+      totalBytes += await this.calculatePathSize(join(targetPath, entry.name))
+    }
+
+    return totalBytes
+  }
+
+  private async syncMetaArchiveWithRclone(baseUri: string, destinationPath: string, logger?: VrSrcLogger): Promise<void> {
+    const tempPath = join(this.getRootPath(), 'meta-download')
+    await rm(tempPath, { recursive: true, force: true })
+    await mkdir(tempPath, { recursive: true })
+
+    try {
+      const args = ['sync', ':http:/meta.7z', tempPath, ...this.getVrSrcRcloneArgs(baseUri)]
+      if (logger) {
+        args.push('-vv')
+      }
+
+      const { stderr } = await execFileAsync(await this.getRclonePath(), args, {
+        maxBuffer: 16 * 1024 * 1024
+      })
+      await this.logCommandOutput(logger, 'meta-sync', stderr)
+
+      const downloadedArchivePath = join(tempPath, 'meta.7z')
+      if (!(await this.fileExists(downloadedArchivePath))) {
+        throw new Error('rclone did not produce meta.7z in the expected sync directory.')
+      }
+
+      await cp(downloadedArchivePath, destinationPath, { force: true })
+    } catch (error) {
+      const stderr =
+        typeof error === 'object' && error !== null && 'stderr' in error && typeof error.stderr === 'string'
+          ? error.stderr
+          : ''
+      await this.logCommandOutput(logger, 'meta-sync', stderr)
+      throw error
+    } finally {
+      await rm(tempPath, { recursive: true, force: true }).catch(() => undefined)
     }
   }
 
@@ -1071,13 +1178,162 @@ class VrSrcService {
     }
   }
 
-  private async listRemotePayloadFiles(baseUri: string, releaseName: string, logger?: VrSrcLogger): Promise<string[]> {
+  private async listRemotePayloadFiles(
+    baseUri: string,
+    releaseName: string,
+    logger?: VrSrcLogger
+  ): Promise<VrSrcRemotePayloadFile[]> {
     const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
-    const listingHtml = await this.fetchText(`${this.ensureTrailingSlash(baseUri)}${hash}/`, logger)
+    try {
+      const args = ['lsjson', `:http:/${hash}/`, ...this.getVrSrcRcloneArgs(baseUri)]
+      if (logger) {
+        args.push('-vv')
+      }
+      const { stdout, stderr } = await execFileAsync(await this.getRclonePath(), args, {
+        maxBuffer: 8 * 1024 * 1024
+      })
+      await this.logCommandOutput(logger, 'payload-list', stderr)
+      const parsed = JSON.parse(stdout) as Array<{
+        Path?: string
+        Name?: string
+        Size?: number
+        IsDir?: boolean
+      }>
+      return parsed
+        .filter((entry) => !entry?.IsDir)
+        .map((entry) => ({
+          fileName: entry.Path ?? entry.Name ?? '',
+          sizeBytes: typeof entry.Size === 'number' && Number.isFinite(entry.Size) ? entry.Size : null
+        }))
+        .filter((entry) => Boolean(entry.fileName))
+    } catch (error) {
+      const stderr =
+        typeof error === 'object' && error !== null && 'stderr' in error && typeof error.stderr === 'string'
+          ? error.stderr
+          : ''
+      await this.logCommandOutput(logger, 'payload-list', stderr)
+      throw error
+    }
+  }
 
-    return Array.from(listingHtml.matchAll(/href="([^"]+)"/gi))
-      .map((match) => match[1])
-      .filter((href) => href && href !== '../' && !href.endsWith('/'))
+  private async downloadReleasePayloadWithRclone(
+    baseUri: string,
+    releaseName: string,
+    destinationPath: string,
+    control: VrSrcTransferControlState,
+    totalBytes: number | null,
+    logger?: VrSrcLogger
+  ): Promise<void> {
+    const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
+
+    while (true) {
+      if (control) {
+        await this.checkpointTransferControl(control)
+      }
+
+      try {
+        await new Promise<void>(async (resolve, reject) => {
+          const args = ['copy', `:http:/${hash}/`, destinationPath, ...this.getVrSrcRcloneArgs(baseUri)]
+          if (logger) {
+            args.push('-vv')
+          }
+          const child = spawn(await this.getRclonePath(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
+          control.child = child
+          control.status = 'running'
+          let stderr = ''
+          let lastTransferredBytes = await this.calculatePathSize(destinationPath)
+          let lastSampleAt = Date.now()
+
+          const emitProgress = async () => {
+            const transferredBytes = await this.calculatePathSize(destinationPath)
+            const now = Date.now()
+            const elapsedSeconds = Math.max((now - lastSampleAt) / 1000, 0.25)
+            const speedBytesPerSecond =
+              transferredBytes >= lastTransferredBytes ? (transferredBytes - lastTransferredBytes) / elapsedSeconds : null
+            lastTransferredBytes = transferredBytes
+            lastSampleAt = now
+            const progress = totalBytes
+              ? Math.min(94, Math.max(1, Math.round((transferredBytes / totalBytes) * 100)))
+              : 22
+            const etaSeconds =
+              totalBytes && speedBytesPerSecond && speedBytesPerSecond > 0
+                ? Math.max(0, Math.round((totalBytes - transferredBytes) / speedBytesPerSecond))
+                : null
+
+            this.emitControlledTransferProgress(control, {
+              operation: control.operation,
+              releaseName,
+              phase: 'downloading',
+              progress,
+              fileName: null,
+              transferredBytes,
+              totalBytes,
+              speedBytesPerSecond: speedBytesPerSecond && Number.isFinite(speedBytesPerSecond) ? speedBytesPerSecond : null,
+              etaSeconds
+            })
+          }
+
+          const intervalId = setInterval(() => {
+            void emitProgress()
+          }, 750)
+
+          child.stderr.on('data', (chunk) => {
+            const text = chunk.toString()
+            stderr += text
+            void this.logCommandOutput(logger, 'payload-download', text)
+          })
+
+          child.once('error', (error) => {
+            clearInterval(intervalId)
+            control.child = null
+            reject(error)
+          })
+
+          child.once('close', async (code) => {
+            clearInterval(intervalId)
+            await emitProgress()
+            control.child = null
+            if (code === 0) {
+              resolve()
+              return
+            }
+
+            if (control.command === 'pause') {
+              control.command = 'none'
+              control.status = 'paused'
+              reject(new VrSrcTransferPausedError())
+              return
+            }
+
+            if (control.command === 'cancel' || control.status === 'cancelled') {
+              control.command = 'none'
+              control.status = 'cancelled'
+              reject(new VrSrcTransferCancelledError())
+              return
+            }
+
+            reject(new Error(stderr.trim() || `rclone exited with code ${code ?? 'unknown'}.`))
+          })
+        })
+
+        return
+      } catch (error) {
+        if (!(error instanceof VrSrcTransferPausedError)) {
+          await logger?.error('Payload download failed.', {
+            releaseName,
+            destinationPath,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+
+        if (error instanceof VrSrcTransferPausedError) {
+          await this.waitForTransferResume(control)
+          continue
+        }
+
+        throw error
+      }
+    }
   }
 
   private async ensureReleasePayload(releaseName: string, operation: VrSrcTransferOperation): Promise<string> {
@@ -1124,15 +1380,11 @@ class VrSrcService {
           throw new Error(`vrSrc did not return any payload files for ${releaseName}.`)
         }
 
-        const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
-        const payloadBaseUrl = `${this.ensureTrailingSlash(credentials.baseUri)}${hash}/`
-        const payloadUrls = payloadFiles.map((fileName) => new URL(fileName, payloadBaseUrl).toString())
-        const payloadSizes = await Promise.all(payloadUrls.map((url) => this.getRemoteContentLength(url)))
+        const payloadSizes = payloadFiles.map((file) => file.sizeBytes)
         const hasKnownTotalBytes = payloadSizes.every((size) => typeof size === 'number')
         const totalBytes = hasKnownTotalBytes
           ? payloadSizes.reduce((sum, size) => sum + (size ?? 0), 0)
           : null
-        let bytesCompletedBefore = 0
 
         this.emitControlledTransferProgress(control, {
           operation,
@@ -1146,20 +1398,16 @@ class VrSrcService {
           etaSeconds: null
         })
 
-        for (const [index, fileName] of payloadFiles.entries()) {
-          await this.checkpointTransferControl(control)
-          const fileUrl = payloadUrls[index]
-          const destinationPath = join(payloadPath, basename(fileName))
-          await this.downloadFile(fileUrl, destinationPath, control, undefined, {
-            operation,
-            releaseName,
-            bytesCompletedBefore,
-            totalBytes
-          })
-          bytesCompletedBefore += payloadSizes[index] ?? 0
-        }
+        await this.downloadReleasePayloadWithRclone(
+          credentials.baseUri,
+          releaseName,
+          payloadPath,
+          control,
+          totalBytes,
+          undefined
+        )
 
-        const archivePart = payloadFiles.find((fileName) => /\.7z\.001$/i.test(fileName))
+        const archivePart = payloadFiles.find((file) => /\.7z\.001$/i.test(file.fileName))
         if (archivePart) {
           await this.checkpointTransferControl(control)
           this.emitControlledTransferProgress(control, {
@@ -1167,13 +1415,13 @@ class VrSrcService {
             releaseName,
             phase: 'extracting',
             progress: 96,
-            fileName: basename(archivePart),
-            transferredBytes: totalBytes ?? bytesCompletedBefore,
+            fileName: basename(archivePart.fileName),
+            transferredBytes: totalBytes ?? (await this.calculatePathSize(payloadPath)),
             totalBytes,
             speedBytesPerSecond: null,
             etaSeconds: null
           })
-          await this.extractArchive(join(payloadPath, basename(archivePart)), payloadPath, decodedPassword, undefined, {
+          await this.extractArchive(join(payloadPath, basename(archivePart.fileName)), payloadPath, decodedPassword, undefined, {
             clearDestination: false
           })
           await this.checkpointTransferControl(control)
@@ -1289,7 +1537,7 @@ class VrSrcService {
           extractPath: this.getMetaExtractPath(),
           catalogPath: this.getCatalogPath()
         })
-        await this.downloadFile(`${credentials.baseUri}meta.7z`, this.getMetaArchivePath(), null, logger)
+        await this.syncMetaArchiveWithRclone(credentials.baseUri, this.getMetaArchivePath(), logger)
         await this.extractArchive(this.getMetaArchivePath(), this.getMetaExtractPath(), decodedPassword, logger)
         const catalog = await this.buildCatalog(logger)
         const status = await this.buildStatus()
@@ -1799,7 +2047,7 @@ class VrSrcService {
       success: true,
       releaseName,
       operation,
-      message: `Resumed ${releaseName}.`,
+      message: `Resuming remaining files for ${releaseName}.`,
       details: null
     }
   }

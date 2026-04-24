@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.6.4`
+Current documented application version: `0.6.6`
 
 ## Runtime Shape
 
@@ -25,6 +25,7 @@ QuestVault now manages required runtime tooling through a dedicated dependency l
 
 - Ensures a usable ADB runtime exists.
 - Resolves or prepares a usable `7z` / `7zz` runtime for vrSrc extraction.
+- Resolves or prepares a usable `rclone` runtime for vrSrc transfer operations.
 - Prefers system tooling when available and falls back to managed copies when required.
 - Reports dependency progress and failures into the renderer so startup/setup work can surface in Live.
 
@@ -99,7 +100,9 @@ The vrSrc service handles:
 
 It also supports richer on-demand item details such as notes and trailer lookup for the vrSrc drawer.
 
-On Windows, vrSrc network requests now prefer IPv4 when spawning `curl`, which helps avoid Cloudflare rejections seen on some IPv6 request paths.
+Credential resolution still uses `curl` against Telegram, but vrSrc metadata archive and payload transfers now use `rclone`. Managed/system `rclone` versions are checked against a minimum working version so older QuestVault-managed runtimes can be replaced automatically during upgrades.
+
+On Windows, vrSrc network requests still prefer IPv4 when spawning `curl`, which helps avoid Cloudflare rejections seen on some IPv6 request paths.
 
 ## Renderer Architecture
 

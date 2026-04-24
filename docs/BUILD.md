@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Documented application version: `0.6.4`
+Documented application version: `0.6.6`
 
 ## Packaging Targets
 
@@ -91,6 +91,8 @@ Recommended validation flow:
 1. `pnpm typecheck`
 2. `pnpm build`
 3. target packaging command(s)
+
+For vrSrc validation, also confirm that the managed dependency bootstrap can prepare a current `rclone` runtime when the bundled/system version is missing or too old.
 
 If packaging fails, classify the issue as one of:
 

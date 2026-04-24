@@ -71,6 +71,8 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Installed-app metadata refresh now begins from the persisted installed index, trims removed packages, and backfills only missing matches in the background.
 - Watcher-driven updates when indexed folders change on disk.
 - Windows vrSrc sync now prefers IPv4 for remote source requests to avoid Cloudflare 403 failures seen on some IPv6 paths.
+- vrSrc sync and payload transfers now use a managed `rclone` transport while Telegram credential resolution stays on `curl`, which restores the public `meta.7z` sync path on networks where older request profiles are blocked.
+- Older managed or system `rclone` binaries are now version-checked and automatically refreshed when they are below the working minimum used for vrSrc sync.
 - Save drawer package IDs now wrap cleanly instead of forcing sideways scroll on long package names.
 - vrSrc-style `v<code>+<name>` release names are now parsed consistently during vrSrc sync and local indexing, which improves version fallback accuracy for vrSrc-style payload folders.
 

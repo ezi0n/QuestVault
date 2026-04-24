@@ -200,7 +200,23 @@ app.whenReady().then(async () => {
   ipcMain.handle('devices:list', async () => deviceService.listDevices())
   ipcMain.handle('dependencies:get-status', async () => dependencyService.ensureStartupDependencies())
   ipcMain.handle('dependencies:ensure-ready', async () => dependencyService.ensureStartupDependencies())
-  ipcMain.handle('app:check-for-updates', async () => releaseService.checkForUpdates(app.getVersion()))
+  ipcMain.handle('app:check-for-updates', async () => {
+    try {
+      return await releaseService.checkForUpdates(app.getVersion())
+    } catch (error) {
+      return {
+        success: false,
+        currentVersion: app.getVersion(),
+        latestVersion: null,
+        latestTag: null,
+        releaseUrl: null,
+        publishedAt: null,
+        updateAvailable: false,
+        message: 'Unable to check for updates.',
+        details: error instanceof Error ? error.message : 'Unknown error.'
+      }
+    }
+  })
   ipcMain.handle('devices:connect', async (_event, address: string) => deviceService.connect(address))
   ipcMain.handle('devices:disconnect', async (_event, serial: string) => deviceService.disconnect(serial))
   ipcMain.handle('devices:get-user-name', async (_event, serial: string) => deviceService.getUserName(serial))

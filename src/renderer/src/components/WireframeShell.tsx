@@ -1726,7 +1726,7 @@ function QueueRail(props: {
                       onClick={() => void onResumeVrSrcTransfer(item.transferControl!.releaseName, item.transferControl!.operation)}
                       type="button"
                     >
-                      Resume
+                      Resume Remaining Files
                     </button>
                   ) : null}
                   {item.transferControl.canCancel ? (

@@ -393,7 +393,7 @@ function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   }
 
   if (update.phase === 'paused') {
-    return 'Download paused. Resume when you are ready.'
+    return 'Download paused. Resume remaining files when you are ready.'
   }
 
   if (update.phase === 'cancelled') {

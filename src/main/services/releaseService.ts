@@ -1,6 +1,7 @@
 import type { ReleaseCheckResponse } from '@shared/types/ipc'
 
 const GITHUB_LATEST_RELEASE_URL = 'https://api.github.com/repos/ezi0n/QuestVault/releases/latest'
+const RELEASE_CHECK_TIMEOUT_MS = 8000
 
 interface GitHubLatestReleasePayload {
   tag_name?: unknown
@@ -41,17 +42,18 @@ function compareVersions(left: string, right: string): number {
 
 class ReleaseService {
   async checkForUpdates(currentVersion: string): Promise<ReleaseCheckResponse> {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 8000)
-
     try {
-      const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          'User-Agent': 'QuestVault'
-        },
-        signal: controller.signal
-      })
+      const response = await Promise.race([
+        fetch(GITHUB_LATEST_RELEASE_URL, {
+          headers: {
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'QuestVault'
+          }
+        }),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('Update check timed out.')), RELEASE_CHECK_TIMEOUT_MS)
+        })
+      ])
 
       if (!response.ok) {
         return {
@@ -67,7 +69,23 @@ class ReleaseService {
         }
       }
 
-      const payload = (await response.json()) as GitHubLatestReleasePayload
+      const raw = await response.text()
+      let payload: GitHubLatestReleasePayload
+      try {
+        payload = JSON.parse(raw) as GitHubLatestReleasePayload
+      } catch {
+        return {
+          success: false,
+          currentVersion,
+          latestVersion: null,
+          latestTag: null,
+          releaseUrl: null,
+          publishedAt: null,
+          updateAvailable: false,
+          message: 'Unable to check for updates.',
+          details: 'GitHub returned an unexpected response.'
+        }
+      }
       const latestTag = typeof payload.tag_name === 'string' ? payload.tag_name : null
       const latestVersion = normalizeVersion(latestTag)
       const releaseUrl = typeof payload.html_url === 'string' ? payload.html_url : null
@@ -122,8 +140,6 @@ class ReleaseService {
         message: 'Unable to check for updates.',
         details: error instanceof Error ? error.message : 'Unknown error.'
       }
-    } finally {
-      clearTimeout(timeoutId)
     }
   }
 }
