@@ -3502,6 +3502,9 @@ input {
 .games-drawer-inline-link {
   color: var(--accent-teal);
   text-decoration: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .games-drawer-inline-link:hover {
@@ -3547,6 +3550,8 @@ input {
   color: var(--text-body);
   font-size: 1rem;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .games-drawer-section-card-content {
@@ -3555,10 +3560,14 @@ input {
 }
 
 .games-drawer-media-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 12px;
+}
+
+.games-drawer-media-header > * {
+  min-width: 0;
 }
 
 .games-drawer-section-paragraph {
@@ -3566,6 +3575,8 @@ input {
   color: var(--text-body);
   font-size: 1rem;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .games-drawer-video-shell {
@@ -4781,6 +4792,39 @@ input {
 
 .vrsrc-drawer .games-drawer-title-block p {
   overflow-wrap: anywhere;
+}
+
+.vrsrc-drawer {
+  overflow-x: hidden;
+}
+
+.vrsrc-drawer .games-drawer-artwork-stack,
+.vrsrc-drawer .games-drawer-title-row,
+.vrsrc-drawer .games-drawer-title-block,
+.vrsrc-drawer .games-drawer-facts {
+  min-width: 0;
+}
+
+.vrsrc-drawer .games-drawer-title-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: flex-start;
+}
+
+.vrsrc-drawer .games-drawer-art {
+  flex: 0 0 auto;
+}
+
+.vrsrc-drawer .games-drawer-title-block {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vrsrc-drawer .games-drawer-title-block h3,
+.vrsrc-drawer .games-drawer-title-block p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 @media (max-width: 1080px) {

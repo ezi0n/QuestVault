@@ -53,6 +53,7 @@
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
 - Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
+- vrSrc drawer content now wraps long title/package/header/note strings more safely so outlier releases do not create sideways overflow or clipped header controls.
 - Local detail drawers auto-close into Live for install/uninstall/delete actions while keeping extraction and metadata flows visible in-place.
 - vrSrc and Game Saves drawers now follow the same close-into-Live pattern for download, install, save scan, and backup actions.
 - Installed-app refresh progress now advances through visible background metadata work instead of freezing on a single generic state.
@@ -90,7 +91,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.6.3`
+Current documented release line: `0.6.4`
 
 ## Product Position
 

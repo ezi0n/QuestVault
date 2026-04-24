@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.3`
+Current documented application version: `0.6.4`
 
 ## Overview
 
@@ -97,6 +97,8 @@ Selecting a vrSrc item opens a remote detail drawer that can include:
 - release details
 
 If a matching local payload already covers the selected vrSrc release, the drawer now routes the outcome through `Live` instead of relying only on inline drawer messaging.
+
+Long package IDs, trailer header controls, and note content in the vrSrc drawer now wrap more defensively, so entries with long manual patch instructions or unusually long strings no longer force sideways overflow.
 
 ## Installed Inventory
 
