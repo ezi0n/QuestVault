@@ -15,6 +15,7 @@
 - Search titles, package IDs, release names, versions, and normalized name variants.
 - Browse in grid or list mode.
 - Change gallery density through the grid scale control.
+- Review a Local Library summary row where the library count is labelled as `Library`.
 - Install or update local content onto the headset.
 - Open a rich local item drawer with:
   - artwork
@@ -33,6 +34,7 @@
 - Sync the protected remote catalog.
 - Compare remote releases against the current local library.
 - Browse vrSrc in grid or list mode inside the Apps & Games workspace.
+- Review display-only vrSrc summary counts while using the global filter row for update filtering.
 - Add remote releases into the Local Library.
 - Install remote releases directly to the connected headset.
 - Resume interrupted remote downloads where possible.

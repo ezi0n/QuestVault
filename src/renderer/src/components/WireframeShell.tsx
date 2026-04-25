@@ -1848,7 +1848,7 @@ function GamesView(props: {
   const [selectedVrSrcDetailsBusy, setSelectedVrSrcDetailsBusy] = useState(false)
   const [gamesFilter, setGamesFilter] = useState<GamesFilterId>('all')
   const [gamesSearch, setGamesSearch] = useState('')
-  const [vrSrcFilter, setVrSrcFilter] = useState<'all' | 'new' | 'updates'>('all')
+  const [vrSrcFilter, setVrSrcFilter] = useState<'all' | 'new'>('all')
   const [vrSrcSortMode, setVrSrcSortMode] = useState<'title' | 'latest'>('title')
   const [gamesUserNameEditing, setGamesUserNameEditing] = useState(false)
   const [gamesUserNameDraft, setGamesUserNameDraft] = useState('')
@@ -2206,10 +2206,6 @@ function GamesView(props: {
       }
     } else if (gamesFilter === 'offline' || gamesFilter === 'unidentified') {
       return false
-    }
-
-    if (vrSrcFilter === 'updates') {
-      return itemStatus?.isUpdate ?? false
     }
 
     if (vrSrcFilter === 'new') {
@@ -3105,16 +3101,13 @@ function GamesView(props: {
                   <span className="eyebrow">New</span>
                   <strong>{vrSrcSummary.newCount}</strong>
                 </button>
-                <button
-                  aria-pressed={vrSrcFilter === 'updates'}
-                  className={vrSrcFilter === 'updates' ? 'vrsrc-summary-pill active' : 'vrsrc-summary-pill'}
-                  title="Remote versions newer than the strongest library match for the same package."
-                  onClick={() => setVrSrcFilter((current) => (current === 'updates' ? 'all' : 'updates'))}
-                  type="button"
+                <div
+                  className="vrsrc-summary-pill"
+                  title="Remote versions newer than the strongest library match for the same package. Use the global Updates filter above to show only these items."
                 >
                   <span className="eyebrow">Updates</span>
                   <strong>{vrSrcSummary.updateCount}</strong>
-                </button>
+                </div>
                 <button
                   aria-pressed={vrSrcSortMode === 'latest'}
                   className={vrSrcSortMode === 'latest' ? 'vrsrc-summary-pill active' : 'vrsrc-summary-pill'}
@@ -3363,7 +3356,7 @@ function GamesView(props: {
                 </strong>
               </div>
               <div className="vrsrc-summary-pill" title="Current count of titles present in the Local Library.">
-                <span className="eyebrow">Catalog</span>
+                <span className="eyebrow">Library</span>
                 <strong>{localLibrarySummary.catalogCount}</strong>
               </div>
               <div className="vrsrc-summary-pill" title="Titles whose Local Library file or folder timestamp falls within the last 7 days.">

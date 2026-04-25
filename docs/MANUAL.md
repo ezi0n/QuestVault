@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.6`
+Current documented application version: `0.6.7`
 
 ## Overview
 
@@ -20,7 +20,7 @@ You can:
 
 - search the Local Library
 - browse in `Grid View` or `List View`
-- review Local Library status/catalog/new/update summary pills
+- review Local Library status/library/new/update summary pills
 - review duplicate package families
 - install/update local items
 - open the vrSrc remote source panel
@@ -83,6 +83,8 @@ The current vrSrc flow lets you:
 - browse remote items in grid or list mode
 - add items to the Local Library
 - install items directly to the headset
+
+The vrSrc `Updates` summary pill shows the remote update count only. Use the global `Updates` filter in the Apps & Games filter row when you want to display only update candidates.
 
 For download, update, and install actions, the vrSrc drawer now closes immediately so the transfer or install state is visible in `Live` right away. If the selected payload is already in the Local Library or cannot proceed, those outcomes are also surfaced through `Live` instead of only inline workspace banners.
 
