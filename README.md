@@ -8,7 +8,7 @@ QuestVault is a desktop Quest content manager for local library indexing, headse
 
 ## Inspiration
 
-This project is heavily inspired by the fantastic work done on [Rookie Sideloader](https://github.com/VRPirates/rookie), ApprenticeVR, and ApprenticeVR vrSrc Edition.
+This project is heavily inspired by the fantastic work done on [Rookie Sideloader][(https://github.com/nerdunit/androidsideloader)], ApprenticeVR, and ApprenticeVR vrSrc Edition.
 
 ## Core Areas
 
