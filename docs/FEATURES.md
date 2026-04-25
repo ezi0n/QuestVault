@@ -10,7 +10,7 @@
 - Version-family handling that collapses duplicate packages during browsing and expands matches during search.
 - Local detail drawer with install, metadata, version, and cleanup actions.
 - Shared detail-drawer polish across Local Library, vrSrc, Installed Inventory, and Game Saves with clearer fact-group separation, rating strips, trailer support, and richer metadata presentation.
-- Local Library summary pills for status, library size, recent additions, update count, and title/date sorting.
+- Local Library summary pills for status, library size, recent additions, update count, and title/date sorting, with `New` acting as a recent-additions filter.
 - Local Library list view date column with vrSrc-backed fallback dates for chronological sorting.
 
 ### Installed Inventory
@@ -94,7 +94,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.6.8`
+Current documented release line: `0.6.9`
 
 ## Product Position
 

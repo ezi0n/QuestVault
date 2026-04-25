@@ -193,6 +193,7 @@ const gameFilters = [
 ] as const
 
 type GamesFilterId = (typeof gameFilters)[number]['id']
+type GamesFilterState = GamesFilterId | 'new'
 type GamesSortKey = 'title' | 'date' | 'size'
 type GamesSortDirection = 'asc' | 'desc'
 type GamesDisplayMode = ViewDisplayMode
@@ -225,7 +226,7 @@ type LibraryGameRow = {
   manualMetadata: ManualGameMetadataOverride | null
   isInstalled: boolean
   hasLibraryUpdate: boolean
-  filterTags: GamesFilterId[]
+  filterTags: GamesFilterState[]
   heroImageUri: string | null
   thumbnailUri: string | null
   installReady: boolean
@@ -1846,7 +1847,7 @@ function GamesView(props: {
   const [selectedVrSrcReleaseName, setSelectedVrSrcReleaseName] = useState<string | null>(null)
   const [selectedVrSrcDetails, setSelectedVrSrcDetails] = useState<VrSrcItemDetailsResponse | null>(null)
   const [selectedVrSrcDetailsBusy, setSelectedVrSrcDetailsBusy] = useState(false)
-  const [gamesFilter, setGamesFilter] = useState<GamesFilterId>('all')
+  const [gamesFilter, setGamesFilter] = useState<GamesFilterState>('all')
   const [gamesSearch, setGamesSearch] = useState('')
   const [vrSrcFilter, setVrSrcFilter] = useState<'all' | 'new'>('all')
   const [vrSrcSortMode, setVrSrcSortMode] = useState<'title' | 'latest'>('title')
@@ -1932,7 +1933,8 @@ function GamesView(props: {
         isInstalled &&
         item.installReady &&
         compareVersionValues(libraryVersion, installedVersion) > 0
-      const filterTags: GamesFilterId[] = ['all']
+      const filterTags: GamesFilterState[] = ['all']
+      const isNewLocalLibraryItem = isWithinLastDays(item.modifiedAt, 7)
 
       if (isInstalled) {
         filterTags.push('installed')
@@ -1948,6 +1950,10 @@ function GamesView(props: {
 
       if (!hasResolvedMetaStoreMatch) {
         filterTags.push('unidentified')
+      }
+
+      if (isNewLocalLibraryItem) {
+        filterTags.push('new')
       }
 
         return {
@@ -2043,7 +2049,7 @@ function GamesView(props: {
         const storeVersion = display.version
         const libraryVersion = item.libraryVersion
         const primaryVersionValue = libraryVersion ?? storeVersion
-        const filterTags: GamesFilterId[] = ['offline']
+        const filterTags: GamesFilterState[] = ['offline']
 
         return {
           id: `backup-${item.id}`,
@@ -2204,7 +2210,7 @@ function GamesView(props: {
       if (!(itemStatus?.isInLibrary ?? false)) {
         return false
       }
-    } else if (gamesFilter === 'offline' || gamesFilter === 'unidentified') {
+    } else if (gamesFilter === 'new' || gamesFilter === 'offline' || gamesFilter === 'unidentified') {
       return false
     }
 
@@ -3359,10 +3365,16 @@ function GamesView(props: {
                 <span className="eyebrow">Library</span>
                 <strong>{localLibrarySummary.catalogCount}</strong>
               </div>
-              <div className="vrsrc-summary-pill" title="Titles whose Local Library file or folder timestamp falls within the last 7 days.">
+              <button
+                aria-pressed={gamesFilter === 'new'}
+                className={gamesFilter === 'new' ? 'vrsrc-summary-pill active' : 'vrsrc-summary-pill'}
+                onClick={() => setGamesFilter(gamesFilter === 'new' ? 'all' : 'new')}
+                title="Show Local Library titles whose file or folder timestamp falls within the last 7 days."
+                type="button"
+              >
                 <span className="eyebrow">New</span>
                 <strong>{localLibrarySummary.newCount}</strong>
-              </div>
+              </button>
               <div className="vrsrc-summary-pill" title="Installed titles where the Local Library has a newer version ready to use.">
                 <span className="eyebrow">Updates</span>
                 <strong>{localLibrarySummary.updateCount}</strong>

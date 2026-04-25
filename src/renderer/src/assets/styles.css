@@ -4440,6 +4440,10 @@ input {
   cursor: pointer;
 }
 
+button.vrsrc-summary-pill {
+  cursor: pointer;
+}
+
 .vrsrc-summary-pill-button strong {
   font-size: 0.82rem;
 }

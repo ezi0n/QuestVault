@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.6.8`
+Current documented application version: `0.6.9`
 
 ## Runtime Shape
 
@@ -123,7 +123,7 @@ Drawer action handoff is now more uniform across workspaces: Local Library, vrSr
 
 The shared drawer CSS now also includes stronger overflow guards for vrSrc content blocks, especially around title rows, trailer headers, and long note/body strings that can include patch paths or JSON-like keys.
 
-Apps & Games keeps update filtering centralized in the global filter row. The vrSrc header `Updates` pill is a display-only remote update count, while the global `Updates` filter applies consistently across the active Local Library and vrSrc views.
+Apps & Games keeps update filtering centralized in the global filter row. The vrSrc header `Updates` pill is a display-only remote update count, while the global `Updates` filter applies consistently across the active Local Library and vrSrc views. The Local Library `New` summary pill is a local-only filter for recent library additions.
 
 ## Primary Workspaces
 

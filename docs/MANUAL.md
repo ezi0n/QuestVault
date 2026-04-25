@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.8`
+Current documented application version: `0.6.9`
 
 ## Overview
 
@@ -26,6 +26,8 @@ You can:
 - open the vrSrc remote source panel
 
 Selected toolbar and filter pills in `Apps & Games`, `Installed Inventory`, and similar workspaces now use the same warm highlighted surround treatment as the active left-rail navigation item, making the current selection easier to spot at a glance.
+
+The Local Library `New` summary pill is also interactive. Select it to filter the Local Library to titles whose file or folder timestamp falls within the last 7 days, then select it again or use `All` to clear the filter.
 
 ### Search
 

@@ -28,6 +28,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Detail drawers across Local Library, vrSrc, Installed Inventory, and Game Saves are now more aligned, with shared rating strips, trailer embeds, richer metadata facts, and clearer section separation.
 - Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
 - Local Library and vrSrc summary pills now use clearer wording and filtering behavior: Local Library shows `Library`, while vrSrc `Updates` displays the count and leaves update filtering to the global filter row.
+- The Local Library `New` summary pill now filters to recent local additions instead of only displaying the count.
 - vrSrc drawer wrapping is now more resilient for long package names, trailer headers, note content, and manual patch strings, so problem entries no longer blow the drawer out sideways.
 
 ### Installed Inventory
