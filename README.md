@@ -76,6 +76,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Older managed or system `rclone` binaries are now version-checked and automatically refreshed when they are below the working minimum used for vrSrc sync.
 - Save drawer package IDs now wrap cleanly instead of forcing sideways scroll on long package names.
 - vrSrc-style `v<code>+<name>` release names are now parsed consistently during vrSrc sync and local indexing, which improves version fallback accuracy for vrSrc-style payload folders.
+- vrSrc sync now excludes `0 MB` source rows from catalog counts, browsing results, and download actions.
 
 - [QuestVault Screenshots](screenshots/)
 

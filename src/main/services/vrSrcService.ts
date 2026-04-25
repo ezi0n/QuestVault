@@ -1062,6 +1062,10 @@ class VrSrcService {
     return parseVrSrcReleaseName(releaseName)?.versionName ?? null
   }
 
+  private shouldIncludeCatalogItem(sizeBytes: number): boolean {
+    return Number.isFinite(sizeBytes) && sizeBytes > 0
+  }
+
   private async buildCatalog(logger?: VrSrcLogger): Promise<VrSrcCatalogResponse> {
     const rootPath = this.getMetaExtractPath()
     const gameListPath =
@@ -1082,6 +1086,7 @@ class VrSrcService {
     const indexes = this.readCatalogHeaderIndexes(lines[0])
     const items: VrSrcCatalogItem[] = []
     let artworkCount = 0
+    let excludedZeroSizeCount = 0
 
     for (const line of lines.slice(1)) {
       const parts = line.split(';')
@@ -1095,6 +1100,12 @@ class VrSrcService {
 
       const sizeMbRaw = parts[indexes.sizeMb]?.trim() ?? '0'
       const sizeMb = Number.parseFloat(sizeMbRaw)
+      const sizeBytes = Number.isFinite(sizeMb) ? Math.max(0, Math.round(sizeMb * 1024 * 1024)) : 0
+      if (!this.shouldIncludeCatalogItem(sizeBytes)) {
+        excludedZeroSizeCount += 1
+        continue
+      }
+
       const artworkPath = join(thumbnailsPath, `${packageName}.jpg`)
       const artworkUrl = (await this.fileExists(artworkPath)) ? this.toLocalAssetUri(artworkPath) : null
       if (artworkUrl) {
@@ -1110,7 +1121,7 @@ class VrSrcService {
         versionName: this.extractVersionNameFromReleaseName(releaseName),
         lastUpdated: parts[indexes.lastUpdated]?.trim() ?? '',
         sizeLabel: `${sizeMbRaw} MB`,
-        sizeBytes: Number.isFinite(sizeMb) ? Math.max(0, Math.round(sizeMb * 1024 * 1024)) : 0,
+        sizeBytes,
         downloads: Number.parseFloat(parts[indexes.downloads]?.trim() ?? '0') || 0,
         rating: Number.parseFloat(parts[indexes.rating]?.trim() ?? '0') || 0,
         ratingCount: Number.parseFloat(parts[indexes.ratingCount]?.trim() ?? '0') || 0,
@@ -1127,6 +1138,7 @@ class VrSrcService {
     await writeFile(this.getCatalogPath(), JSON.stringify(catalog, null, 2), 'utf8')
     await logger?.info('vrSrc catalog rebuilt successfully.', {
       itemCount: items.length,
+      excludedZeroSizeCount,
       artworkCount,
       missingArtworkCount: items.length - artworkCount,
       syncedAt: catalog.syncedAt
@@ -1138,10 +1150,9 @@ class VrSrcService {
     try {
       const raw = await readFile(this.getCatalogPath(), 'utf8')
       const parsed = JSON.parse(raw) as VrSrcCatalogResponse
-      return {
-        syncedAt: parsed.syncedAt ?? null,
-        items: Array.isArray(parsed.items)
-          ? parsed.items.map((item) => ({
+      const items = Array.isArray(parsed.items)
+        ? parsed.items
+            .map((item) => ({
               ...item,
               versionName:
                 typeof item?.versionName === 'string'
@@ -1150,7 +1161,11 @@ class VrSrcService {
                     ? this.extractVersionNameFromReleaseName(item.releaseName)
                     : null
             }))
-          : []
+            .filter((item) => this.shouldIncludeCatalogItem(item.sizeBytes))
+        : []
+      return {
+        syncedAt: parsed.syncedAt ?? null,
+        items
       }
     } catch {
       return {

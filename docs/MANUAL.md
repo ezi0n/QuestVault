@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.7`
+Current documented application version: `0.6.8`
 
 ## Overview
 
@@ -83,6 +83,8 @@ The current vrSrc flow lets you:
 - browse remote items in grid or list mode
 - add items to the Local Library
 - install items directly to the headset
+
+During sync, QuestVault excludes vrSrc rows that advertise a non-positive footprint, such as `0 MB`, so placeholder or patch-only source entries are not counted, shown, or offered as downloadable catalog items.
 
 The vrSrc `Updates` summary pill shows the remote update count only. Use the global `Updates` filter in the Apps & Games filter row when you want to display only update candidates.
 
