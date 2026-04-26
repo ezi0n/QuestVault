@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.6.9`
+Current documented application version: `0.7.0`
 
 ## Overview
 
@@ -37,6 +37,7 @@ The search field matches:
 - package ID
 - release name
 - normalized spaced/unspaced variants
+- literal age markers such as `(18+)` / `18+`
 
 ### Grid density
 
@@ -64,6 +65,8 @@ If older versions exist, choose a specific older version and delete it with conf
 For install, uninstall, and delete actions, the drawer now closes immediately so the resulting work is visible in `Live`. Metadata and artwork extraction flows stay in the drawer.
 
 When artwork links fail or a metadata source has no usable image, QuestVault now falls back to generated artwork surfaces instead of leaving the card or drawer blank.
+
+MR-Fix and similarly aliased local packages can also borrow richer metadata and artwork from their storefront package match while retaining the local title, folder, and package truth.
 
 ### Local Library list dates
 
@@ -193,8 +196,9 @@ Open `Orphaned OBB / Data` to:
 
 The `Maintenance` section includes a compact chart showing:
 
-- apps present on the headset at each recent scan
-- apps removed since the previous scan
+- apps added above the scan baseline
+- apps removed below the scan baseline
+- the latest installed and system app totals
 
 Use `Refresh installed apps` in `Installed Inventory` to add new scan points to this history.
 

@@ -32,6 +32,7 @@ import type {
   VrSrcTransferOperation,
   ViewDisplayMode
 } from '@shared/types/ipc'
+import { parseVrSrcReleaseName } from '@shared/utils/vrsrcRelease'
 
 interface UiNotice {
   text: string
@@ -315,9 +316,12 @@ function normalizeLibraryGameIdentity(value: string | null | undefined): string 
     .trim()
 }
 
+function preserveSearchMarkers(value: string): string {
+  return value.replace(/\b(\d{1,2})\s*\+/g, '$1plus')
+}
+
 function normalizeSearchText(value: string | null | undefined): string {
-  return (value ?? '')
-    .toLowerCase()
+  return preserveSearchMarkers((value ?? '').toLowerCase())
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
 }
@@ -614,12 +618,20 @@ function buildLibraryGameRowDisplay(
   fallbackTitle: string,
   item: Pick<
     LocalLibraryIndexedItem,
-    'kind' | 'note' | 'relativePath' | 'manualMetadata' | 'libraryVersion' | 'searchTerms'
+    'kind' | 'note' | 'relativePath' | 'manualMetadata' | 'libraryVersion' | 'searchTerms' | 'packageIds'
   >,
-  metaStoreMatch: MetaStoreGameSummary | null
+  metaStoreMatch: MetaStoreGameSummary | null,
+  fallbackArtworkUri: string | null = null
 ) {
   const manualMetadata = item.manualMetadata ?? null
-  const title = manualMetadata?.title ?? metaStoreMatch?.title ?? fallbackTitle
+  const metaPackageId = metaStoreMatch?.packageId?.toLowerCase() ?? null
+  const isAliasedMetaMatch = Boolean(
+    metaStoreMatch?.source === 'remote' &&
+    metaPackageId &&
+    !item.packageIds.some((packageId) => packageId.toLowerCase() === metaPackageId)
+  )
+  const localTitle = parseVrSrcReleaseName(fallbackTitle)?.title ?? fallbackTitle
+  const title = manualMetadata?.title ?? (isAliasedMetaMatch ? localTitle : metaStoreMatch?.title) ?? localTitle
   const publisherName = manualMetadata?.publisherName ?? metaStoreMatch?.publisherName ?? null
   const category = manualMetadata?.category ?? metaStoreMatch?.category ?? null
   const note =
@@ -628,7 +640,6 @@ function buildLibraryGameRowDisplay(
     manualMetadata?.releaseDateLabel ??
     metaStoreMatch?.subtitle ??
     `Indexed from ${item.relativePath}.`
-  const version = manualMetadata?.version ?? metaStoreMatch?.version ?? item.libraryVersion ?? null
   const thumbnailUri =
     manualMetadata?.thumbnailUri ??
     manualMetadata?.heroImageUri ??
@@ -637,12 +648,15 @@ function buildLibraryGameRowDisplay(
     metaStoreMatch?.portraitImage?.uri ??
     metaStoreMatch?.heroImage?.uri ??
     metaStoreMatch?.logoImage?.uri ??
+    fallbackArtworkUri ??
     null
   const heroImageUri =
     manualMetadata?.heroImageUri ??
     metaStoreMatch?.heroImage?.uri ??
     metaStoreMatch?.portraitImage?.uri ??
+    fallbackArtworkUri ??
     thumbnailUri
+  const version = manualMetadata?.version ?? (isAliasedMetaMatch ? item.libraryVersion ?? metaStoreMatch?.version : metaStoreMatch?.version ?? item.libraryVersion) ?? null
 
   return {
     title,
@@ -1464,12 +1478,26 @@ function resolveInstalledPackageSummary(
   installedMetaStoreMatchesByPackageId: Record<string, MetaStoreGameSummary>
 ): MetaStoreGameSummary | null {
   const normalizedPackageId = packageId.trim().toLowerCase()
+  const candidates = [
+    installedMetaStoreMatchesByPackageId[normalizedPackageId] ?? null,
+    packageSummaryByPackageId.get(normalizedPackageId) ?? null
+  ].filter((summary): summary is MetaStoreGameSummary => Boolean(summary))
 
-  return (
-    installedMetaStoreMatchesByPackageId[normalizedPackageId] ??
-    packageSummaryByPackageId.get(normalizedPackageId) ??
-    null
-  )
+  if (!candidates.length) {
+    return null
+  }
+
+  return [...candidates].sort((left, right) => {
+    const scoreSummary = (summary: MetaStoreGameSummary) => {
+      const sourceScore = summary.source === 'remote' ? 100 : 0
+      const artworkScore = summary.thumbnail || summary.iconImage || summary.heroImage || summary.portraitImage ? 30 : 0
+      const storeScore = summary.storeItemId ? 10 : 0
+      const packageScore = summary.packageId?.toLowerCase() === normalizedPackageId ? 5 : 0
+      return sourceScore + artworkScore + storeScore + packageScore
+    }
+
+    return scoreSummary(right) - scoreSummary(left)
+  })[0]
 }
 
 function NoticeBanner(props: { notice: UiNotice; className?: string }) {
@@ -1858,6 +1886,7 @@ function GamesView(props: {
   const [gamesSortDirection, setGamesSortDirection] = useState<GamesSortDirection>('asc')
   const controlsPanelRef = useRef<HTMLElement | null>(null)
   const gamesScrollFrameRef = useRef<HTMLDivElement | null>(null)
+  const previousVrSrcPanelOpenRef = useRef(isVrSrcPanelOpen)
   const [gamesControlsHeight, setGamesControlsHeight] = useState(0)
   const [gamesScrollAvailableHeight, setGamesScrollAvailableHeight] = useState(0)
   const galleryVisualScale = 0.85
@@ -1907,6 +1936,14 @@ function GamesView(props: {
     timestamps.set(packageId, selectLatestVrSrcTimestamp(timestamps.get(packageId) ?? null, item.lastUpdated))
     return timestamps
   }, new Map<string, string | null>())
+  const vrSrcArtworkByPackageId = (vrSrcCatalog?.items ?? []).reduce((artwork, item) => {
+    const packageId = item.packageName.trim().toLowerCase()
+    if (packageId && item.artworkUrl && !artwork.has(packageId)) {
+      artwork.set(packageId, item.artworkUrl)
+    }
+
+    return artwork
+  }, new Map<string, string>())
   const libraryGameRows = collapseLibraryGameRows(
     (localLibraryIndex?.items ?? [])
     .filter((item) => item.availability === 'present')
@@ -1915,7 +1952,11 @@ function GamesView(props: {
         const packageIds = item.packageIds ?? []
         const metaStoreMatch = metaStoreMatchesByItemId[buildGameMetaMatchKey('library', item.id)] ?? null
         const hasResolvedMetaStoreMatch = metaStoreMatch?.source === 'remote'
-        const display = buildLibraryGameRowDisplay(fallbackTitle, item, metaStoreMatch)
+        const vrSrcArtworkUri =
+          packageIds
+            .map((packageId) => vrSrcArtworkByPackageId.get(packageId.toLowerCase()) ?? null)
+            .find((value): value is string => Boolean(value)) ?? null
+        const display = buildLibraryGameRowDisplay(fallbackTitle, item, metaStoreMatch, vrSrcArtworkUri)
         const isInstalled = packageIds.some((packageId) => installedPackageIds.has(packageId.toLowerCase()))
         const installedVersion =
           packageIds
@@ -2035,7 +2076,11 @@ function GamesView(props: {
         const packageIds = item.packageIds ?? []
         const metaStoreMatch = metaStoreMatchesByItemId[buildGameMetaMatchKey('backup', item.id)] ?? null
         const hasResolvedMetaStoreMatch = metaStoreMatch?.source === 'remote'
-        const display = buildLibraryGameRowDisplay(fallbackTitle, item, metaStoreMatch)
+        const vrSrcArtworkUri =
+          packageIds
+            .map((packageId) => vrSrcArtworkByPackageId.get(packageId.toLowerCase()) ?? null)
+            .find((value): value is string => Boolean(value)) ?? null
+        const display = buildLibraryGameRowDisplay(fallbackTitle, item, metaStoreMatch, vrSrcArtworkUri)
         const isInstalled = packageIds.some((packageId) => installedPackageIds.has(packageId.toLowerCase()))
         const installedVersion =
           packageIds
@@ -2380,10 +2425,18 @@ function GamesView(props: {
   }, [selectedDeviceId, deviceUserName])
 
   useEffect(() => {
+    const wasVrSrcPanelOpen = previousVrSrcPanelOpenRef.current
+    previousVrSrcPanelOpenRef.current = isVrSrcPanelOpen
+
     if (!isVrSrcPanelOpen) {
       setSelectedVrSrcReleaseName(null)
+      return
     }
-  }, [isVrSrcPanelOpen])
+
+    if (!wasVrSrcPanelOpen && gamesFilter === 'new') {
+      setGamesFilter('all')
+    }
+  }, [gamesFilter, isVrSrcPanelOpen])
 
   useEffect(() => {
     const controlsNode = controlsPanelRef.current
@@ -6138,31 +6191,14 @@ function SettingsView(props: {
   const installedAppHistory =
     selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.history : null
   const installedAppHistoryDays = (installedAppHistory?.days ?? []).slice(-7)
-  const maxHistoryValue = installedAppHistoryDays.reduce(
-    (highest, day) => Math.max(highest, day.appCount, day.removedCount),
+  const historyDeltaScaleMax = installedAppHistoryDays.reduce(
+    (highest, day) => Math.max(highest, day.addedCount, day.removedCount),
     1
   )
-  const historyScaleMax = Math.max(1, Math.ceil(maxHistoryValue * 1.08))
-  const settingsHistoryChartWidth = 320
-  const settingsHistoryChartHeight = 72
-  const settingsHistoryChartPaddingX = 14
-  const settingsHistoryChartPaddingTop = 8
-  const settingsHistoryChartPaddingBottom = 16
-  const settingsHistoryPlotWidth = settingsHistoryChartWidth - settingsHistoryChartPaddingX * 2
-  const settingsHistoryPlotHeight =
-    settingsHistoryChartHeight - settingsHistoryChartPaddingTop - settingsHistoryChartPaddingBottom
-  const settingsHistoryStepX =
-    installedAppHistoryDays.length > 1 ? settingsHistoryPlotWidth / (installedAppHistoryDays.length - 1) : 0
-  const settingsHistoryPoints = installedAppHistoryDays.map((day, index) => {
-    const x = settingsHistoryChartPaddingX + settingsHistoryStepX * index
-    const presentY =
-      settingsHistoryChartPaddingTop +
-      settingsHistoryPlotHeight -
-      (day.appCount / historyScaleMax) * settingsHistoryPlotHeight
-    const removedY =
-      settingsHistoryChartPaddingTop +
-      settingsHistoryPlotHeight -
-      (day.removedCount / historyScaleMax) * settingsHistoryPlotHeight
+  const latestInstalledAppHistoryDay = installedAppHistoryDays[installedAppHistoryDays.length - 1] ?? null
+  const settingsHistoryBars = installedAppHistoryDays.map((day) => {
+    const addedHeight = Math.max(8, (day.addedCount / historyDeltaScaleMax) * 100)
+    const removedHeight = Math.max(8, (day.removedCount / historyDeltaScaleMax) * 100)
 
     const scannedAtDate = new Date(day.scannedAt)
     const allScansSameDate = installedAppHistoryDays.every((entry) => entry.date === day.date)
@@ -6178,10 +6214,10 @@ function SettingsView(props: {
 
     return {
       day,
-      x,
-      presentY,
-      removedY,
       label,
+      addedHeight,
+      removedHeight,
+      hasChanges: day.addedCount > 0 || day.removedCount > 0,
       scannedAtLabel: scannedAtDate.toLocaleString(undefined, {
         month: 'short',
         day: 'numeric',
@@ -6190,8 +6226,6 @@ function SettingsView(props: {
       })
     }
   })
-  const settingsHistoryAddedLine = settingsHistoryPoints.map((point) => `${point.x},${point.presentY}`).join(' ')
-  const settingsHistoryRemovedLine = settingsHistoryPoints.map((point) => `${point.x},${point.removedY}`).join(' ')
 
   const settingsStats = [
     {
@@ -6369,72 +6403,70 @@ function SettingsView(props: {
               installedAppHistoryDays.length ? (
                 <div className="settings-maintenance-history-chart">
                   <div
-                    className="settings-maintenance-history-plot"
+                    className="settings-maintenance-history-histogram"
                     role="img"
-                    aria-label="Apps present on the headset versus removed from the headset over the last 7 scans"
+                    aria-label="Apps added to and removed from the headset across the last 7 scans"
                   >
-                    <svg
-                      className="settings-maintenance-history-svg"
-                      viewBox={`0 0 ${settingsHistoryChartWidth} ${settingsHistoryChartHeight}`}
-                      preserveAspectRatio="none"
+                    <div
+                      className="settings-maintenance-history-bars"
+                      style={{
+                        gridTemplateColumns: `repeat(${settingsHistoryBars.length}, minmax(0, 1fr))`
+                      }}
                     >
-                      {[0.25, 0.5, 0.75].map((ratio) => (
-                        <line
-                          key={ratio}
-                          className="settings-maintenance-history-gridline"
-                          x1={settingsHistoryChartPaddingX}
-                          x2={settingsHistoryChartWidth - settingsHistoryChartPaddingX}
-                          y1={settingsHistoryChartPaddingTop + settingsHistoryPlotHeight * ratio}
-                          y2={settingsHistoryChartPaddingTop + settingsHistoryPlotHeight * ratio}
-                        />
-                      ))}
-                      {settingsHistoryPoints.length > 1 ? (
-                        <>
-                          <polyline className="settings-maintenance-history-line is-added" points={settingsHistoryAddedLine} />
-                          <polyline className="settings-maintenance-history-line is-removed" points={settingsHistoryRemovedLine} />
-                        </>
-                      ) : null}
-                      {settingsHistoryPoints.map((point) => (
-                        <g key={point.day.scannedAt}>
-                          <circle className="settings-maintenance-history-hit" cx={point.x} cy={point.presentY} r="9">
-                            <title>{`${point.scannedAtLabel}: ${point.day.appCount}`}</title>
-                          </circle>
-                          <circle className="settings-maintenance-history-dot is-added" cx={point.x} cy={point.presentY} r="3" />
-                          <circle className="settings-maintenance-history-hit" cx={point.x} cy={point.removedY} r="9" />
-                          <circle className="settings-maintenance-history-dot is-removed" cx={point.x} cy={point.removedY} r="3" />
-                        </g>
-                      ))}
-                    </svg>
-                    <div className="settings-maintenance-history-axis">
-                      {settingsHistoryPoints.map((point) => (
-                        <div className="settings-maintenance-history-axis-label" key={point.day.date}>
+                      {settingsHistoryBars.map((point) => (
+                        <div
+                          className="settings-maintenance-history-bar-column"
+                          key={point.day.scannedAt}
+                          title={`${point.scannedAtLabel}: +${point.day.addedCount} / -${point.day.removedCount}, ${point.day.appCount} installed`}
+                        >
+                          <div className="settings-maintenance-history-bar-zone is-positive">
+                            {point.day.addedCount > 0 ? (
+                              <span
+                                className="settings-maintenance-history-bar is-added"
+                                style={{ height: `${point.addedHeight}%` }}
+                              >
+                                <span>{point.day.addedCount}</span>
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="settings-maintenance-history-zero-line">
+                            <span
+                              className={`settings-maintenance-history-zero-dot${point.hasChanges ? ' has-changes' : ''}`}
+                              aria-hidden="true"
+                            />
+                            <span className="settings-maintenance-history-total">{point.day.appCount}</span>
+                          </div>
+                          <div className="settings-maintenance-history-bar-zone is-negative">
+                            {point.day.removedCount > 0 ? (
+                              <span
+                                className="settings-maintenance-history-bar is-removed"
+                                style={{ height: `${point.removedHeight}%` }}
+                              >
+                                <span>{point.day.removedCount}</span>
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="settings-maintenance-history-axis-label">
                           {point.label}
+                          </div>
                         </div>
                       ))}
                     </div>
-                    <div
-                      className="settings-maintenance-history-hover-grid"
-                      style={{
-                        gridTemplateColumns: `repeat(${settingsHistoryPoints.length}, minmax(0, 1fr))`
-                      }}
-                    >
-                      {settingsHistoryPoints.map((point) => (
-                        <div
-                          className="settings-maintenance-history-hover-band"
-                          key={`hover-${point.day.scannedAt}`}
-                          title={`${point.scannedAtLabel}: ${point.day.appCount}`}
-                        />
-                      ))}
+                    <div className="settings-maintenance-history-current">
+                      <span>{latestInstalledAppHistoryDay?.appCount ?? 0}</span>
+                      <small>installed</small>
+                      <span>{latestInstalledAppHistoryDay?.systemAppCount ?? 0}</span>
+                      <small>system</small>
                     </div>
                   </div>
                   <div className="settings-maintenance-history-legend">
                     <span className="settings-maintenance-history-legend-item">
                       <span className="settings-maintenance-history-legend-swatch is-added" aria-hidden="true" />
-                      Present on headset
+                      Added
                     </span>
                     <span className="settings-maintenance-history-legend-item">
                       <span className="settings-maintenance-history-legend-swatch is-removed" aria-hidden="true" />
-                      Removed from headset
+                      Removed
                     </span>
                   </div>
                 </div>

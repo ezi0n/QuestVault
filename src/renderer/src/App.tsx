@@ -1980,6 +1980,20 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     )
     const normalizedPackageIds = packageIds.map((packageId) => packageId.toLowerCase())
     const normalizedPackageIdSet = new Set(normalizedPackageIds)
+    const isAliasPackageId = (packageId: string) => {
+      const normalized = packageId.trim().toLowerCase()
+      return normalized.startsWith('mr.com.') || normalized.startsWith('mrf.') || normalized.startsWith('com.mrf.') || normalized.includes('.mrf.')
+    }
+    const hasUsefulInstalledSummary = (summary: MetaStoreGameSummary | null | undefined) =>
+      Boolean(
+        summary &&
+          (summary.source === 'remote' ||
+            summary.storeItemId ||
+            summary.thumbnail ||
+            summary.iconImage ||
+            summary.heroImage ||
+            summary.portraitImage)
+      )
 
     if (!packageIds.length) {
       setInstalledMetaStoreMatchesByPackageId({})
@@ -1996,9 +2010,14 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
     setInstalledMetaStoreMatchesByPackageId(nextMatches)
 
-    const missingPackageIds = packageIds.filter((packageId) => !nextMatches[packageId.toLowerCase()])
+    const packageIdsNeedingCachedRefresh = packageIds.filter((packageId) => {
+      const summary = nextMatches[packageId.toLowerCase()] ?? null
+      return !summary || (isAliasPackageId(packageId) && !hasUsefulInstalledSummary(summary))
+    })
     const cachedMissingMatches =
-      missingPackageIds.length > 0 ? await window.api.metaStore.peekCachedMatchesByPackageIds(missingPackageIds) : null
+      packageIdsNeedingCachedRefresh.length > 0
+        ? await window.api.metaStore.peekCachedMatchesByPackageIds(packageIdsNeedingCachedRefresh)
+        : null
 
     for (const [packageId, summary] of Object.entries(cachedMissingMatches?.matches ?? {})) {
       nextMatches[packageId.toLowerCase()] = summary
@@ -2013,7 +2032,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       }))
     }
 
-    const packageIdsNeedingHydration = packageIds.filter((packageId) => !nextMatches[packageId.toLowerCase()])
+    const packageIdsNeedingHydration = packageIds.filter((packageId) => {
+      const summary = nextMatches[packageId.toLowerCase()] ?? null
+      return !summary || (isAliasPackageId(packageId) && !hasUsefulInstalledSummary(summary))
+    })
 
     onProgress?.({
       completed: 0,

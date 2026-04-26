@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.6.9`
+Current documented application version: `0.7.0`
 
 ## Runtime Shape
 
@@ -119,11 +119,15 @@ The renderer now also coalesces installed-app refreshes after mutation-heavy flo
 
 Installed-app metadata refresh now starts from the persisted installed metadata index, filters it to the currently scanned packages, and only hydrates packages that are still missing matches. This keeps repeat refreshes accurate without paying the cost of fully re-enriching every installed package on every scan.
 
+Alias-shaped package IDs, including MR-Fix style package variants, are treated as candidates for richer storefront matches. Cached exact package stubs no longer automatically outrank remote matches that provide artwork, store IDs, or richer metadata.
+
 Drawer action handoff is now more uniform across workspaces: Local Library, vrSrc, and Game Saves close their detail drawers before long-running install, download, scan, or backup flows so the Live queue becomes the single visible progress surface.
 
 The shared drawer CSS now also includes stronger overflow guards for vrSrc content blocks, especially around title rows, trailer headers, and long note/body strings that can include patch paths or JSON-like keys.
 
 Apps & Games keeps update filtering centralized in the global filter row. The vrSrc header `Updates` pill is a display-only remote update count, while the global `Updates` filter applies consistently across the active Local Library and vrSrc views. The Local Library `New` summary pill is a local-only filter for recent library additions.
+
+Opening the vrSrc panel clears Local Library-only recent-addition filtering so the remote catalog starts from an unfiltered result set.
 
 ## Primary Workspaces
 

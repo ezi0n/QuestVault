@@ -12,7 +12,7 @@
 
 - Index Local Library content from APKs, folders, archives, and install-ready payloads.
 - Index Backup Storage separately from the main library.
-- Search titles, package IDs, release names, versions, and normalized name variants.
+- Search titles, package IDs, release names, versions, normalized name variants, and literal markers such as `(18+)`.
 - Browse in grid or list mode.
 - Change gallery density through the grid scale control.
 - Review a Local Library summary row where the library count is labelled as `Library`.
@@ -59,7 +59,7 @@
 - Back up installed APKs.
 - Uninstall installed apps.
 - Review storage and leftover-data summary metrics above the inventory surface.
-- Reuse cached installed metadata matches on repeat refreshes and only hydrate packages that are still missing metadata after the scan.
+- Reuse cached installed metadata matches on repeat refreshes, refresh weak alias matches when needed, and only hydrate packages that are still missing useful metadata after the scan.
 
 ## Game Saves
 
@@ -78,7 +78,7 @@
 - Configure Local Library, Backup Storage, and Game Saves paths.
 - Rescan indexed paths.
 - Review storage totals and content metrics.
-- Review headset app scan history for apps present versus removed across recent scans.
+- Review a headset app scan delta histogram for additions/removals across recent scans.
 - Open `Library Diagnostics` for raw index inspection and cleanup.
 - Open `Managed Dependencies` to inspect ADB / 7-Zip readiness.
 - Open `Orphaned OBB / Data` to inspect leftover headset storage.

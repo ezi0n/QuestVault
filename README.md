@@ -30,6 +30,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Local Library and vrSrc summary pills now use clearer wording and filtering behavior: Local Library shows `Library`, while vrSrc `Updates` displays the count and leaves update filtering to the global filter row.
 - The Local Library `New` summary pill now filters to recent local additions instead of only displaying the count.
 - vrSrc drawer wrapping is now more resilient for long package names, trailer headers, note content, and manual patch strings, so problem entries no longer blow the drawer out sideways.
+- Search now preserves age markers such as `(18+)`, so mature-title markers can be filtered explicitly instead of being reduced to plain numbers.
 
 ### Installed Inventory
 
@@ -37,6 +38,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Independent grid/list display preference persistence.
 - Installed-state actions such as uninstall and backup.
 - Installed-app refresh now reuses the persisted installed metadata index and only hydrates packages that are still missing metadata after a scan.
+- MR-Fix style package aliases can refresh weak cached metadata and borrow richer storefront artwork/metadata from the base package match.
 
 ### ADB Manager
 
@@ -62,6 +64,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Local library rescan and review tools.
 - Backup-storage maintenance actions.
 - Leftover-data scan for device cleanup decisions.
+- Maintenance now shows installed-app scan changes as a visual additions/removals histogram instead of a flat total-vs-delta line chart.
 
 ## User Experience Features
 

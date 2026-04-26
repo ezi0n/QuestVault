@@ -7,6 +7,7 @@
 - Local Library browser with grid and list views.
 - Integrated vrSrc remote source toggle inside the same workspace.
 - Search-first workflow across local items, backup-storage entries, and metadata-enriched titles.
+- Search matching preserves age markers such as `(18+)` so mature-title markers can be filtered explicitly.
 - Version-family handling that collapses duplicate packages during browsing and expands matches during search.
 - Local detail drawer with install, metadata, version, and cleanup actions.
 - Shared detail-drawer polish across Local Library, vrSrc, Installed Inventory, and Game Saves with clearer fact-group separation, rating strips, trailer support, and richer metadata presentation.
@@ -45,7 +46,7 @@
 - Library diagnostics summary + popup.
 - Orphaned data summary + popup.
 - Path configuration for Local Library, Backup Storage, and Game Saves.
-- Compact headset app scan history chart for the last recent scans in Maintenance.
+- Compact headset app scan delta histogram for additions/removals across recent scans in Maintenance.
 
 ## Cross-Cutting UX Features
 
@@ -63,6 +64,7 @@
 - Signature-mismatch install recovery now uses an in-app guarded confirmation dialog instead of a simple native OK/Cancel prompt.
 - Installed-app refreshes are coalesced after install/uninstall bursts so device mutations settle before the next inventory refresh runs.
 - Broken artwork URLs now fall back to generated art surfaces across Apps & Games, Installed Inventory, and Game Saves.
+- MR-Fix style local and installed package aliases can reuse richer storefront artwork/metadata from their base package match.
 - Long package identifiers in the Game Saves drawer now wrap instead of causing horizontal drawer scroll.
 
 ## vrSrc-Specific Features
@@ -94,7 +96,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.6.9`
+Current documented release line: `0.7.0`
 
 ## Product Position
 

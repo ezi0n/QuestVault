@@ -764,36 +764,50 @@ class MetaStoreService {
 
   private findSummaryByPackageId(cache: MetaStoreCache, packageId: string): MetaStoreGameSummary | null {
     const normalizedPackageId = packageId.toLowerCase()
+    const candidatePackageIds = new Set(this.buildCandidatePackageIds(packageId).map((candidate) => candidate.toLowerCase()))
     const matches = Object.values(cache.summariesByStoreId).filter(
-      (summary) => summary.packageId?.toLowerCase() === normalizedPackageId
+      (summary) => summary.packageId && candidatePackageIds.has(summary.packageId.toLowerCase())
     )
 
     if (!matches.length) {
       return null
     }
 
-    return (
-      matches.find((summary) => summary.source === 'remote') ??
-      matches.find((summary) => Boolean(summary.thumbnail || summary.iconImage || summary.heroImage)) ??
-      matches[0]
-    )
+    return [...matches].sort((left, right) => {
+      const scoreSummary = (summary: MetaStoreGameSummary) => {
+        const sourceScore = summary.source === 'remote' ? 100 : 0
+        const artworkScore = summary.thumbnail || summary.iconImage || summary.heroImage ? 30 : 0
+        const packageScore = summary.packageId?.toLowerCase() === normalizedPackageId ? 20 : 0
+        const storeScore = summary.storeItemId ? 5 : 0
+        return packageScore + sourceScore + artworkScore + storeScore
+      }
+
+      return scoreSummary(right) - scoreSummary(left)
+    })[0]
   }
 
   private findDetailsByPackageId(cache: MetaStoreCache, packageId: string): MetaStoreGameDetails | null {
     const normalizedPackageId = packageId.toLowerCase()
+    const candidatePackageIds = new Set(this.buildCandidatePackageIds(packageId).map((candidate) => candidate.toLowerCase()))
     const matches = Object.values(cache.detailsByStoreId).filter(
-      (details) => details.packageId?.toLowerCase() === normalizedPackageId
+      (details) => details.packageId && candidatePackageIds.has(details.packageId.toLowerCase())
     )
 
     if (!matches.length) {
       return null
     }
 
-    return (
-      matches.find((details) => details.source === 'remote') ??
-      matches.find((details) => Boolean(details.thumbnail || details.iconImage || details.heroImage)) ??
-      matches[0]
-    )
+    return [...matches].sort((left, right) => {
+      const scoreDetails = (details: MetaStoreGameDetails) => {
+        const sourceScore = details.source === 'remote' ? 100 : 0
+        const artworkScore = details.thumbnail || details.iconImage || details.heroImage ? 30 : 0
+        const packageScore = details.packageId?.toLowerCase() === normalizedPackageId ? 20 : 0
+        const storeScore = details.storeItemId ? 5 : 0
+        return packageScore + sourceScore + artworkScore + storeScore
+      }
+
+      return scoreDetails(right) - scoreDetails(left)
+    })[0]
   }
 
   private async fetchRemoteMetadataByPackageId(packageId: string): Promise<MetaStoreGameDetails | null> {
