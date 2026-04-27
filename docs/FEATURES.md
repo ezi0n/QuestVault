@@ -96,7 +96,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.7.1`
+Current documented release line: `0.7.2`
 
 ## Product Position
 
