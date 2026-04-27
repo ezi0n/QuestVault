@@ -76,7 +76,7 @@
 - Add-to-library and install-now actions.
 - Managed dependency support for extraction tooling.
 - Windows vrSrc sync prefers IPv4 for remote requests to reduce Cloudflare 403 failures on affected networks.
-- vrSrc sync now uses an `rclone` transport for metadata archive and payload transfers, which restores the public sync path on networks where the older request profile is blocked.
+- vrSrc sync now uses an `rclone` transport for metadata archive and payload transfers, with remote requests pinned to the `rclone/v1.72.1` user agent.
 - Older managed/system `rclone` runtimes are now checked and refreshed automatically when they fall below the minimum working version for vrSrc sync.
 - vrSrc catalog sync excludes non-downloadable `0 MB` rows before counts and browse results are produced.
 
@@ -96,7 +96,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.7.0`
+Current documented release line: `0.7.1`
 
 ## Product Position
 

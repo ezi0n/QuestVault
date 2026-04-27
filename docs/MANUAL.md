@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.7.0`
+Current documented application version: `0.7.1`
 
 ## Overview
 
@@ -97,7 +97,7 @@ For download, update, and install actions, the vrSrc drawer now closes immediate
 
 On Windows, vrSrc sync now prefers IPv4 for remote requests. This helps avoid Cloudflare `403 Forbidden` responses that were observed on some IPv6 request paths.
 
-QuestVault now uses `rclone` for vrSrc metadata archive and payload transfers, while Telegram credential resolution still uses `curl`. This matches the newer working vrSrc transport more closely on networks where the older request path is blocked.
+QuestVault now uses `rclone` for vrSrc metadata archive and payload transfers, while Telegram credential resolution still uses `curl`. Remote source requests pin the transport user agent to `rclone/v1.72.1`, matching the request profile currently accepted by the vrSrc host.
 
 If an older managed or system `rclone` runtime is present, QuestVault now checks its version and refreshes it automatically when it is below the minimum version currently required for vrSrc sync.
 

@@ -1,6 +1,6 @@
 {
   "name": "questvault",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "QuestVault desktop manager for Quest library, backup, install, and save-state workflows",
   "main": "./out/main/index.js",
   "scripts": {

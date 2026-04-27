@@ -40,7 +40,7 @@
 - Resume interrupted remote downloads where possible.
 - Clean up staged downloads after successful handoff.
 - Prefer IPv4 on Windows for vrSrc remote requests when Cloudflare blocks the IPv6 path.
-- Use a managed/system `rclone` runtime for vrSrc metadata archive and payload transfers, while keeping Telegram credential resolution on `curl`.
+- Use a managed/system `rclone` runtime for vrSrc metadata archive and payload transfers, while keeping Telegram credential resolution on `curl` and pinning remote source requests to the `rclone/v1.72.1` user agent.
 - Upgrade older managed/system `rclone` runtimes automatically when they fall below the minimum working version required for vrSrc sync.
 - Hand remote drawer actions off to the Live queue for download/update/install visibility and blocked outcomes.
 - View a remote detail drawer with:

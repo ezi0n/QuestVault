@@ -27,7 +27,7 @@ import { dependencyService } from './dependencyService'
 const execFileAsync = promisify(execFileCallback)
 
 const VR_SRC_TELEGRAM_URL = 'https://t.me/s/the_vrSrc'
-const VR_SRC_USER_AGENT = 'rclone/v1.69.1'
+const VR_SRC_USER_AGENT = 'rclone/v1.72.1'
 
 type VrSrcCredentials = {
   baseUri: string
@@ -394,6 +394,8 @@ class VrSrcService {
       this.getRcloneConfigPath(),
       '--http-url',
       this.ensureTrailingSlash(baseUri),
+      '--user-agent',
+      VR_SRC_USER_AGENT,
       '--tpslimit',
       '1.0',
       '--tpslimit-burst',
