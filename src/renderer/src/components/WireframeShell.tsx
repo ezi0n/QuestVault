@@ -13,6 +13,8 @@ import type {
   DeviceAppsResponse,
   DeviceLeftoverScanResponse,
   DeviceListResponse,
+  HeadsetActionLogRecord,
+  HeadsetActionLogResponse,
   ManualGameMetadataOverride,
   LiveQueueItem,
   LocalLibraryIndexedItem,
@@ -51,7 +53,11 @@ interface WireframeShellProps {
   deviceStatusWifiDisconnectTargetId: string | null
   subtitle: string
   liveQueueItems: LiveQueueItem[]
+  headsetActionLog: HeadsetActionLogResponse | null
+  headsetActionLogBusy: boolean
+  isHeadsetActionLogVisible: boolean
   queueAutoOpenSignal: number
+  onHideHeadsetActionLog: () => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
@@ -1527,13 +1533,28 @@ function NoticeBanner(props: { notice: UiNotice; className?: string }) {
 
 function QueueRail(props: {
   items: LiveQueueItem[]
+  headsetActionLog: HeadsetActionLogResponse | null
+  headsetActionLogBusy: boolean
+  isHeadsetActionLogVisible: boolean
   isOpen: boolean
   onClose: () => void
+  onHideHeadsetActionLog: () => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
 }) {
-  const { items, isOpen, onClose, onPauseVrSrcTransfer, onResumeVrSrcTransfer, onCancelVrSrcTransfer } = props
+  const {
+    items,
+    headsetActionLog,
+    headsetActionLogBusy,
+    isHeadsetActionLogVisible,
+    isOpen,
+    onClose,
+    onHideHeadsetActionLog,
+    onPauseVrSrcTransfer,
+    onResumeVrSrcTransfer,
+    onCancelVrSrcTransfer
+  } = props
 
   function formatQueueKind(kind: LiveQueueItem['kind']): string {
     if (kind === 'update') {
@@ -1671,6 +1692,11 @@ function QueueRail(props: {
     return item.progress
   }
 
+  function formatActionTime(timestamp: string): string {
+    const parsed = Date.parse(timestamp)
+    return Number.isNaN(parsed) ? timestamp : new Date(parsed).toLocaleString()
+  }
+
   return (
     <aside className={isOpen ? 'queue-drawer surface-panel open' : 'queue-drawer surface-panel'} aria-hidden={!isOpen}>
       <div className="rail-heading">
@@ -1686,6 +1712,51 @@ function QueueRail(props: {
       </div>
 
       <div className="queue-stack">
+        {isHeadsetActionLogVisible ? (
+          <section className="surface-subcard live-activity-card">
+            <div className="queue-card-top">
+              <div className="queue-card-heading">
+                <div className="queue-card-heading-copy">
+                  <strong>Headset Activity</strong>
+                  <p>Recent headset install, connect, and uninstall actions.</p>
+                </div>
+              </div>
+              <button className="close-pill" onClick={onHideHeadsetActionLog} type="button">
+                Hide
+              </button>
+            </div>
+            <div className="live-activity-log">
+              {headsetActionLogBusy && !headsetActionLog?.records.length ? (
+                <p className="queue-card-details">Loading activity log...</p>
+              ) : headsetActionLog?.records.length ? (
+                headsetActionLog.records
+                  .slice()
+                  .reverse()
+                  .map((record) => (
+                    <article className="live-activity-entry" key={record.id}>
+                      <div className="live-activity-entry-top">
+                        <strong>{record.itemName ?? record.packageName ?? record.serial ?? record.action}</strong>
+                        <span
+                          className={`status-pill ${
+                            record.status === 'failed' ? 'status-danger' : record.status === 'succeeded' ? 'status-ready' : 'status-pending'
+                          }`}
+                        >
+                          {record.status}
+                        </span>
+                      </div>
+                      <p>{record.message}</p>
+                      <span className="live-activity-entry-meta">{formatActionTime(record.timestamp)}</span>
+                    </article>
+                  ))
+              ) : (
+                <div className="surface-subcard queue-empty">
+                  <strong>No headset activity yet.</strong>
+                  <p>Start an install, connect, or uninstall to populate this log.</p>
+                </div>
+              )}
+            </div>
+          </section>
+        ) : null}
         {items.length ? (
           items.map((item, index) => (
             <article
@@ -7161,7 +7232,11 @@ export function WireframeShell(props: WireframeShellProps) {
     deviceStatusWifiDisconnectTargetId,
     subtitle,
     liveQueueItems,
+    headsetActionLog,
+    headsetActionLogBusy,
+    isHeadsetActionLogVisible,
     queueAutoOpenSignal,
+    onHideHeadsetActionLog,
     onPauseVrSrcTransfer,
     onResumeVrSrcTransfer,
     onCancelVrSrcTransfer,
@@ -7662,7 +7737,11 @@ export function WireframeShell(props: WireframeShellProps) {
       <QueueRail
         isOpen={isQueueOpen}
         items={liveQueueItems}
+        headsetActionLog={headsetActionLog}
+        headsetActionLogBusy={headsetActionLogBusy}
+        isHeadsetActionLogVisible={isHeadsetActionLogVisible}
         onClose={() => setIsQueueOpen(false)}
+        onHideHeadsetActionLog={onHideHeadsetActionLog}
         onPauseVrSrcTransfer={onPauseVrSrcTransfer}
         onResumeVrSrcTransfer={onResumeVrSrcTransfer}
         onCancelVrSrcTransfer={onCancelVrSrcTransfer}

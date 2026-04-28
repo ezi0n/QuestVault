@@ -200,6 +200,27 @@ export interface DeviceInstalledAppBackupResponse {
   backupPath: string | null
 }
 
+export type HeadsetActionLogStatus = 'started' | 'step' | 'succeeded' | 'failed'
+export type HeadsetActionLogKind = 'connect' | 'disconnect' | 'install' | 'uninstall'
+
+export interface HeadsetActionLogRecord {
+  id: string
+  action: HeadsetActionLogKind
+  status: HeadsetActionLogStatus
+  timestamp: string
+  serial: string | null
+  itemId?: string | null
+  itemName?: string | null
+  packageName?: string | null
+  message: string
+  metadata?: Record<string, string | number | boolean | null>
+}
+
+export interface HeadsetActionLogResponse {
+  records: HeadsetActionLogRecord[]
+  logPath: string
+}
+
 export type SaveDataStatus = 'available' | 'blocked' | 'none' | 'error'
 
 export interface SaveDataRoot {

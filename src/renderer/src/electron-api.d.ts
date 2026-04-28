@@ -15,6 +15,7 @@ import type {
   DeviceManualInstallResponse,
   DeviceListResponse,
   DeviceUserNameResponse,
+  HeadsetActionLogResponse,
   IndexedItemManualMetadataResponse,
   IndexedItemArtworkExtractionResponse,
   LocalLibraryPurgeItemResponse,
@@ -77,6 +78,9 @@ interface ElectronApi {
     chooseManualInstallApk: () => Promise<string | null>
     chooseManualInstallFolder: () => Promise<string | null>
     installManualPath: (serial: string, sourcePath: string) => Promise<DeviceManualInstallResponse>
+  }
+  headsetActions: {
+    getRecent: () => Promise<HeadsetActionLogResponse>
   }
   savegames: {
     listBackups: () => Promise<SaveBackupsResponse>

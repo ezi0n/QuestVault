@@ -16,6 +16,7 @@ import type {
   DeviceManualInstallResponse,
   DeviceListResponse,
   DeviceUserNameResponse,
+  HeadsetActionLogResponse,
   IndexedItemManualMetadataResponse,
   IndexedItemArtworkExtractionResponse,
   LocalLibraryPurgeItemResponse,
@@ -98,6 +99,9 @@ const api = {
     chooseManualInstallFolder: (): Promise<string | null> => ipcRenderer.invoke('devices:choose-manual-install-folder'),
     installManualPath: (serial: string, sourcePath: string): Promise<DeviceManualInstallResponse> =>
       ipcRenderer.invoke('devices:install-manual-path', serial, sourcePath)
+  },
+  headsetActions: {
+    getRecent: (): Promise<HeadsetActionLogResponse> => ipcRenderer.invoke('headset-actions:get-recent')
   },
   savegames: {
     listBackups: (): Promise<SaveBackupsResponse> => ipcRenderer.invoke('savegames:list-backups'),

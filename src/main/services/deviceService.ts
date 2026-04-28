@@ -1635,12 +1635,35 @@ class DeviceService {
     await this.logHeadsetActionStep(action, `Installing standalone APK ${basename(apkPath)}.`, {
       apkPath
     })
-    await execFileAsync(adbPath, ['-s', serial, 'install', '-r', '-g', apkPath], { maxBuffer: 10 * 1024 * 1024 })
-    return {
-      success: true,
-      message: `Installed ${basename(apkPath)} on ${serial}.`,
-      details: null,
-      packageName: null
+    try {
+      const { stdout, stderr } = await execFileAsync(adbPath, ['-s', serial, 'install', '-r', '-g', apkPath], {
+        maxBuffer: 10 * 1024 * 1024
+      })
+      const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+      if (output) {
+        await this.logHeadsetActionStep(action, 'Standalone APK install finished.', {
+          apkPath,
+          outputLines: output.split('\n').length
+        })
+      }
+      return {
+        success: true,
+        message: `Installed ${basename(apkPath)} on ${serial}.`,
+        details: output || null,
+        packageName: null
+      }
+    } catch (error) {
+      const details = this.readErrorMessage(error)
+      await this.logHeadsetActionStep(action, 'Standalone APK install failed.', {
+        apkPath,
+        error: details
+      })
+      return {
+        success: false,
+        message: `Unable to install ${basename(apkPath)}.`,
+        details,
+        packageName: null
+      }
     }
   }
 
@@ -1654,6 +1677,7 @@ class DeviceService {
     const apkPaths = files.filter((filePath) => filePath.toLowerCase().endsWith('.apk'))
     const obbPaths = files.filter((filePath) => filePath.toLowerCase().endsWith('.obb'))
     const installScriptPaths = files.filter((filePath) => basename(filePath).toLowerCase() === 'install.txt')
+    let packageName = item.packageIds[0] ?? this.inferPackageNameFromObbFiles(obbPaths)
 
     if (!apkPaths.length) {
       await this.failHeadsetAction(action, 'No APK files were found in this library item.')
@@ -1669,10 +1693,31 @@ class DeviceService {
       await this.logHeadsetActionStep(action, `Installing folder APK ${basename(apkPath)}.`, {
         apkPath
       })
-      await execFileAsync(adbPath, ['-s', serial, 'install', '-r', '-g', apkPath], { maxBuffer: 10 * 1024 * 1024 })
+      try {
+        const { stdout, stderr } = await execFileAsync(adbPath, ['-s', serial, 'install', '-r', '-g', apkPath], {
+          maxBuffer: 10 * 1024 * 1024
+        })
+        const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+        if (output) {
+          await this.logHeadsetActionStep(action, 'Folder APK install finished.', {
+            apkPath,
+            outputLines: output.split('\n').length
+          })
+        }
+      } catch (error) {
+        const details = this.readErrorMessage(error)
+        await this.failHeadsetAction(action, `Folder APK install failed for ${basename(apkPath)}.`, {
+          apkPath,
+          error: details
+        })
+        return {
+          success: false,
+          message: `Unable to install ${basename(apkPath)}.`,
+          details,
+          packageName: packageName ?? item.packageIds[0] ?? null
+        }
+      }
     }
-
-    let packageName = this.inferPackageNameFromObbFiles(obbPaths)
 
     if (obbPaths.length && !packageName) {
       await this.failHeadsetAction(
@@ -1698,9 +1743,36 @@ class DeviceService {
           obbPath,
           packageName
         })
-        await execFileAsync(adbPath, ['-s', serial, 'push', obbPath, `/sdcard/Android/obb/${packageName}/${basename(obbPath)}`], {
-          maxBuffer: 10 * 1024 * 1024
-        })
+        try {
+          const { stdout, stderr } = await execFileAsync(
+            adbPath,
+            ['-s', serial, 'push', obbPath, `/sdcard/Android/obb/${packageName}/${basename(obbPath)}`],
+            {
+              maxBuffer: 10 * 1024 * 1024
+            }
+          )
+          const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+          if (output) {
+            await this.logHeadsetActionStep(action, 'OBB transfer finished.', {
+              obbPath,
+              packageName,
+              outputLines: output.split('\n').length
+            })
+          }
+        } catch (error) {
+          const details = this.readErrorMessage(error)
+          await this.failHeadsetAction(action, `OBB transfer failed for ${basename(obbPath)}.`, {
+            obbPath,
+            packageName,
+            error: details
+          })
+          return {
+            success: false,
+            message: `Unable to transfer ${basename(obbPath)}.`,
+            details,
+            packageName
+          }
+        }
       }
     }
 

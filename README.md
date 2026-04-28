@@ -69,6 +69,7 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 ## User Experience Features
 
 - Shared Live Queue for operational transparency.
+- Headset Activity appears in Live when a new install/connect/uninstall failure needs attention, with recent action details available for diagnosis.
 - Metadata-enriched artwork and descriptions where available.
 - Manual metadata override tools for local entries that lack clean store matches.
 - Background refresh patterns that keep the app usable while scans and enrichment continue.
@@ -81,6 +82,8 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 - Save drawer package IDs now wrap cleanly instead of forcing sideways scroll on long package names.
 - vrSrc-style `v<code>+<name>` release names are now parsed consistently during vrSrc sync and local indexing, which improves version fallback accuracy for vrSrc-style payload folders.
 - vrSrc sync now excludes `0 MB` source rows from catalog counts, browsing results, and download actions.
+- Folder installs now prefer the indexed package ID for OBB destinations, so payloads with asset-style `.obb` filenames can still transfer correctly after APK install.
+- APK install and OBB transfer failures now capture richer ADB output in the headset action log.
 
 - [QuestVault Screenshots](screenshots/)
 

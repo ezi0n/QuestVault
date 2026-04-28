@@ -1,23 +1,11 @@
 import { app } from 'electron'
-import { appendFile, mkdir } from 'node:fs/promises'
+import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import type { HeadsetActionLogRecord } from '@shared/types/ipc'
 
 type HeadsetActionKind = 'connect' | 'disconnect' | 'install' | 'uninstall'
 type HeadsetActionStatus = 'started' | 'step' | 'succeeded' | 'failed'
-
-interface HeadsetActionLogRecord {
-  id: string
-  action: HeadsetActionKind
-  status: HeadsetActionStatus
-  timestamp: string
-  serial: string | null
-  itemId?: string | null
-  itemName?: string | null
-  packageName?: string | null
-  message: string
-  metadata?: Record<string, string | number | boolean | null>
-}
 
 export interface HeadsetActionContext {
   id: string
@@ -37,6 +25,30 @@ class HeadsetActionLogService {
     const logPath = this.getLogPath()
     await mkdir(dirname(logPath), { recursive: true })
     await appendFile(logPath, `${JSON.stringify(record)}\n`, 'utf8')
+  }
+
+  async readRecent(limit = 50): Promise<{ records: HeadsetActionLogRecord[]; logPath: string }> {
+    const logPath = this.getLogPath()
+    try {
+      const raw = await readFile(logPath, 'utf8')
+      const records = raw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line) as HeadsetActionLogRecord
+          } catch {
+            return null
+          }
+        })
+        .filter((record): record is HeadsetActionLogRecord => Boolean(record))
+        .slice(-limit)
+
+      return { records, logPath }
+    } catch {
+      return { records: [], logPath }
+    }
   }
 
   async start(

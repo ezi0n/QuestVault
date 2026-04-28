@@ -11,6 +11,7 @@ import { releaseService } from './services/releaseService'
 import { savegameService } from './services/savegameService'
 import { settingsService } from './services/settingsService'
 import { vrSrcService } from './services/vrSrcService'
+import { headsetActionLogService } from './services/headsetActionLogService'
 
 const APP_DISPLAY_NAME = 'QuestVault'
 const LEGACY_USER_DATA_DIR_NAME = 'quest-archive-manager'
@@ -363,6 +364,7 @@ app.whenReady().then(async () => {
 
     return deviceService.installLocalLibraryItem(serial, item)
   })
+  ipcMain.handle('headset-actions:get-recent', async () => headsetActionLogService.readRecent())
   ipcMain.handle('settings:get', async () => settingsService.getSettings())
   ipcMain.handle('settings:get-local-library-index', async () => settingsService.getLocalLibraryIndex())
   ipcMain.handle('settings:get-backup-storage-index', async () => settingsService.getBackupStorageIndex())

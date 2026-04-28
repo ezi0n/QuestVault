@@ -7,6 +7,7 @@
 - Manage a prepared ADB runtime and expose dependency readiness in Settings and Live.
 - Pair devices over Wi-Fi from the ADB Manager workspace.
 - Track runtime/device changes through the Live queue and runtime surfaces.
+- Review recent headset action activity when new install/connect/uninstall failures are recorded.
 
 ## Apps & Games
 
@@ -17,6 +18,7 @@
 - Change gallery density through the grid scale control.
 - Review a Local Library summary row where the library count is labelled as `Library`.
 - Install or update local content onto the headset.
+- Install folder payloads by using indexed package IDs for OBB destinations when available, with filename inference as a fallback.
 - Open a rich local item drawer with:
   - artwork
   - descriptions
@@ -91,6 +93,7 @@
 - Scan orphaned `/sdcard/Android/data` and `/sdcard/Android/obb` entries.
 - Delete leftover headset data from the orphaned-data popup.
 - Surface long-running operations, failures, and setup work through Live instead of inline banners wherever possible.
+- Inspect recent headset action records for install, connect, uninstall, and OBB transfer diagnostics.
 - Fall back to generated artwork surfaces when remote or cached artwork URLs fail to load.
 
 ## Build and Packaging

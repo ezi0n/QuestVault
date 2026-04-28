@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.7.2`
+Current documented application version: `0.8.0`
 
 ## Runtime Shape
 
@@ -41,6 +41,9 @@ The device service is responsible for headset-facing operations:
 - uninstall installed apps
 - back up installed APKs
 - inspect leftover data under `/sdcard/Android/data` and `/sdcard/Android/obb`
+- write headset action records for connect, install, uninstall, APK install, and OBB transfer progress/failures
+
+Folder install flows prefer the package ID already stored in the local library index when choosing the OBB destination directory. Filename-based OBB package inference remains a fallback for entries without indexed package metadata.
 
 ### Local indexing and storage management
 
@@ -122,6 +125,8 @@ Installed-app metadata refresh now starts from the persisted installed metadata 
 Alias-shaped package IDs, including MR-Fix style package variants, are treated as candidates for richer storefront matches. Cached exact package stubs no longer automatically outrank remote matches that provide artwork, store IDs, or richer metadata.
 
 Drawer action handoff is now more uniform across workspaces: Local Library, vrSrc, and Game Saves close their detail drawers before long-running install, download, scan, or backup flows so the Live queue becomes the single visible progress surface.
+
+Live can also surface a recent Headset Activity panel when a new headset operation fails. The renderer reads recent NDJSON headset action records through the preload bridge, ignores historical failures during startup, and opens the panel only for newly observed failed records.
 
 The shared drawer CSS now also includes stronger overflow guards for vrSrc content blocks, especially around title rows, trailer headers, and long note/body strings that can include patch paths or JSON-like keys.
 

@@ -26,6 +26,8 @@ import type {
   VrSrcStatusResponse,
   VrSrcTransferOperation,
   VrSrcTransferProgressUpdate,
+  HeadsetActionLogRecord,
+  HeadsetActionLogResponse,
   ViewDisplayMode
 } from '@shared/types/ipc'
 import { WireframeShell } from './components/WireframeShell'
@@ -526,6 +528,9 @@ function App() {
   const [inventoryDisplayMode, setInventoryDisplayModeState] = useState<ViewDisplayMode>('gallery')
   const [liveQueueItems, setLiveQueueItems] = useState<LiveQueueItem[]>([])
   const [queueAutoOpenSignal, setQueueAutoOpenSignal] = useState(0)
+  const [headsetActionLog, setHeadsetActionLog] = useState<HeadsetActionLogResponse | null>(null)
+  const [headsetActionLogBusy, setHeadsetActionLogBusy] = useState(false)
+  const [isHeadsetActionLogVisible, setIsHeadsetActionLogVisible] = useState(false)
   const deviceResponseRef = useRef<DeviceListResponse | null>(null)
   const hasCompletedInitialScanRef = useRef(false)
   const deviceRefreshInFlightRef = useRef(false)
@@ -541,6 +546,7 @@ function App() {
   const installedAppsMutationDepthRef = useRef(0)
   const pendingInstalledAppsRefreshSerialRef = useRef<string | null>(null)
   const installedAppsRefreshIdleTimerRef = useRef<number | null>(null)
+  const latestSeenFailedHeadsetActionLogRef = useRef<string | null>(null)
   const subtitle =
     activeTab === 'manager'
       ? 'ADB device operations, live devices and ADB runtime visibility'
@@ -618,6 +624,32 @@ function App() {
     setLiveQueueItems((current) =>
       current.map((item) => (item.id === itemId ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item))
     )
+  }
+
+  async function refreshHeadsetActionLog() {
+    setHeadsetActionLogBusy(true)
+    try {
+      const response = await window.api.headsetActions.getRecent()
+      const latestFailedRecord =
+        response.records
+          .slice()
+          .reverse()
+          .find((record: HeadsetActionLogRecord) => record.status === 'failed') ?? null
+      setHeadsetActionLog(response)
+      if (!latestSeenFailedHeadsetActionLogRef.current) {
+        latestSeenFailedHeadsetActionLogRef.current = latestFailedRecord?.id ?? null
+        return
+      }
+
+      if (latestFailedRecord && latestSeenFailedHeadsetActionLogRef.current !== latestFailedRecord.id) {
+        latestSeenFailedHeadsetActionLogRef.current = latestFailedRecord.id
+        setIsHeadsetActionLogVisible(true)
+      }
+    } catch {
+      setHeadsetActionLog({ records: [], logPath: '' })
+    } finally {
+      setHeadsetActionLogBusy(false)
+    }
   }
 
   function findInstalledAppDisplayName(packageId: string): string {
@@ -3882,6 +3914,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
   }, [settings?.backupPath, backupStorageIndex, localLibraryIndex])
 
+  useEffect(() => {
+    void refreshHeadsetActionLog()
+  }, [queueAutoOpenSignal])
+
   return (
     <>
       <WireframeShell
@@ -3901,7 +3937,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       deviceStatusWifiDisconnectTargetId={deviceStatusWifiDisconnectTargetId}
       subtitle={subtitle}
       liveQueueItems={liveQueueItems}
+      headsetActionLog={headsetActionLog}
+      headsetActionLogBusy={headsetActionLogBusy}
+      isHeadsetActionLogVisible={isHeadsetActionLogVisible}
       queueAutoOpenSignal={queueAutoOpenSignal}
+      onHideHeadsetActionLog={() => setIsHeadsetActionLogVisible(false)}
       onPauseVrSrcTransfer={pauseVrSrcTransfer}
       onResumeVrSrcTransfer={resumeVrSrcTransfer}
       onCancelVrSrcTransfer={cancelVrSrcTransfer}

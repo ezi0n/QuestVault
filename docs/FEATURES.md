@@ -51,6 +51,7 @@
 ## Cross-Cutting UX Features
 
 - Shared Live queue for scans, installs, downloads, dependency setup, backups, deletes, and failures.
+- Headset Activity panel in Live that appears for new headset-operation failures and summarizes recent install/connect/uninstall activity.
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
 - Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
@@ -66,6 +67,8 @@
 - Broken artwork URLs now fall back to generated art surfaces across Apps & Games, Installed Inventory, and Game Saves.
 - MR-Fix style local and installed package aliases can reuse richer storefront artwork/metadata from their base package match.
 - Long package identifiers in the Game Saves drawer now wrap instead of causing horizontal drawer scroll.
+- Local folder installs prefer indexed package IDs for OBB destinations, improving installs for payloads whose `.obb` files do not encode package names.
+- APK install and OBB transfer failures record richer ADB output in the headset action log.
 
 ## vrSrc-Specific Features
 
@@ -96,7 +99,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.7.2`
+Current documented release line: `0.8.0`
 
 ## Product Position
 

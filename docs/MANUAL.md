@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.7.2`
+Current documented application version: `0.8.0`
 
 ## Overview
 
@@ -63,6 +63,8 @@ Selecting a local item opens a right-side drawer where you can inspect:
 If older versions exist, choose a specific older version and delete it with confirmation.
 
 For install, uninstall, and delete actions, the drawer now closes immediately so the resulting work is visible in `Live`. Metadata and artwork extraction flows stay in the drawer.
+
+Folder installs use the indexed package ID as the preferred OBB destination when it is available. This helps payloads with many asset-style `.obb` files install correctly even when the OBB filenames do not include a conventional package-name pattern.
 
 When artwork links fail or a metadata source has no usable image, QuestVault now falls back to generated artwork surfaces instead of leaving the card or drawer blank.
 
@@ -156,6 +158,14 @@ Use `ADB Manager` for:
 - runtime status
 - connected headset review
 - device serial / HorizonOS / transport / battery details
+
+## Live and Headset Activity
+
+Use `Live` to review long-running scans, installs, downloads, backups, dependency setup, and device operations.
+
+When a new headset install, connect, uninstall, or transfer failure is recorded, QuestVault can reveal `Headset Activity` inside the Live rail. The panel stays hidden by default, opens only for new failures, and shows recent action messages with timestamps so install failures are easier to diagnose without keeping diagnostic UI permanently on screen.
+
+Standalone APK installs, folder APK installs, and OBB transfers now log richer ADB output and failure details into the headset activity log.
 
 ## Settings
 
