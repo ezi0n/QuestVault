@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { appendFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { basename, extname, join } from 'node:path'
 import { execFile as execFileCallback, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
@@ -62,6 +62,24 @@ type VrSrcTransferControlState = {
   lastUpdate: VrSrcTransferProgressUpdate | null
 }
 
+type VrSrcQueuedRequestState = 'queued' | 'running'
+
+type VrSrcQueuedRequestRecord = {
+  id: string
+  releaseName: string
+  operation: VrSrcTransferOperation
+  serial: string | null
+  requestedAt: string
+  state: VrSrcQueuedRequestState
+}
+
+type VrSrcQueuedRequestRunner<T> = {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (reason?: unknown) => void
+  run: () => Promise<T>
+}
+
 class VrSrcTransferPausedError extends Error {
   constructor() {
     super('Transfer paused.')
@@ -77,10 +95,19 @@ class VrSrcTransferCancelledError extends Error {
 class VrSrcService {
   private syncInFlight: Promise<VrSrcSyncResponse> | null = null
   private acquireInFlight = new Map<string, Promise<string>>()
+  private queuedRequestRecords: VrSrcQueuedRequestRecord[] = []
+  private queuedRequestRunners = new Map<string, VrSrcQueuedRequestRunner<any>>()
+  private queuedRequestPromiseByReleaseName = new Map<string, Promise<unknown>>()
+  private queuedRequestLoaded = false
+  private queuedRequestLoadPromise: Promise<void> | null = null
+  private queuedRequestWritePromise: Promise<void> | null = null
+  private activeQueuedRequests = 0
+  private drainQueuedRequestsScheduled = false
   private transferProgressListeners = new Set<(update: VrSrcTransferProgressUpdate) => void>()
   private trailerVideoIdCache = new Map<string, string | null>()
   private transferControls = new Map<string, VrSrcTransferControlState>()
   private readonly maxConcurrentPayloadPreparations = 5
+  private readonly maxConcurrentQueuedRequests = 3
   private activePayloadPreparations = 0
   private payloadPreparationWaiters: Array<() => void> = []
 
@@ -204,6 +231,220 @@ class VrSrcService {
       })
       await this.waitForTransferResume(control)
     }
+  }
+
+  private getQueuedRequestKey(releaseName: string): string {
+    return releaseName.trim().toLowerCase()
+  }
+
+  private getQueuedRequestsPath(): string {
+    return join(this.getRootPath(), 'queued-vrsrc-downloads.json')
+  }
+
+  private async persistQueuedRequests(): Promise<void> {
+    const payload = JSON.stringify({ requests: this.queuedRequestRecords }, null, 2)
+    const write = async () => {
+      await this.ensureDirectories()
+      await writeFile(this.getQueuedRequestsPath(), payload, 'utf8')
+    }
+
+    this.queuedRequestWritePromise = (this.queuedRequestWritePromise ?? Promise.resolve())
+      .then(write, write)
+      .catch(() => undefined)
+
+    await this.queuedRequestWritePromise
+  }
+
+  private async loadQueuedRequests(): Promise<void> {
+    if (this.queuedRequestLoaded) {
+      return
+    }
+
+    if (this.queuedRequestLoadPromise) {
+      await this.queuedRequestLoadPromise
+      return
+    }
+
+    this.queuedRequestLoadPromise = (async () => {
+      await this.ensureDirectories()
+      try {
+        const raw = await readFile(this.getQueuedRequestsPath(), 'utf8')
+        const parsed = JSON.parse(raw) as { requests?: VrSrcQueuedRequestRecord[] }
+        const requests = Array.isArray(parsed.requests) ? parsed.requests : []
+        this.queuedRequestRecords = requests
+          .filter((entry): entry is VrSrcQueuedRequestRecord => Boolean(entry?.releaseName && entry?.operation))
+          .map((entry) => ({
+            id: entry.id ?? randomUUID(),
+            releaseName: entry.releaseName,
+            operation: entry.operation,
+            serial: entry.serial ?? null,
+            requestedAt: entry.requestedAt ?? new Date().toISOString(),
+            state: 'queued'
+          }))
+      } catch {
+        this.queuedRequestRecords = []
+      }
+
+      this.queuedRequestLoaded = true
+      await this.persistQueuedRequests()
+    })()
+
+    try {
+      await this.queuedRequestLoadPromise
+    } finally {
+      this.queuedRequestLoadPromise = null
+    }
+  }
+
+  private buildQueuedRequestRunner<T>(
+    record: VrSrcQueuedRequestRecord,
+    run: () => Promise<T>
+  ): VrSrcQueuedRequestRunner<T> {
+    let resolve!: (value: T) => void
+    let reject!: (reason?: unknown) => void
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise
+      reject = rejectPromise
+    })
+
+    return {
+      promise,
+      resolve,
+      reject,
+      run
+    }
+  }
+
+  private async registerQueuedRequest<T>(
+    recordInput: Omit<VrSrcQueuedRequestRecord, 'id' | 'requestedAt' | 'state'>,
+    run: () => Promise<T>,
+    options?: { restore?: boolean }
+  ): Promise<T> {
+    await this.loadQueuedRequests()
+    await this.resumeQueuedRequests()
+
+    const key = this.getQueuedRequestKey(recordInput.releaseName)
+    const existingRunner = this.queuedRequestRunners.get(key) as VrSrcQueuedRequestRunner<T> | undefined
+    if (existingRunner) {
+      return existingRunner.promise
+    }
+
+    const existingRecord = this.queuedRequestRecords.find((entry) => this.getQueuedRequestKey(entry.releaseName) === key)
+    if (existingRecord && !options?.restore) {
+      const existing = this.queuedRequestRunners.get(key) as VrSrcQueuedRequestRunner<T> | undefined
+      if (existing) {
+        return existing.promise
+      }
+    }
+
+    const record: VrSrcQueuedRequestRecord = {
+      id: existingRecord?.id ?? randomUUID(),
+      releaseName: recordInput.releaseName,
+      operation: recordInput.operation,
+      serial: recordInput.serial,
+      requestedAt: existingRecord?.requestedAt ?? new Date().toISOString(),
+      state: 'queued'
+    }
+
+    if (existingRecord) {
+      this.queuedRequestRecords = this.queuedRequestRecords.filter(
+        (entry) => this.getQueuedRequestKey(entry.releaseName) !== key
+      )
+    }
+
+    this.queuedRequestRecords.push(record)
+    const runner = this.buildQueuedRequestRunner(record, run)
+    this.queuedRequestRunners.set(key, runner)
+    this.queuedRequestPromiseByReleaseName.set(key, runner.promise as Promise<unknown>)
+    await this.persistQueuedRequests()
+    this.scheduleQueuedRequestDrain()
+    return runner.promise
+  }
+
+  private scheduleQueuedRequestDrain(): void {
+    if (this.drainQueuedRequestsScheduled) {
+      return
+    }
+
+    this.drainQueuedRequestsScheduled = true
+    queueMicrotask(() => {
+      this.drainQueuedRequestsScheduled = false
+      void this.drainQueuedRequests()
+    })
+  }
+
+  private async drainQueuedRequests(): Promise<void> {
+    await this.loadQueuedRequests()
+
+    while (this.activeQueuedRequests < this.maxConcurrentQueuedRequests) {
+      const nextRecord = this.queuedRequestRecords.find((entry) => entry.state === 'queued')
+      if (!nextRecord) {
+        return
+      }
+
+      const key = this.getQueuedRequestKey(nextRecord.releaseName)
+      const runner = this.queuedRequestRunners.get(key)
+      if (!runner) {
+        return
+      }
+
+      nextRecord.state = 'running'
+      this.activeQueuedRequests += 1
+      await this.persistQueuedRequests()
+
+      void (async () => {
+        try {
+          const value = await runner.run()
+          runner.resolve(value)
+        } catch (error) {
+          runner.reject(error)
+        } finally {
+          this.activeQueuedRequests = Math.max(0, this.activeQueuedRequests - 1)
+          this.queuedRequestRunners.delete(key)
+          this.queuedRequestPromiseByReleaseName.delete(key)
+          this.queuedRequestRecords = this.queuedRequestRecords.filter(
+            (entry) => this.getQueuedRequestKey(entry.releaseName) !== key
+          )
+          await this.persistQueuedRequests()
+          this.scheduleQueuedRequestDrain()
+        }
+      })()
+    }
+  }
+
+  async resumeQueuedRequests(): Promise<void> {
+    await this.loadQueuedRequests()
+    for (const record of this.queuedRequestRecords) {
+      const key = this.getQueuedRequestKey(record.releaseName)
+      if (this.queuedRequestRunners.has(key)) {
+        continue
+      }
+
+      const runner = this.buildQueuedRequestRunner(record, () => this.runQueuedRequest(record))
+      this.queuedRequestRunners.set(key, runner)
+      this.queuedRequestPromiseByReleaseName.set(key, runner.promise as Promise<unknown>)
+    }
+
+    this.scheduleQueuedRequestDrain()
+  }
+
+  private async runQueuedRequest(record: VrSrcQueuedRequestRecord): Promise<unknown> {
+    if (record.operation === 'download-to-library') {
+      return await this.performDownloadToLibrary(record.releaseName)
+    }
+
+    if (record.operation === 'download-to-library-and-install') {
+      if (!record.serial) {
+        throw new Error(`Missing headset serial for queued vrSrc request ${record.releaseName}.`)
+      }
+      return await this.performDownloadToLibraryAndInstall(record.serial, record.releaseName)
+    }
+
+    if (!record.serial) {
+      throw new Error(`Missing headset serial for queued vrSrc request ${record.releaseName}.`)
+    }
+
+    return await this.performInstallNow(record.serial, record.releaseName)
   }
 
   private async acquirePayloadPreparationSlot(): Promise<() => void> {
@@ -376,7 +617,7 @@ class VrSrcService {
       .filter(Boolean)
 
     for (const line of lines) {
-      await logger.debug(`${source} curl`, line)
+      await logger.debug(source, line)
     }
   }
 
@@ -402,6 +643,111 @@ class VrSrcService {
       '3',
       '--no-check-certificate'
     ]
+  }
+
+  private getVrSrcRcloneTransferArgs(baseUri: string): string[] {
+    return [
+      ...this.getVrSrcRcloneArgs(baseUri),
+      '--progress',
+      '--stats',
+      '750ms',
+      '--stats-one-line',
+      '--stats-log-level',
+      'NOTICE'
+    ]
+  }
+
+  private stripTerminalControlSequences(output: string): string {
+    return output.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n')
+  }
+
+  private parseHumanByteSize(value: string): number | null {
+    const normalized = value.trim().replace(/,/g, '')
+    const match = normalized.match(/^([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+)?$/)
+    if (!match) {
+      return null
+    }
+
+    const amount = Number.parseFloat(match[1])
+    if (!Number.isFinite(amount)) {
+      return null
+    }
+
+    const unit = (match[2] ?? 'B').toLowerCase()
+    const multipliers: Record<string, number> = {
+      b: 1,
+      byte: 1,
+      bytes: 1,
+      k: 1000,
+      kb: 1000,
+      kbyte: 1000,
+      kbytes: 1000,
+      ki: 1024,
+      mb: 1000 ** 2,
+      mbyte: 1000 ** 2,
+      mbytes: 1000 ** 2,
+      m: 1000 ** 2,
+      mi: 1024 ** 2,
+      gb: 1000 ** 3,
+      gbyte: 1000 ** 3,
+      gbytes: 1000 ** 3,
+      g: 1000 ** 3,
+      gi: 1024 ** 3,
+      tb: 1000 ** 4,
+      tbyte: 1000 ** 4,
+      tbytes: 1000 ** 4,
+      t: 1000 ** 4,
+      ti: 1024 ** 4,
+      pb: 1000 ** 5,
+      pbyte: 1000 ** 5,
+      pbytes: 1000 ** 5,
+      p: 1000 ** 5,
+      pi: 1024 ** 5,
+      eb: 1000 ** 6,
+      ebyte: 1000 ** 6,
+      ebytes: 1000 ** 6,
+      e: 1000 ** 6,
+      ei: 1024 ** 6,
+      kib: 1024,
+      mib: 1024 ** 2,
+      gib: 1024 ** 3,
+      tib: 1024 ** 4,
+      pib: 1024 ** 5,
+      eib: 1024 ** 6
+    }
+
+    const multiplier = multipliers[unit] ?? multipliers[unit.replace(/s$/, '')]
+    if (!multiplier) {
+      return null
+    }
+
+    return amount * multiplier
+  }
+
+  private parseRcloneTransferStats(output: string): { transferredBytes: number | null; totalBytes: number | null; percent: number | null } | null {
+    const normalized = this.stripTerminalControlSequences(output)
+    const lines = normalized.split('\n')
+
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index].trim()
+      if (!line.startsWith('Transferred:')) {
+        continue
+      }
+
+      const match = line.match(/^Transferred:\s+(.+?)\s+\/\s+(.+?),\s+([0-9]+(?:\.[0-9]+)?)%,/i)
+      if (!match) {
+        continue
+      }
+
+      const percent = Number.parseFloat(match[3])
+      return {
+        transferredBytes: this.parseHumanByteSize(match[1]),
+        totalBytes: this.parseHumanByteSize(match[2]),
+        percent: Number.isFinite(percent) ? percent : null
+      }
+    }
+
+    return null
   }
 
   private getVrSrcCurlNetworkArgs(): string[] {
@@ -1250,32 +1596,62 @@ class VrSrcService {
 
       try {
         await new Promise<void>(async (resolve, reject) => {
-          const args = ['copy', `:http:/${hash}/`, destinationPath, ...this.getVrSrcRcloneArgs(baseUri)]
+          const args = ['copy', `:http:/${hash}/`, destinationPath, ...this.getVrSrcRcloneTransferArgs(baseUri)]
           if (logger) {
             args.push('-vv')
           }
+          const startingTransferredBytes = await this.calculatePathSize(destinationPath)
           const child = spawn(await this.getRclonePath(), args, { stdio: ['ignore', 'ignore', 'pipe'] })
           control.child = child
           control.status = 'running'
           let stderr = ''
-          let lastTransferredBytes = await this.calculatePathSize(destinationPath)
+          let progressBuffer = ''
+          let lastTransferredBytes = startingTransferredBytes
           let lastSampleAt = Date.now()
+          let lastStatsAt = 0
+          let latestKnownTotalBytes = totalBytes
+          let lastEmittedSignature = ''
 
-          const emitProgress = async () => {
-            const transferredBytes = await this.calculatePathSize(destinationPath)
+          const emitProgress = async (transferredBytes: number, progressTotalBytes: number | null, percent: number | null) => {
+            const effectiveTotalBytes = progressTotalBytes ?? latestKnownTotalBytes ?? totalBytes
+            if (effectiveTotalBytes !== null) {
+              latestKnownTotalBytes = effectiveTotalBytes
+            }
+
+            const normalizedTransferredBytes =
+              effectiveTotalBytes !== null
+                ? Math.min(effectiveTotalBytes, transferredBytes)
+                : transferredBytes
+            const monotonicTransferredBytes = Math.max(lastTransferredBytes, normalizedTransferredBytes)
+
             const now = Date.now()
             const elapsedSeconds = Math.max((now - lastSampleAt) / 1000, 0.25)
             const speedBytesPerSecond =
-              transferredBytes >= lastTransferredBytes ? (transferredBytes - lastTransferredBytes) / elapsedSeconds : null
-            lastTransferredBytes = transferredBytes
-            lastSampleAt = now
-            const progress = totalBytes
-              ? Math.min(94, Math.max(1, Math.round((transferredBytes / totalBytes) * 100)))
-              : 22
-            const etaSeconds =
-              totalBytes && speedBytesPerSecond && speedBytesPerSecond > 0
-                ? Math.max(0, Math.round((totalBytes - transferredBytes) / speedBytesPerSecond))
+              monotonicTransferredBytes >= lastTransferredBytes
+                ? (monotonicTransferredBytes - lastTransferredBytes) / elapsedSeconds
                 : null
+
+            lastTransferredBytes = monotonicTransferredBytes
+            lastSampleAt = now
+            lastStatsAt = now
+
+            const derivedProgress = effectiveTotalBytes
+              ? (monotonicTransferredBytes / effectiveTotalBytes) * 100
+              : percent
+            const progress =
+              derivedProgress !== null && Number.isFinite(derivedProgress)
+                ? Math.min(94, Math.max(1, Math.round(derivedProgress)))
+                : 22
+            const etaSeconds =
+              effectiveTotalBytes && speedBytesPerSecond && speedBytesPerSecond > 0
+                ? Math.max(0, Math.round((effectiveTotalBytes - monotonicTransferredBytes) / speedBytesPerSecond))
+                : null
+
+            const signature = `${progress}:${monotonicTransferredBytes}:${effectiveTotalBytes ?? 'null'}`
+            if (signature === lastEmittedSignature) {
+              return
+            }
+            lastEmittedSignature = signature
 
             this.emitControlledTransferProgress(control, {
               operation: control.operation,
@@ -1283,20 +1659,42 @@ class VrSrcService {
               phase: 'downloading',
               progress,
               fileName: null,
-              transferredBytes,
-              totalBytes,
+              transferredBytes: monotonicTransferredBytes,
+              totalBytes: effectiveTotalBytes,
               speedBytesPerSecond: speedBytesPerSecond && Number.isFinite(speedBytesPerSecond) ? speedBytesPerSecond : null,
               etaSeconds
             })
           }
 
           const intervalId = setInterval(() => {
-            void emitProgress()
-          }, 750)
+            void (async () => {
+              if (Date.now() - lastStatsAt < 2000) {
+                return
+              }
+
+              const transferredBytes = await this.calculatePathSize(destinationPath)
+              if (transferredBytes <= lastTransferredBytes) {
+                return
+              }
+
+              await emitProgress(transferredBytes, latestKnownTotalBytes, null)
+            })()
+          }, 1000)
 
           child.stderr.on('data', (chunk) => {
             const text = chunk.toString()
             stderr += text
+            progressBuffer = `${progressBuffer}${text}`.slice(-8192)
+            const stats = this.parseRcloneTransferStats(progressBuffer)
+            if (stats && stats.percent !== null) {
+              const effectiveStatsTotalBytes = stats.totalBytes ?? latestKnownTotalBytes ?? totalBytes
+              const transferredBytes =
+                stats.transferredBytes ??
+                (effectiveStatsTotalBytes !== null ? Math.round((stats.percent / 100) * effectiveStatsTotalBytes) : null)
+              if (transferredBytes !== null) {
+                void emitProgress(startingTransferredBytes + transferredBytes, effectiveStatsTotalBytes, stats.percent)
+              }
+            }
             void this.logCommandOutput(logger, 'payload-download', text)
           })
 
@@ -1308,7 +1706,7 @@ class VrSrcService {
 
           child.once('close', async (code) => {
             clearInterval(intervalId)
-            await emitProgress()
+            await emitProgress(lastTransferredBytes, latestKnownTotalBytes, null)
             control.child = null
             if (code === 0) {
               resolve()
@@ -1650,6 +2048,26 @@ class VrSrcService {
   }
 
   async downloadToLibrary(releaseName: string): Promise<VrSrcDownloadToLibraryResponse> {
+    return await this.registerQueuedRequest(
+      { releaseName, operation: 'download-to-library', serial: null },
+      () => this.performDownloadToLibrary(releaseName)
+    )
+  }
+
+  private async performDownloadToLibrary(releaseName: string): Promise<VrSrcDownloadToLibraryResponse> {
+    const control = this.getOrCreateTransferControl(releaseName, 'download-to-library')
+    this.emitControlledTransferProgress(control, {
+      operation: 'download-to-library',
+      releaseName,
+      phase: 'preparing',
+      progress: 4,
+      fileName: null,
+      transferredBytes: 0,
+      totalBytes: null,
+      speedBytesPerSecond: null,
+      etaSeconds: null
+    })
+
     const settings = await settingsService.getSettings()
     const libraryPath = settings.localLibraryPath?.trim() ?? ''
 
@@ -1719,6 +2137,29 @@ class VrSrcService {
   }
 
   async downloadToLibraryAndInstall(serial: string, releaseName: string): Promise<VrSrcDownloadAndInstallResponse> {
+    return await this.registerQueuedRequest(
+      { releaseName, operation: 'download-to-library-and-install', serial },
+      () => this.performDownloadToLibraryAndInstall(serial, releaseName)
+    )
+  }
+
+  private async performDownloadToLibraryAndInstall(
+    serial: string,
+    releaseName: string
+  ): Promise<VrSrcDownloadAndInstallResponse> {
+    const control = this.getOrCreateTransferControl(releaseName, 'download-to-library-and-install')
+    this.emitControlledTransferProgress(control, {
+      operation: 'download-to-library-and-install',
+      releaseName,
+      phase: 'preparing',
+      progress: 4,
+      fileName: null,
+      transferredBytes: 0,
+      totalBytes: null,
+      speedBytesPerSecond: null,
+      etaSeconds: null
+    })
+
     const settings = await settingsService.getSettings()
     const libraryPath = settings.localLibraryPath?.trim() ?? ''
 
@@ -1862,6 +2303,26 @@ class VrSrcService {
   }
 
   async installNow(serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> {
+    return await this.registerQueuedRequest(
+      { releaseName, operation: 'install-now', serial },
+      () => this.performInstallNow(serial, releaseName)
+    )
+  }
+
+  private async performInstallNow(serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> {
+    const control = this.getOrCreateTransferControl(releaseName, 'install-now')
+    this.emitControlledTransferProgress(control, {
+      operation: 'install-now',
+      releaseName,
+      phase: 'preparing',
+      progress: 4,
+      fileName: null,
+      transferredBytes: 0,
+      totalBytes: null,
+      speedBytesPerSecond: null,
+      etaSeconds: null
+    })
+
     try {
       const sourcePath = await this.ensureReleasePayload(releaseName, 'install-now')
       const installResponse = await deviceService.installManualPath(serial, sourcePath, {

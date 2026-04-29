@@ -192,6 +192,8 @@ app.whenReady().then(async () => {
     }
   })
 
+  await vrSrcService.resumeQueuedRequests()
+
   dependencyService.onBootstrapProgress((update) => {
     for (const browserWindow of BrowserWindow.getAllWindows()) {
       browserWindow.webContents.send('dependencies:bootstrap-progress', update)

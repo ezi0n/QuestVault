@@ -101,6 +101,8 @@ export interface InstalledAppHistoryDay {
   date: string
   scannedAt: string
   appCount: number
+  visibleAppCount: number
+  hiddenPackageCount: number
   systemAppCount: number
   addedCount: number
   removedCount: number

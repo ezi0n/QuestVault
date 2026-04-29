@@ -1,18 +1,19 @@
-# QuestVault 0.8.0
+# QuestVault 0.8.1
 
 ## Highlights
-- Added Headset Activity in Live so new headset-operation failures can reveal recent install, connect, uninstall, and transfer details without keeping diagnostic UI open by default.
-- Improved local folder installs by preferring indexed package IDs for OBB destinations, fixing payloads whose `.obb` files do not include conventional package-name hints.
-- Bumped QuestVault to the next minor release line and refreshed release-facing documentation.
+- Added queued vrSrc transfer handling so downloads and installs can be resumed after restart and drain through Live instead of disappearing when the app relaunches.
+- Added headset inventory and maintenance counts that separate visible apps from hidden companion packages, making the scan history and Installed Apps & Games counters easier to read.
+- Refreshed the maintenance panel layout and Live queue presentation to better surface long-running work.
 
 ## Included Changes
-- Added a typed `headset-actions:get-recent` IPC path from main process through preload into the renderer.
-- Added recent headset action rendering inside the Live rail, with failure-aware visibility and a dismiss control.
-- Added richer logging around standalone APK installs, folder APK installs, and OBB transfer completion/failure output.
-- Documented the new Headset Activity behavior and folder-install OBB package resolution.
+- Added persistent vrSrc queued-request storage plus startup resume handling in the main process.
+- Added queued vrSrc request draining and restore logic so transfers can continue after a relaunch.
+- Added visible/hidden installed-app accounting to the headset scan history and Installed Apps & Games summary.
+- Updated the Live queue, maintenance, and status surfaces to display the new counts and queue state more clearly.
 
 ## Fixes
-- Fixed folder installs that already had a known package ID but failed before OBB transfer because package-name inference depended only on OBB filenames.
+- Fixed headset inventory counts so hidden companion packages no longer inflate the visible app total.
+- Fixed vrSrc long-running requests so queued transfers survive a restart instead of being lost in memory.
 
 ## Validation
 - `pnpm typecheck`
@@ -20,4 +21,4 @@
 - unsigned macOS arm64, x64, and universal builds
 - unsigned Windows x64 and arm64 builds
 - unsigned Linux x64 and arm64 builds
-- v0.6.3-style release asset check for `0.8.0`
+- v0.6.3-style release asset check for `0.8.1`

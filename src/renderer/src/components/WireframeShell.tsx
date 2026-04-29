@@ -42,6 +42,14 @@ interface UiNotice {
   tone: 'info' | 'success' | 'danger'
 }
 
+function isHiddenInstalledCompanionPackage(packageId: string): boolean {
+  return packageId.startsWith('com.mrf.') || packageId.startsWith('com.meta.') || packageId.startsWith('com.oculus.')
+}
+
+function countVisibleInstalledApps(packageIds: string[]): number {
+  return packageIds.filter((packageId) => !isHiddenInstalledCompanionPackage(packageId)).length
+}
+
 interface WireframeShellProps {
   activeTab: PrimaryTab
   onTabChange: (tab: PrimaryTab) => void
@@ -6262,6 +6270,13 @@ function SettingsView(props: {
   const installedAppHistory =
     selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.history : null
   const installedAppHistoryDays = (installedAppHistory?.days ?? []).slice(-7)
+  const currentVisibleInstalledAppCount =
+    selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId
+      ? countVisibleInstalledApps(deviceAppsResponse.apps.map((app) => app.packageId))
+      : 0
+  const currentRawThirdPartyPackageCount =
+    selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.apps.length : 0
+  const currentHiddenCompanionPackageCount = Math.max(0, currentRawThirdPartyPackageCount - currentVisibleInstalledAppCount)
   const historyDeltaScaleMax = installedAppHistoryDays.reduce(
     (highest, day) => Math.max(highest, day.addedCount, day.removedCount),
     1
@@ -6435,7 +6450,7 @@ function SettingsView(props: {
         </div>
 
         <div className="settings-maintenance-toolbar">
-          <div className="settings-maintenance-content">
+          <div className="settings-maintenance-content settings-maintenance-pill">
             <p className="section-copy settings-section-copy settings-maintenance-copy">
               Open runtime tooling, inspect library diagnostics, review orphaned data left
               <br />
@@ -6465,7 +6480,7 @@ function SettingsView(props: {
               </button>
             </div>
           </div>
-          <div className="settings-maintenance-history">
+          <div className="settings-maintenance-history settings-maintenance-history-pill">
             <div className="settings-maintenance-history-heading">
               <strong>Headset App Scan History</strong>
               <span>Last 7 scans</span>
@@ -6488,7 +6503,7 @@ function SettingsView(props: {
                         <div
                           className="settings-maintenance-history-bar-column"
                           key={point.day.scannedAt}
-                          title={`${point.scannedAtLabel}: +${point.day.addedCount} / -${point.day.removedCount}, ${point.day.appCount} installed`}
+                          title={`${point.scannedAtLabel}: +${point.day.addedCount} / -${point.day.removedCount}, ${point.day.visibleAppCount} apps & games${point.day.hiddenPackageCount ? `, ${point.day.hiddenPackageCount} hidden packages` : ''}`}
                         >
                           <div className="settings-maintenance-history-bar-zone is-positive">
                             {point.day.addedCount > 0 ? (
@@ -6505,7 +6520,7 @@ function SettingsView(props: {
                               className={`settings-maintenance-history-zero-dot${point.hasChanges ? ' has-changes' : ''}`}
                               aria-hidden="true"
                             />
-                            <span className="settings-maintenance-history-total">{point.day.appCount}</span>
+                            <span className="settings-maintenance-history-total">{point.day.visibleAppCount}</span>
                           </div>
                           <div className="settings-maintenance-history-bar-zone is-negative">
                             {point.day.removedCount > 0 ? (
@@ -6524,8 +6539,10 @@ function SettingsView(props: {
                       ))}
                     </div>
                     <div className="settings-maintenance-history-current">
-                      <span>{latestInstalledAppHistoryDay?.appCount ?? 0}</span>
-                      <small>installed</small>
+                      <span>{currentVisibleInstalledAppCount}</span>
+                      <small>apps</small>
+                      <span>{currentHiddenCompanionPackageCount}</span>
+                      <small>hidden</small>
                       <span>{latestInstalledAppHistoryDay?.systemAppCount ?? 0}</span>
                       <small>system</small>
                     </div>
@@ -7337,8 +7354,17 @@ export function WireframeShell(props: WireframeShellProps) {
   const readyDevices = deviceResponse?.devices.filter((device) => device.state === 'device').length ?? 0
   const selectedDevice = deviceResponse?.devices.find((device) => device.id === selectedDeviceId) ?? null
   const hasLibraryPath = Boolean(settings?.localLibraryPath)
-  const selectedAppCount =
-    selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.apps.length : 0
+  const selectedDeviceApps =
+    selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.apps : []
+  const hiddenCompanionPackageCount = selectedDeviceApps.filter((app) => isHiddenInstalledCompanionPackage(app.packageId)).length
+  const rawThirdPartyPackageCount = selectedDeviceApps.length
+  const selectedAppCount = Math.max(0, rawThirdPartyPackageCount - hiddenCompanionPackageCount)
+  const selectedDeviceStatusTooltip = [
+    `Installed Apps & Games: ${selectedAppCount}`,
+    `Hidden packages: ${hiddenCompanionPackageCount}`,
+    `Raw third-party packages: ${rawThirdPartyPackageCount}`,
+    `System packages: ${deviceAppsResponse?.systemAppCount ?? 0}`
+  ].join('\n')
   const railStorageUsagePercent = computeStorageUsage(selectedDevice?.storageTotalBytes ?? null, selectedDevice?.storageFreeBytes ?? null)
   const railDeviceIndicator = resolveQuestStorageIndicator(
     [selectedDevice?.model, selectedDevice?.label, selectedDevice?.product],
@@ -7458,11 +7484,11 @@ export function WireframeShell(props: WireframeShellProps) {
                       </div>
                     </div>
                   ) : null}
-                  <span className="rail-session-kicker rail-session-kicker-stacked">
+                  <span className="rail-session-kicker rail-session-kicker-stacked" title={selectedDeviceStatusTooltip}>
                     <span>Installed</span>
                     <span>Apps &amp; Games</span>
                   </span>
-                  <strong className="rail-session-count">{selectedAppCount}</strong>
+                  <strong className="rail-session-count" title={selectedDeviceStatusTooltip}>{selectedAppCount}</strong>
                   {railHasStorageData ? (
                     <div className="rail-storage-block">
                       <span className="rail-storage-kicker">Storage</span>

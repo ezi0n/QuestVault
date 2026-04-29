@@ -30,6 +30,7 @@ import { headsetActionLogService, type HeadsetActionContext } from './headsetAct
 
 const execFileAsync = promisify(execFile)
 const PLATFORM_PACKAGE_PREFIXES = ['com.android.', 'com.oculus.', 'com.meta.', 'com.facebook.']
+const HIDDEN_INSTALLED_COMPANION_PACKAGE_PREFIXES = ['com.mrf.', 'com.meta.', 'com.oculus.']
 const INSTALLED_APP_LIST_TIMEOUT_MS = 15_000
 const INSTALLED_APP_VERSION_LOOKUP_TIMEOUT_MS = 4_000
 const INSTALLED_APP_SIZE_SCAN_TIMEOUT_MS = 20_000
@@ -212,11 +213,16 @@ class DeviceService {
     const scans = serialSnapshots.map((snapshot, index): InstalledAppHistoryDay => {
       const previousSnapshot = index > 0 ? serialSnapshots[index - 1] ?? null : null
       const delta = this.buildInstalledAppScanDelta(previousSnapshot, snapshot)
+      const hiddenPackageCount = snapshot.packageIds.filter((packageId) =>
+        HIDDEN_INSTALLED_COMPANION_PACKAGE_PREFIXES.some((prefix) => packageId.startsWith(prefix))
+      ).length
 
       return {
         date: this.formatLocalDateKey(snapshot.scannedAt),
         scannedAt: snapshot.scannedAt,
         appCount: snapshot.appCount,
+        visibleAppCount: Math.max(0, snapshot.appCount - hiddenPackageCount),
+        hiddenPackageCount,
         systemAppCount: snapshot.systemAppCount,
         addedCount: delta?.addedCount ?? 0,
         removedCount: delta?.removedCount ?? 0

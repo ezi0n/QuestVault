@@ -542,6 +542,7 @@ function App() {
   const vrSrcInitialSyncAttemptedRef = useRef(false)
   const gamesInstallBusyIdsRef = useRef<string[]>([])
   const vrSrcActionBusyReleaseNamesRef = useRef<string[]>([])
+  const vrSrcQueueRemovalTimersRef = useRef(new Map<string, number>())
   const signatureMismatchConfirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null)
   const installedAppsMutationDepthRef = useRef(0)
   const pendingInstalledAppsRefreshSerialRef = useRef<string | null>(null)
@@ -624,6 +625,44 @@ function App() {
     setLiveQueueItems((current) =>
       current.map((item) => (item.id === itemId ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item))
     )
+  }
+
+  function removeLiveQueueItem(itemId: string): void {
+    clearVrSrcQueueRemovalTimer(itemId)
+    setLiveQueueItems((current) => current.filter((item) => item.id !== itemId))
+  }
+
+  function clearVrSrcQueueRemovalTimer(itemId: string): void {
+    const existingTimer = vrSrcQueueRemovalTimersRef.current.get(itemId)
+    if (existingTimer !== undefined) {
+      window.clearTimeout(existingTimer)
+      vrSrcQueueRemovalTimersRef.current.delete(itemId)
+    }
+  }
+
+  function scheduleVrSrcQueueRemoval(itemId: string, delayMs: number): void {
+    clearVrSrcQueueRemovalTimer(itemId)
+    const timeoutId = window.setTimeout(() => {
+      vrSrcQueueRemovalTimersRef.current.delete(itemId)
+      removeLiveQueueItem(itemId)
+    }, delayMs)
+    vrSrcQueueRemovalTimersRef.current.set(itemId, timeoutId)
+  }
+
+  function describeVrSrcQueueSubtitle(operation: VrSrcTransferOperation): string {
+    if (operation === 'download-to-library') {
+      return 'vrSrc to Local Library'
+    }
+
+    if (operation === 'download-to-library-and-install') {
+      return 'vrSrc Download & Install'
+    }
+
+    return 'vrSrc Install Now'
+  }
+
+  function describeVrSrcQueueKind(operation: VrSrcTransferOperation): LiveQueueItem['kind'] {
+    return operation === 'install-now' || operation === 'download-to-library-and-install' ? 'install' : 'download'
   }
 
   async function refreshHeadsetActionLog() {
@@ -1133,20 +1172,35 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
   useEffect(() => {
     const timeoutId = window.setInterval(() => {
-      const cutoff = Date.now() - 30_000
+      const successCutoff = Date.now() - 5_000
+      const failureCutoff = Date.now() - 30_000
       setLiveQueueItems((current) =>
         current.filter((item) => {
-          if (item.phase !== 'completed' && item.phase !== 'failed') {
+          if (item.phase !== 'completed' && item.phase !== 'failed' && item.phase !== 'cancelled') {
             return true
           }
 
-          return new Date(item.updatedAt).getTime() > cutoff
+          const itemUpdatedAt = new Date(item.updatedAt).getTime()
+          if (item.phase === 'failed') {
+            return itemUpdatedAt > failureCutoff
+          }
+
+          return itemUpdatedAt > successCutoff
         })
       )
     }, 5000)
 
     return () => {
       window.clearInterval(timeoutId)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      for (const timeoutId of vrSrcQueueRemovalTimersRef.current.values()) {
+        window.clearTimeout(timeoutId)
+      }
+      vrSrcQueueRemovalTimersRef.current.clear()
     }
   }, [])
 
@@ -1562,25 +1616,6 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     vrSrcActionBusyReleaseNamesRef.current = [...vrSrcActionBusyReleaseNamesRef.current, options.releaseName]
     setVrSrcActionBusyReleaseNames((current) => [...current, options.releaseName])
 
-    enqueueLiveQueueItem({
-      id: queueId,
-      title: options.title,
-      subtitle: options.subtitle,
-      kind: options.operation === 'install-now' || options.operation === 'download-to-library-and-install' ? 'install' : 'download',
-      phase: 'downloading',
-      progress: 4,
-      details: 'Preparing download...',
-      artworkUrl: null,
-      transferControl: {
-        kind: 'vrsrc',
-        operation: options.operation,
-        releaseName: options.releaseName,
-        canPause: true,
-        canResume: false,
-        canCancel: true
-      }
-    })
-
     try {
       let response = await options.execute()
       if (
@@ -1628,6 +1663,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details: buildLiveQueueDetails(response.message, response.details),
         transferControl: null
       })
+      if (response.success || response.cancelled) {
+        scheduleVrSrcQueueRemoval(queueId, 5000)
+      } else {
+        scheduleVrSrcQueueRemoval(queueId, 30_000)
+      }
       if (response.success) {
         setVrSrcMessage(null)
         await options.onSuccess?.()
@@ -1642,6 +1682,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details,
         transferControl: null
       })
+      scheduleVrSrcQueueRemoval(queueId, 30_000)
       setVrSrcMessage(null)
     } finally {
       vrSrcActionBusyReleaseNamesRef.current = vrSrcActionBusyReleaseNamesRef.current.filter(
@@ -1808,44 +1849,75 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   useEffect(() => {
     const unsubscribe = window.api.vrsrc.onTransferProgress((update) => {
       const queueId = buildVrSrcQueueId(update.operation, update.releaseName)
-      updateLiveQueueItem(queueId, {
-        phase: (() => {
-          if (update.phase === 'queued') {
-            return 'queued'
-          }
+      const mappedPhase: LiveQueueItem['phase'] = (() => {
+        if (update.phase === 'queued') {
+          return 'queued'
+        }
 
-          if (update.phase === 'paused') {
-            return 'paused'
-          }
+        if (update.phase === 'paused') {
+          return 'paused'
+        }
 
-          if (update.phase === 'cancelled') {
-            return 'cancelled'
-          }
+        if (update.phase === 'cancelled') {
+          return 'cancelled'
+        }
 
-          if (update.phase === 'extracting') {
-            return 'extracting'
-          }
+        if (update.phase === 'extracting') {
+          return 'extracting'
+        }
 
-          if (update.phase === 'installing') {
-            return 'installing'
-          }
+        if (update.phase === 'installing') {
+          return 'installing'
+        }
 
-          return 'downloading'
-        })(),
+        return 'downloading'
+      })()
+      const nextTransferControl: LiveQueueItem['transferControl'] =
+        update.phase === 'installing' || update.phase === 'cancelled'
+          ? null
+          : {
+              kind: 'vrsrc' as const,
+              operation: update.operation,
+              releaseName: update.releaseName,
+              canPause: update.canPause,
+              canResume: update.canResume,
+              canCancel: update.canCancel
+            }
+      const baseItem = {
+        id: queueId,
+        title: update.releaseName,
+        subtitle: describeVrSrcQueueSubtitle(update.operation),
+        kind: describeVrSrcQueueKind(update.operation),
+        phase: mappedPhase,
         progress: update.progress,
         details: describeVrSrcTransfer(update),
-        transferControl:
-          update.phase === 'installing' || update.phase === 'cancelled'
-            ? null
-            : {
-                kind: 'vrsrc',
-                operation: update.operation,
-                releaseName: update.releaseName,
-                canPause: update.canPause,
-                canResume: update.canResume,
-                canCancel: update.canCancel
+        artworkUrl: null,
+        transferControl: nextTransferControl
+      }
+
+      setLiveQueueItems((current) => {
+        const existingIndex = current.findIndex((item) => item.id === queueId)
+        if (existingIndex === -1) {
+          setQueueAutoOpenSignal((signal) => signal + 1)
+          return [ { ...baseItem, updatedAt: new Date().toISOString(), actionLabel: null, actionUrl: null }, ...current].slice(0, 12)
+        }
+
+        return current.map((item) =>
+          item.id === queueId
+            ? {
+                ...item,
+                ...baseItem,
+                updatedAt: new Date().toISOString()
               }
+            : item
+        )
       })
+
+      if (update.phase === 'cancelled') {
+        scheduleVrSrcQueueRemoval(queueId, 5000)
+      } else {
+        clearVrSrcQueueRemovalTimer(queueId)
+      }
     })
 
     return () => {
