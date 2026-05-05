@@ -202,8 +202,16 @@ export interface DeviceInstalledAppBackupResponse {
   backupPath: string | null
 }
 
+export interface DeviceRebootResponse {
+  runtime: DeviceRuntimeInfo
+  serial: string
+  success: boolean
+  message: string
+  details: string | null
+}
+
 export type HeadsetActionLogStatus = 'started' | 'step' | 'succeeded' | 'failed'
-export type HeadsetActionLogKind = 'connect' | 'disconnect' | 'install' | 'uninstall'
+export type HeadsetActionLogKind = 'connect' | 'disconnect' | 'install' | 'uninstall' | 'reboot'
 
 export interface HeadsetActionLogRecord {
   id: string
@@ -394,7 +402,7 @@ export interface ManualGameMetadataOverride {
   thumbnailUri: string | null
 }
 
-export type LiveQueueKind = 'install' | 'backup' | 'uninstall' | 'scan' | 'cleanup' | 'restore' | 'download' | 'update'
+export type LiveQueueKind = 'install' | 'backup' | 'uninstall' | 'scan' | 'cleanup' | 'restore' | 'download' | 'update' | 'reboot'
 export type LiveQueuePhase =
   | 'queued'
   | 'paused'
@@ -402,10 +410,13 @@ export type LiveQueuePhase =
   | 'downloading'
   | 'extracting'
   | 'installing'
+  | 'verifying'
   | 'backing-up'
   | 'uninstalling'
   | 'scanning'
   | 'cleaning-up'
+  | 'rebooting'
+  | 'reconnecting'
   | 'restoring'
   | 'completed'
   | 'failed'

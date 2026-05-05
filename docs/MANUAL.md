@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.8.1`
+Current documented application version: `0.8.2`
 
 ## Overview
 
@@ -157,15 +157,17 @@ Use `ADB Manager` for:
 - managed ADB visibility
 - runtime status
 - connected headset review
+- rebooting the selected headset through ADB
 - device serial / HorizonOS / transport / battery details
 
 ## Live and Headset Activity
 
 Use `Live` to review long-running scans, installs, downloads, backups, dependency setup, and device operations.
 
-When a new headset install, connect, uninstall, or transfer failure is recorded, QuestVault can reveal `Headset Activity` inside the Live rail. The panel stays hidden by default, opens only for new failures, and shows recent action messages with timestamps so install failures are easier to diagnose without keeping diagnostic UI permanently on screen.
+When a new headset install, connect, uninstall, reboot, or transfer failure is recorded, QuestVault can reveal `Headset Activity` inside the Live rail. The panel stays hidden by default, opens only for new failures, and shows recent action messages with timestamps so install failures are easier to diagnose without keeping diagnostic UI permanently on screen. Use `Review` to open the fuller activity log when you want the raw details.
 
 Standalone APK installs, folder APK installs, and OBB transfers now log richer ADB output and failure details into the headset activity log.
+Failed install cards in `Live` now include a retry action so you can re-run a headset install without rebuilding the whole workflow.
 
 ## Settings
 

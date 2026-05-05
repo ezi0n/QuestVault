@@ -2263,6 +2263,8 @@ input {
   display: block;
   width: 100%;
   height: calc(128px * var(--gallery-scale, 0.85));
+  transition: transform 180ms ease, filter 180ms ease;
+  transform-origin: center;
 }
 
 .inventory-gallery-hero-image {
@@ -5083,6 +5085,22 @@ button.vrsrc-summary-pill {
     0 0 26px rgba(88, 212, 197, 0.14);
 }
 
+.game-gallery-card:hover .game-gallery-hero-image,
+.game-gallery-card:focus-within .game-gallery-hero-image,
+.game-gallery-card.active .game-gallery-hero-image,
+.game-gallery-card:hover .game-gallery-hero-placeholder,
+.game-gallery-card:focus-within .game-gallery-hero-placeholder,
+.game-gallery-card.active .game-gallery-hero-placeholder,
+.inventory-gallery-card:hover .inventory-gallery-hero-image,
+.inventory-gallery-card:focus-within .inventory-gallery-hero-image,
+.inventory-gallery-card.active .inventory-gallery-hero-image,
+.inventory-gallery-card:hover .inventory-gallery-hero-placeholder,
+.inventory-gallery-card:focus-within .inventory-gallery-hero-placeholder,
+.inventory-gallery-card.active .inventory-gallery-hero-placeholder {
+  transform: scale(1.045);
+  filter: saturate(1.05) contrast(1.02);
+}
+
 .game-gallery-title-banner {
   position: absolute;
   inset: 0 0 auto 0;
@@ -5126,6 +5144,8 @@ button.vrsrc-summary-pill {
   width: 100%;
   min-height: calc(128px * var(--gallery-scale, 1));
   height: calc(128px * var(--gallery-scale, 1));
+  transition: transform 180ms ease, filter 180ms ease;
+  transform-origin: center;
 }
 
 .game-gallery-hero-image {

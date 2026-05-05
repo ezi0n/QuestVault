@@ -1,19 +1,21 @@
-# QuestVault 0.8.1
+# QuestVault 0.8.2
 
 ## Highlights
-- Added queued vrSrc transfer handling so downloads and installs can be resumed after restart and drain through Live instead of disappearing when the app relaunches.
-- Added headset inventory and maintenance counts that separate visible apps from hidden companion packages, making the scan history and Installed Apps & Games counters easier to read.
-- Refreshed the maintenance panel layout and Live queue presentation to better surface long-running work.
+- Added headset reboot support from ADB Manager, plus a dedicated headset activity review dialog for inspecting recent installs, connects, uninstalls, and reboots.
+- Added retry support for failed install queue items so headset installs can be re-run without repeating the entire setup flow.
+- Refined installed-app refresh behavior so verification scans are labeled more clearly after installs complete.
+- Refreshed the Live queue, headset activity panel, and maintenance surfaces to better surface long-running work and failure details.
 
 ## Included Changes
-- Added persistent vrSrc queued-request storage plus startup resume handling in the main process.
-- Added queued vrSrc request draining and restore logic so transfers can continue after a relaunch.
-- Added visible/hidden installed-app accounting to the headset scan history and Installed Apps & Games summary.
-- Updated the Live queue, maintenance, and status surfaces to display the new counts and queue state more clearly.
+- Added a new `devices:reboot` IPC path, shared type support, and device-service handling for headset reboot operations.
+- Added headset action log support for reboot events and a fuller review experience in the Live rail.
+- Added live-queue retry handlers and a retry action for failed install cards.
+- Adjusted installed-app refresh timing and verification labeling so post-install inventory checks read more clearly.
 
 ## Fixes
-- Fixed headset inventory counts so hidden companion packages no longer inflate the visible app total.
-- Fixed vrSrc long-running requests so queued transfers survive a restart instead of being lost in memory.
+- Fixed headset activity logging so reboot actions are captured alongside the existing headset operations.
+- Fixed the Live rail so new failure activity can be reviewed without automatically forcing the log open when the UI is intentionally suppressed.
+- Fixed installed-app refreshes so verification passes wait for quiet queue state before running.
 
 ## Validation
 - `pnpm typecheck`
@@ -21,4 +23,4 @@
 - unsigned macOS arm64, x64, and universal builds
 - unsigned Windows x64 and arm64 builds
 - unsigned Linux x64 and arm64 builds
-- v0.6.3-style release asset check for `0.8.1`
+- v0.6.3-style release asset check for `0.8.2`

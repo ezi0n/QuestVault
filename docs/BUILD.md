@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Documented application version: `0.8.1`
+Documented application version: `0.8.2`
 
 ## Packaging Targets
 
@@ -103,7 +103,7 @@ If packaging fails, classify the issue as one of:
 
 ## Current Validation Status
 
-Validated in this workspace for `0.8.1` with:
+Validated in this workspace for `0.8.2` with:
 
 ```bash
 pnpm typecheck
@@ -128,7 +128,7 @@ Observed outcomes:
 - unsigned Windows arm64 packaged build passed
 - unsigned Linux x64 packaged build passed
 - unsigned Linux arm64 packaged build passed
-- v0.6.3-style release asset check passed for `0.8.1`
+- v0.6.3-style release asset check passed for `0.8.2`
 
 ## Current Icon Set
 

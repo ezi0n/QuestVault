@@ -14,6 +14,7 @@ import type {
   DeviceLibraryInstallResponse,
   DeviceManualInstallResponse,
   DeviceListResponse,
+  DeviceRebootResponse,
   DeviceUserNameResponse,
   HeadsetActionLogResponse,
   IndexedItemManualMetadataResponse,
@@ -73,6 +74,7 @@ interface ElectronApi {
     scanLeftoverData: (serial: string) => Promise<DeviceLeftoverScanResponse>
     deleteLeftoverData: (serial: string, itemId: string) => Promise<DeviceLeftoverDeleteResponse>
     uninstallInstalledApp: (serial: string, packageId: string) => Promise<DeviceInstalledAppActionResponse>
+    reboot: (serial: string) => Promise<DeviceRebootResponse>
     backupInstalledApp: (serial: string, packageId: string, backupPath: string) => Promise<DeviceInstalledAppBackupResponse>
     installLocalLibraryItem: (serial: string, itemId: string) => Promise<DeviceLibraryInstallResponse>
     chooseManualInstallApk: () => Promise<string | null>

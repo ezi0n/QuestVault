@@ -234,6 +234,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('devices:uninstall-installed-app', async (_event, serial: string, packageId: string) =>
     deviceService.uninstallInstalledApp(serial, packageId)
   )
+  ipcMain.handle('devices:reboot', async (_event, serial: string) => deviceService.rebootDevice(serial))
   ipcMain.handle('devices:backup-installed-app', async (_event, serial: string, packageId: string, backupPath: string) =>
     deviceService.backupInstalledApp(serial, packageId, backupPath)
   )

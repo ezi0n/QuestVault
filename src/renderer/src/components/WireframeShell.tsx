@@ -64,11 +64,15 @@ interface WireframeShellProps {
   headsetActionLog: HeadsetActionLogResponse | null
   headsetActionLogBusy: boolean
   isHeadsetActionLogVisible: boolean
+  isHeadsetActivityReviewOpen: boolean
   queueAutoOpenSignal: number
   onHideHeadsetActionLog: () => void
+  onOpenHeadsetActivityReview: () => void
+  onCloseHeadsetActivityReview: () => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onRetryQueueItem: (itemId: string) => Promise<void>
   settings: AppSettings | null
   settingsBusy: boolean
   libraryRescanBusy: boolean
@@ -136,6 +140,7 @@ interface WireframeShellProps {
   onDismissLibraryScanDialog: () => void
   onConnectDevice: (address: string) => Promise<void>
   onDisconnectDevice: (serial: string) => Promise<void>
+  onRebootDevice: (serial: string) => Promise<void>
   onRefreshLeftoverData: (serial: string) => Promise<void>
   onDeleteLeftoverData: (itemId: string) => Promise<void>
   onRefreshInstalledApps: (serial: string) => Promise<void>
@@ -1547,9 +1552,11 @@ function QueueRail(props: {
   isOpen: boolean
   onClose: () => void
   onHideHeadsetActionLog: () => void
+  onOpenHeadsetActivityReview: () => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
   onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onRetryQueueItem: (itemId: string) => Promise<void>
 }) {
   const {
     items,
@@ -1559,9 +1566,11 @@ function QueueRail(props: {
     isOpen,
     onClose,
     onHideHeadsetActionLog,
+    onOpenHeadsetActivityReview,
     onPauseVrSrcTransfer,
     onResumeVrSrcTransfer,
-    onCancelVrSrcTransfer
+    onCancelVrSrcTransfer,
+    onRetryQueueItem
   } = props
 
   function formatQueueKind(kind: LiveQueueItem['kind']): string {
@@ -1575,6 +1584,10 @@ function QueueRail(props: {
 
     if (kind === 'cleanup') {
       return 'Cleanup'
+    }
+
+    if (kind === 'reboot') {
+      return 'Reboot'
     }
 
     if (kind === 'scan') {
@@ -1597,12 +1610,24 @@ function QueueRail(props: {
   }
 
   function formatQueuePhase(phase: LiveQueueItem['phase']): string {
+    if (phase === 'verifying') {
+      return 'verifying'
+    }
+
     if (phase === 'restoring') {
       return 'restoring'
     }
 
+    if (phase === 'reconnecting') {
+      return 'reconnecting'
+    }
+
     if (phase === 'cleaning-up') {
       return 'cleaning up'
+    }
+
+    if (phase === 'rebooting') {
+      return 'rebooting'
     }
 
     if (phase === 'scanning') {
@@ -1669,6 +1694,10 @@ function QueueRail(props: {
       return item.phase === 'completed' ? 'queue-kind-pill queue-kind-pill-ready' : 'queue-kind-pill queue-kind-pill-danger'
     }
 
+    if (item.kind === 'reboot') {
+      return item.phase === 'completed' ? 'queue-kind-pill queue-kind-pill-ready' : 'queue-kind-pill queue-kind-pill-warm'
+    }
+
     if (item.kind === 'uninstall') {
       return 'queue-kind-pill queue-kind-pill-danger'
     }
@@ -1705,6 +1734,29 @@ function QueueRail(props: {
     return Number.isNaN(parsed) ? timestamp : new Date(parsed).toLocaleString()
   }
 
+  function formatActivityAction(action: HeadsetActionLogRecord['action']): string {
+    if (action === 'connect') {
+      return 'Connect'
+    }
+
+    if (action === 'disconnect') {
+      return 'Disconnect'
+    }
+
+    if (action === 'uninstall') {
+      return 'Uninstall'
+    }
+
+    if (action === 'reboot') {
+      return 'Reboot'
+    }
+
+    return 'Install'
+  }
+  const activityRecords = (headsetActionLog?.records ?? []).slice().reverse()
+  const featuredActivityRecord =
+    activityRecords.find((record) => record.status === 'failed') ?? activityRecords[0] ?? null
+
   return (
     <aside className={isOpen ? 'queue-drawer surface-panel open' : 'queue-drawer surface-panel'} aria-hidden={!isOpen}>
       <div className="rail-heading">
@@ -1726,43 +1778,45 @@ function QueueRail(props: {
               <div className="queue-card-heading">
                 <div className="queue-card-heading-copy">
                   <strong>Headset Activity</strong>
-                  <p>Recent headset install, connect, and uninstall actions.</p>
+                  <p>Recent headset activity. Review the full log when you need the details.</p>
                 </div>
               </div>
-              <button className="close-pill" onClick={onHideHeadsetActionLog} type="button">
-                Hide
-              </button>
+              <div className="queue-drawer-controls">
+                <button className="close-pill" onClick={onOpenHeadsetActivityReview} type="button">
+                  Review
+                </button>
+                <button className="close-pill" onClick={onHideHeadsetActionLog} type="button">
+                  Hide
+                </button>
+              </div>
             </div>
-            <div className="live-activity-log">
-              {headsetActionLogBusy && !headsetActionLog?.records.length ? (
-                <p className="queue-card-details">Loading activity log...</p>
-              ) : headsetActionLog?.records.length ? (
-                headsetActionLog.records
-                  .slice()
-                  .reverse()
-                  .map((record) => (
-                    <article className="live-activity-entry" key={record.id}>
-                      <div className="live-activity-entry-top">
-                        <strong>{record.itemName ?? record.packageName ?? record.serial ?? record.action}</strong>
-                        <span
-                          className={`status-pill ${
-                            record.status === 'failed' ? 'status-danger' : record.status === 'succeeded' ? 'status-ready' : 'status-pending'
-                          }`}
-                        >
-                          {record.status}
-                        </span>
-                      </div>
-                      <p>{record.message}</p>
-                      <span className="live-activity-entry-meta">{formatActionTime(record.timestamp)}</span>
-                    </article>
-                  ))
-              ) : (
-                <div className="surface-subcard queue-empty">
-                  <strong>No headset activity yet.</strong>
-                  <p>Start an install, connect, or uninstall to populate this log.</p>
+            {headsetActionLogBusy && !featuredActivityRecord ? (
+              <p className="queue-card-details">Loading activity log...</p>
+            ) : featuredActivityRecord ? (
+              <div className="surface-subcard queue-empty">
+                <div className="live-activity-entry-top">
+                  <strong>{formatActivityAction(featuredActivityRecord.action)}</strong>
+                  <span
+                    className={`status-pill ${
+                      featuredActivityRecord.status === 'failed'
+                        ? 'status-danger'
+                        : featuredActivityRecord.status === 'succeeded'
+                          ? 'status-ready'
+                          : 'status-pending'
+                    }`}
+                  >
+                    {featuredActivityRecord.status}
+                  </span>
                 </div>
-              )}
-            </div>
+                <p>{featuredActivityRecord.message}</p>
+                <span className="live-activity-entry-meta">{formatActionTime(featuredActivityRecord.timestamp)}</span>
+              </div>
+            ) : (
+              <div className="surface-subcard queue-empty">
+                <strong>No headset activity yet.</strong>
+                <p>Start an install, connect, uninstall, or reboot to populate this log.</p>
+              </div>
+            )}
           </section>
         ) : null}
         {items.length ? (
@@ -1815,6 +1869,13 @@ function QueueRail(props: {
                   >
                     {item.actionLabel}
                   </a>
+                </div>
+              ) : null}
+              {item.kind === 'install' && item.phase === 'failed' ? (
+                <div className="queue-card-actions">
+                  <button className="queue-card-action" onClick={() => void onRetryQueueItem(item.id)} type="button">
+                    Retry Install
+                  </button>
                 </div>
               ) : null}
               {item.transferControl?.kind === 'vrsrc' ? (
@@ -2512,7 +2573,7 @@ function GamesView(props: {
       return
     }
 
-    if (!wasVrSrcPanelOpen && gamesFilter === 'new') {
+    if (!wasVrSrcPanelOpen && (gamesFilter === 'new' || gamesFilter === 'updates')) {
       setGamesFilter('all')
     }
   }, [gamesFilter, isVrSrcPanelOpen])
@@ -4561,6 +4622,7 @@ function ManagerView(props: {
   onRefreshDevices: () => Promise<void>
   onConnectDevice: (address: string) => Promise<void>
   onDisconnectDevice: (serial: string) => Promise<void>
+  onRebootDevice: (serial: string) => Promise<void>
 }) {
   const {
     deviceResponse,
@@ -4570,7 +4632,8 @@ function ManagerView(props: {
     onSelectDevice,
     onRefreshDevices,
     onConnectDevice,
-    onDisconnectDevice
+    onDisconnectDevice,
+    onRebootDevice
   } = props
   const [connectAddress, setConnectAddress] = useState('')
 
@@ -4673,6 +4736,17 @@ function ManagerView(props: {
                             onClick={() => void onDisconnectDevice(device.id)}
                           >
                             Disconnect
+                          </button>
+                        ) : null}
+                        {selectedDeviceId === device.id ? (
+                          <button
+                            className="action-pill action-pill-ghost"
+                            disabled={deviceBusy || device.state !== 'device'}
+                            onClick={() => void onRebootDevice(device.id)}
+                            title="Reboot the selected headset through ADB."
+                            type="button"
+                          >
+                            Reboot Headset
                           </button>
                         ) : null}
                       </div>
@@ -6776,6 +6850,191 @@ function OrphanedDataDialog(props: {
   )
 }
 
+function HeadsetActivityDialog(props: {
+  isOpen: boolean
+  onClose: () => void
+  headsetActionLog: HeadsetActionLogResponse | null
+  headsetActionLogBusy: boolean
+}) {
+  const { isOpen, onClose, headsetActionLog, headsetActionLogBusy } = props
+  const [activityFilter, setActivityFilter] = useState<'all' | 'connect' | 'install' | 'uninstall' | 'reboot'>('all')
+  const [expandedActivityId, setExpandedActivityId] = useState<string | null>(null)
+
+  function formatActivityAction(action: HeadsetActionLogRecord['action']): string {
+    if (action === 'connect') {
+      return 'Connect'
+    }
+
+    if (action === 'disconnect') {
+      return 'Disconnect'
+    }
+
+    if (action === 'uninstall') {
+      return 'Uninstall'
+    }
+
+    if (action === 'reboot') {
+      return 'Reboot'
+    }
+
+    return 'Install'
+  }
+
+  function formatActionTime(timestamp: string): string {
+    const parsed = Date.parse(timestamp)
+    return Number.isNaN(parsed) ? timestamp : new Date(parsed).toLocaleString()
+  }
+
+  function matchesActivityFilter(record: HeadsetActionLogRecord): boolean {
+    if (activityFilter === 'all') {
+      return true
+    }
+
+    if (activityFilter === 'connect') {
+      return record.action === 'connect' || record.action === 'disconnect'
+    }
+
+    return record.action === activityFilter
+  }
+
+  const activityRecords = (headsetActionLog?.records ?? []).slice().reverse()
+  const filteredActivityRecords = activityRecords.filter((record) => matchesActivityFilter(record))
+
+  useEffect(() => {
+    if (expandedActivityId && !filteredActivityRecords.some((record) => record.id === expandedActivityId)) {
+      setExpandedActivityId(null)
+    }
+  }, [expandedActivityId, filteredActivityRecords])
+
+  if (!isOpen) {
+    return null
+  }
+
+  return (
+    <>
+      <div className="library-scan-backdrop" onClick={onClose} />
+      <section className="library-support-dialog surface-panel headset-activity-dialog" role="dialog" aria-modal="true" aria-label="Headset activity">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Support</p>
+            <h2>Headset Activity Review</h2>
+            <p className="section-copy compact settings-section-copy-nowrap">
+              Review the full headset action log, including install, connect, uninstall, and reboot events.
+            </p>
+          </div>
+          <button className="close-pill" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+
+        <div className="queue-card-actions">
+          {[
+            { id: 'all', label: 'All' },
+            { id: 'connect', label: 'Connections' },
+            { id: 'install', label: 'Installs' },
+            { id: 'uninstall', label: 'Uninstalls' },
+            { id: 'reboot', label: 'Reboots' }
+          ].map((filter) => (
+            <button
+              className={
+                activityFilter === filter.id ? 'status-pill status-pill-button active' : 'status-pill status-pill-button'
+              }
+              key={filter.id}
+              onClick={() => setActivityFilter(filter.id as typeof activityFilter)}
+              type="button"
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="live-activity-log">
+          {headsetActionLogBusy && !activityRecords.length ? (
+            <p className="queue-card-details">Loading activity log...</p>
+          ) : filteredActivityRecords.length ? (
+            filteredActivityRecords.map((record) => {
+              const isExpanded = expandedActivityId === record.id
+              const statusClass =
+                record.status === 'failed'
+                  ? 'status-danger'
+                  : record.status === 'succeeded'
+                    ? 'status-ready'
+                    : 'status-pending'
+
+              return (
+                <article className="live-activity-entry" key={record.id}>
+                  <div className="live-activity-entry-top">
+                    <button
+                      aria-expanded={isExpanded}
+                      className="live-activity-entry-toggle"
+                      onClick={() => setExpandedActivityId((current) => (current === record.id ? null : record.id))}
+                      type="button"
+                    >
+                      <div className="live-activity-entry-toggle-copy">
+                        <strong>{formatActivityAction(record.action)}</strong>
+                        <span>{record.itemName ?? record.packageName ?? record.serial ?? 'Headset action'}</span>
+                      </div>
+                    </button>
+                    <span className={`status-pill ${statusClass}`}>{record.status}</span>
+                  </div>
+                  <p>{record.message}</p>
+                  <span className="live-activity-entry-meta">{formatActionTime(record.timestamp)}</span>
+                  {isExpanded ? (
+                    <div className="live-activity-entry-details">
+                      <div className="live-activity-entry-detail-row">
+                        <span>Action</span>
+                        <strong>{formatActivityAction(record.action)}</strong>
+                      </div>
+                      <div className="live-activity-entry-detail-row">
+                        <span>Serial</span>
+                        <code>{record.serial ?? 'Unavailable'}</code>
+                      </div>
+                      {record.itemId ? (
+                        <div className="live-activity-entry-detail-row">
+                          <span>Item</span>
+                          <code>{record.itemId}</code>
+                        </div>
+                      ) : null}
+                      {record.packageName ? (
+                        <div className="live-activity-entry-detail-row">
+                          <span>Package</span>
+                          <code>{record.packageName}</code>
+                        </div>
+                      ) : null}
+                      {record.metadata ? (
+                        <div className="live-activity-entry-detail-block">
+                          <span>Metadata</span>
+                          <div className="live-activity-entry-metadata-list">
+                            {Object.entries(record.metadata).map(([key, value]) => (
+                              <div className="live-activity-entry-detail-row" key={key}>
+                                <span>{key}</span>
+                                <code>{value === null ? 'null' : String(value)}</code>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </article>
+              )
+            })
+          ) : (
+            <div className="surface-subcard queue-empty">
+              <strong>{activityFilter === 'all' ? 'No headset activity yet.' : 'No activity matches this filter.'}</strong>
+              <p>
+                {activityFilter === 'all'
+                  ? 'Start an install, connect, uninstall, or reboot to populate this log.'
+                  : 'Try a different filter to see more headset actions.'}
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+    </>
+  )
+}
+
 function LibraryDiagnosticsDialog(props: {
   isOpen: boolean
   onClose: () => void
@@ -7252,11 +7511,15 @@ export function WireframeShell(props: WireframeShellProps) {
     headsetActionLog,
     headsetActionLogBusy,
     isHeadsetActionLogVisible,
+    isHeadsetActivityReviewOpen,
     queueAutoOpenSignal,
     onHideHeadsetActionLog,
+    onOpenHeadsetActivityReview,
+    onCloseHeadsetActivityReview,
     onPauseVrSrcTransfer,
     onResumeVrSrcTransfer,
     onCancelVrSrcTransfer,
+    onRetryQueueItem,
     settings,
     settingsBusy,
     libraryRescanBusy,
@@ -7324,6 +7587,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onDismissLibraryScanDialog,
     onConnectDevice,
     onDisconnectDevice,
+    onRebootDevice,
     onRefreshLeftoverData,
     onDeleteLeftoverData,
     onRefreshInstalledApps,
@@ -7717,6 +7981,7 @@ export function WireframeShell(props: WireframeShellProps) {
               deviceResponse={deviceResponse}
               onConnectDevice={onConnectDevice}
               onDisconnectDevice={onDisconnectDevice}
+              onRebootDevice={onRebootDevice}
               onRefreshDevices={onRefreshDevices}
               onSelectDevice={onSelectDevice}
               selectedDeviceId={selectedDeviceId}
@@ -7768,9 +8033,11 @@ export function WireframeShell(props: WireframeShellProps) {
         isHeadsetActionLogVisible={isHeadsetActionLogVisible}
         onClose={() => setIsQueueOpen(false)}
         onHideHeadsetActionLog={onHideHeadsetActionLog}
+        onOpenHeadsetActivityReview={onOpenHeadsetActivityReview}
         onPauseVrSrcTransfer={onPauseVrSrcTransfer}
         onResumeVrSrcTransfer={onResumeVrSrcTransfer}
         onCancelVrSrcTransfer={onCancelVrSrcTransfer}
+        onRetryQueueItem={onRetryQueueItem}
       />
       <LibraryScanDialog
         scan={localLibraryIndex}
@@ -7796,6 +8063,12 @@ export function WireframeShell(props: WireframeShellProps) {
         deviceLeftoverMessage={deviceLeftoverMessage}
         onRefreshLeftoverData={onRefreshLeftoverData}
         onDeleteLeftoverData={onDeleteLeftoverData}
+      />
+      <HeadsetActivityDialog
+        isOpen={isHeadsetActivityReviewOpen}
+        onClose={onCloseHeadsetActivityReview}
+        headsetActionLog={headsetActionLog}
+        headsetActionLogBusy={headsetActionLogBusy}
       />
       <LibraryDiagnosticsDialog
         isOpen={isLibraryDiagnosticsOpen}

@@ -16,6 +16,7 @@ import type {
   DeviceLibraryInstallResponse,
   DeviceListResponse,
   DeviceManualInstallResponse,
+  DeviceRebootResponse,
   DeviceRuntimeInfo,
   DeviceSummary,
   DeviceUserNameResponse,
@@ -73,7 +74,7 @@ class DeviceService {
   private installQueueDepth = 0
   private pendingJsonWrites = new Map<string, Promise<void>>()
 
-  private async runQueuedInstall<T>(task: () => Promise<T>, hooks?: InstallQueueHooks): Promise<T> {
+  private async runQueuedDeviceTask<T>(task: () => Promise<T>, hooks?: InstallQueueHooks): Promise<T> {
     const queuedBehindAnotherInstall = this.installQueueDepth > 0
     if (queuedBehindAnotherInstall) {
       await hooks?.onQueued?.()
@@ -94,6 +95,10 @@ class DeviceService {
       })
 
     return run
+  }
+
+  private async runQueuedInstall<T>(task: () => Promise<T>, hooks?: InstallQueueHooks): Promise<T> {
+    return this.runQueuedDeviceTask(task, hooks)
   }
 
   private getInstalledAppScanHistoryPath(): string {
@@ -889,6 +894,95 @@ class DeviceService {
         },
         serial: normalizedSerial,
         packageId: normalizedPackageId,
+        success: false,
+        message,
+        details
+      }
+    }
+  }
+
+  async rebootDevice(serial: string): Promise<DeviceRebootResponse> {
+    const runtime = await this.resolveRuntime()
+    const normalizedSerial = serial.trim()
+    const action = await this.startHeadsetAction('reboot', {
+      serial: normalizedSerial || null,
+      message: normalizedSerial
+        ? `Starting reboot for ${normalizedSerial}.`
+        : 'Starting reboot without a selected device.'
+    })
+
+    if (runtime.status !== 'ready' || !runtime.adbPath) {
+      await this.failHeadsetAction(action, runtime.message, { runtimeStatus: runtime.status })
+      return {
+        runtime,
+        serial: normalizedSerial,
+        success: false,
+        message: runtime.message,
+        details: null
+      }
+    }
+
+    if (!normalizedSerial) {
+      const message = 'No device selected for reboot.'
+      await this.failHeadsetAction(action, message)
+      return {
+        runtime: {
+          status: 'error',
+          adbPath: runtime.adbPath,
+          message
+        },
+        serial: normalizedSerial,
+        success: false,
+        message,
+        details: null
+      }
+    }
+
+    try {
+      return await this.runQueuedDeviceTask(
+        async () => {
+          await this.logHeadsetActionStep(action, `Sending reboot command to ${normalizedSerial}.`, {
+            serial: normalizedSerial
+          })
+
+          const { stdout, stderr } = await execFileAsync(runtime.adbPath as string, ['-s', normalizedSerial, 'reboot'], {
+            maxBuffer: 10 * 1024 * 1024
+          })
+          const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+          const message = `Reboot command sent to ${normalizedSerial}.`
+
+          await this.completeHeadsetAction(action, output || message, {
+            serial: normalizedSerial
+          })
+
+          return {
+            runtime,
+            serial: normalizedSerial,
+            success: true,
+            message,
+            details: output || null
+          }
+        },
+        {
+          onQueued: async () => {
+            await this.logHeadsetActionStep(
+              action,
+              'Queued for reboot because another headset operation is already in progress.'
+            )
+          }
+        }
+      )
+    } catch (error) {
+      const details = this.readErrorMessage(error)
+      const message = `Unable to reboot ${normalizedSerial}.`
+      await this.failHeadsetAction(action, details, { serial: normalizedSerial })
+      return {
+        runtime: {
+          status: 'error',
+          adbPath: runtime.adbPath,
+          message
+        },
+        serial: normalizedSerial,
         success: false,
         message,
         details
@@ -2135,7 +2229,7 @@ pm list packages -3 --show-versioncode 2>/dev/null || pm list packages -3
   }
 
   private async startHeadsetAction(
-    action: 'connect' | 'disconnect' | 'install' | 'uninstall',
+    action: 'connect' | 'disconnect' | 'install' | 'uninstall' | 'reboot',
     options: {
       serial: string | null
       itemId?: string | null

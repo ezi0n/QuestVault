@@ -15,6 +15,7 @@ import type {
   DeviceLibraryInstallResponse,
   DeviceManualInstallResponse,
   DeviceListResponse,
+  DeviceRebootResponse,
   DeviceUserNameResponse,
   HeadsetActionLogResponse,
   IndexedItemManualMetadataResponse,
@@ -87,6 +88,7 @@ const api = {
       ipcRenderer.invoke('devices:delete-leftover-data', serial, itemId),
     uninstallInstalledApp: (serial: string, packageId: string): Promise<DeviceInstalledAppActionResponse> =>
       ipcRenderer.invoke('devices:uninstall-installed-app', serial, packageId),
+    reboot: (serial: string): Promise<DeviceRebootResponse> => ipcRenderer.invoke('devices:reboot', serial),
     backupInstalledApp: (
       serial: string,
       packageId: string,

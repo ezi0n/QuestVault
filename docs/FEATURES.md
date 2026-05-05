@@ -38,6 +38,7 @@
 - Wi-Fi pairing.
 - Connected headset overview with serial, HorizonOS, storage, and live device pills.
 - Managed/runtime status cards and refresh actions.
+- Selected-headset reboot action through ADB.
 
 ### Settings
 
@@ -52,6 +53,7 @@
 
 - Shared Live queue for scans, installs, downloads, dependency setup, backups, deletes, and failures.
 - Headset Activity panel in Live that appears for new headset-operation failures and summarizes recent install/connect/uninstall activity.
+- Dedicated headset activity review dialog with filters, detail expansion, and reboot event support.
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
 - Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
@@ -64,11 +66,13 @@
 - Current icon system aligned across macOS, Windows, and Linux packaging assets.
 - Signature-mismatch install recovery now uses an in-app guarded confirmation dialog instead of a simple native OK/Cancel prompt.
 - Installed-app refreshes are coalesced after install/uninstall bursts so device mutations settle before the next inventory refresh runs.
+- Failed install queue items can be retried from Live instead of restarting the whole app flow.
 - Broken artwork URLs now fall back to generated art surfaces across Apps & Games, Installed Inventory, and Game Saves.
 - MR-Fix style local and installed package aliases can reuse richer storefront artwork/metadata from their base package match.
 - Long package identifiers in the Game Saves drawer now wrap instead of causing horizontal drawer scroll.
 - Local folder installs prefer indexed package IDs for OBB destinations, improving installs for payloads whose `.obb` files do not encode package names.
 - APK install and OBB transfer failures record richer ADB output in the headset action log.
+- Headset activity logging also captures reboot events for device maintenance workflows.
 
 ## vrSrc-Specific Features
 
@@ -99,7 +103,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.8.1`
+Current documented release line: `0.8.2`
 
 ## Product Position
 

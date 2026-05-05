@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { HeadsetActionLogRecord } from '@shared/types/ipc'
 
-type HeadsetActionKind = 'connect' | 'disconnect' | 'install' | 'uninstall'
+type HeadsetActionKind = 'connect' | 'disconnect' | 'install' | 'uninstall' | 'reboot'
 type HeadsetActionStatus = 'started' | 'step' | 'succeeded' | 'failed'
 
 export interface HeadsetActionContext {
