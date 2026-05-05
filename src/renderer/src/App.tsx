@@ -28,6 +28,7 @@ import type {
   VrSrcTransferProgressUpdate,
   HeadsetActionLogRecord,
   HeadsetActionLogResponse,
+  InstalledAppScanChangeEntry,
   ViewDisplayMode
 } from '@shared/types/ipc'
 import { WireframeShell } from './components/WireframeShell'
@@ -221,17 +222,31 @@ function buildInstalledAppChangeDetails(change: InstalledAppScanDelta | null): s
     return null
   }
 
+  const formatEntry = (entry: InstalledAppScanChangeEntry): string => {
+    if (entry.displayName.trim() && entry.displayName.trim().toLowerCase() !== entry.packageId.trim().toLowerCase()) {
+      return `${entry.displayName} (${entry.packageId})`
+    }
+
+    return entry.packageId
+  }
+
   const parts = [
     `Apps present on the headset changed since the previous scan (${change.previousAppCount} -> ${change.currentAppCount}).`,
     `New on headset: ${change.addedCount}, removed from headset: ${change.removedCount}.`
   ]
 
-  if (change.addedPackages.length) {
+  if (change.addedApps.length) {
+    const listed = change.addedApps.slice(0, 4).map(formatEntry).join(', ')
+    parts.push(`Now present on headset: ${listed}${change.addedApps.length > 4 ? ', …' : '.'}`)
+  } else if (change.addedPackages.length) {
     const listed = change.addedPackages.slice(0, 4).join(', ')
     parts.push(`Now present on headset: ${listed}${change.addedPackages.length > 4 ? ', …' : '.'}`)
   }
 
-  if (change.removedPackages.length) {
+  if (change.removedApps.length) {
+    const listed = change.removedApps.slice(0, 4).map(formatEntry).join(', ')
+    parts.push(`No longer present on headset: ${listed}${change.removedApps.length > 4 ? ', …' : '.'}`)
+  } else if (change.removedPackages.length) {
     const listed = change.removedPackages.slice(0, 4).join(', ')
     parts.push(`No longer present on headset: ${listed}${change.removedPackages.length > 4 ? ', …' : '.'}`)
   }

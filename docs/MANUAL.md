@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.8.2`
+Current documented application version: `0.8.3`
 
 ## Overview
 
@@ -213,6 +213,7 @@ The `Maintenance` section includes a compact chart showing:
 - the latest installed and system app totals
 
 Use `Refresh installed apps` in `Installed Inventory` to add new scan points to this history.
+Select a scan bar in `Headset App Scan History` to open the scan detail popup with the app names that were added or removed in that comparison. When QuestVault can resolve older package IDs from cached metadata, it backfills those names into the popup as well.
 
 Installed-app metadata refresh now starts from the persisted installed metadata index. Repeat refreshes reuse known matches, remove packages that are no longer installed, and only hydrate packages that are still missing metadata. The installed list becomes usable as soon as the scan finishes, while the remaining metadata work continues in the background and reports progress in `Live`.
 

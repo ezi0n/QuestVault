@@ -15,12 +15,14 @@ import type {
   DeviceListResponse,
   HeadsetActionLogRecord,
   HeadsetActionLogResponse,
+  InstalledAppHistoryDay,
   ManualGameMetadataOverride,
   LiveQueueItem,
   LocalLibraryIndexedItem,
   LocalLibraryScanResponse,
   MetaStoreGameDetails,
   MetaStoreGameSummary,
+  InstalledAppScanChangeEntry,
   PrimaryTab,
   SaveBackupEntry,
   SaveBackupsResponse,
@@ -48,6 +50,55 @@ function isHiddenInstalledCompanionPackage(packageId: string): boolean {
 
 function countVisibleInstalledApps(packageIds: string[]): number {
   return packageIds.filter((packageId) => !isHiddenInstalledCompanionPackage(packageId)).length
+}
+
+function formatInstalledAppScanChangeEntry(entry: InstalledAppScanChangeEntry): string {
+  const trimmedDisplayName = entry.displayName.trim()
+  const trimmedPackageId = entry.packageId.trim()
+
+  if (trimmedDisplayName && trimmedDisplayName.toLowerCase() !== trimmedPackageId.toLowerCase()) {
+    return `${trimmedDisplayName} (${trimmedPackageId})`
+  }
+
+  return trimmedPackageId
+}
+
+function formatInstalledAppRemovalCause(
+  entry: InstalledAppScanChangeEntry,
+  currentDay: InstalledAppHistoryDay,
+  previousDay: InstalledAppHistoryDay | null,
+  selectedDeviceId: string | null,
+  headsetActionLog: HeadsetActionLogResponse | null
+): string | null {
+  const deviceSerial = selectedDeviceId?.trim().toLowerCase()
+  if (!deviceSerial) {
+    return null
+  }
+
+  if (!previousDay) {
+    return 'No earlier scan exists for this device, so the removal source cannot be determined.'
+  }
+
+  const currentScannedAt = new Date(currentDay.scannedAt).getTime()
+  const previousScannedAt = new Date(previousDay.scannedAt).getTime()
+  const packageId = entry.packageId.trim().toLowerCase()
+  const matchingRecord = (headsetActionLog?.records ?? [])
+    .filter(
+      (record) =>
+        record.serial?.trim().toLowerCase() === deviceSerial &&
+        record.action === 'uninstall' &&
+        record.status === 'succeeded' &&
+        record.packageName?.trim().toLowerCase() === packageId
+    )
+    .map((record) => ({ record, timestamp: new Date(record.timestamp).getTime() }))
+    .filter(({ timestamp }) => !Number.isNaN(timestamp) && timestamp >= previousScannedAt && timestamp <= currentScannedAt)
+    .sort((left, right) => right.timestamp - left.timestamp)[0]
+
+  if (!matchingRecord) {
+    return 'Not by QuestVault. It was manually uninstalled, or offload unused apps is enabled.'
+  }
+
+  return `Likely removed by QuestVault uninstall at ${new Date(matchingRecord.record.timestamp).toLocaleString()}`
 }
 
 interface WireframeShellProps {
@@ -6303,6 +6354,7 @@ function SettingsView(props: {
   backupStorageIndex: LocalLibraryScanResponse | null
   gameSavesPathStats: SettingsPathStatsResponse | null
   deviceAppsResponse: DeviceAppsResponse | null
+  headsetActionLog: HeadsetActionLogResponse | null
   selectedDeviceId: string | null
   deviceLeftoverResponse: DeviceLeftoverScanResponse | null
   deviceLeftoverBusy: boolean
@@ -6327,6 +6379,7 @@ function SettingsView(props: {
     backupStorageIndex,
     gameSavesPathStats,
     deviceAppsResponse,
+    headsetActionLog,
     selectedDeviceId,
     deviceLeftoverResponse,
     deviceLeftoverBusy,
@@ -6343,7 +6396,9 @@ function SettingsView(props: {
   } = props
   const installedAppHistory =
     selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.history : null
-  const installedAppHistoryDays = (installedAppHistory?.days ?? []).slice(-7)
+  const installedAppHistoryAllDays = installedAppHistory?.days ?? []
+  const installedAppHistoryPageSize = 10
+  const [installedAppHistoryPageIndex, setInstalledAppHistoryPageIndex] = useState(0)
   const currentVisibleInstalledAppCount =
     selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId
       ? countVisibleInstalledApps(deviceAppsResponse.apps.map((app) => app.packageId))
@@ -6351,11 +6406,29 @@ function SettingsView(props: {
   const currentRawThirdPartyPackageCount =
     selectedDeviceId && deviceAppsResponse?.serial === selectedDeviceId ? deviceAppsResponse.apps.length : 0
   const currentHiddenCompanionPackageCount = Math.max(0, currentRawThirdPartyPackageCount - currentVisibleInstalledAppCount)
+  useEffect(() => {
+    setInstalledAppHistoryPageIndex(0)
+    setSelectedHistoryScannedAt(null)
+  }, [installedAppHistory?.serial])
+
+  const installedAppHistoryPageCount = Math.max(1, Math.ceil(installedAppHistoryAllDays.length / installedAppHistoryPageSize))
+
+  useEffect(() => {
+    setInstalledAppHistoryPageIndex((current) => Math.min(current, installedAppHistoryPageCount - 1))
+  }, [installedAppHistoryPageCount])
+
+  const installedAppHistoryPageStart = Math.max(
+    0,
+    installedAppHistoryAllDays.length - (installedAppHistoryPageIndex + 1) * installedAppHistoryPageSize
+  )
+  const installedAppHistoryPageEnd = installedAppHistoryAllDays.length - installedAppHistoryPageIndex * installedAppHistoryPageSize
+  const installedAppHistoryDays = installedAppHistoryAllDays.slice(installedAppHistoryPageStart, installedAppHistoryPageEnd)
   const historyDeltaScaleMax = installedAppHistoryDays.reduce(
     (highest, day) => Math.max(highest, day.addedCount, day.removedCount),
     1
   )
   const latestInstalledAppHistoryDay = installedAppHistoryDays[installedAppHistoryDays.length - 1] ?? null
+  const [selectedHistoryScannedAt, setSelectedHistoryScannedAt] = useState<string | null>(null)
   const settingsHistoryBars = installedAppHistoryDays.map((day) => {
     const addedHeight = Math.max(8, (day.addedCount / historyDeltaScaleMax) * 100)
     const removedHeight = Math.max(8, (day.removedCount / historyDeltaScaleMax) * 100)
@@ -6386,6 +6459,19 @@ function SettingsView(props: {
       })
     }
   })
+  const selectedHistoryDay =
+    installedAppHistoryDays.find((day) => day.scannedAt === selectedHistoryScannedAt) ?? null
+  const selectedHistoryAllDayIndex = selectedHistoryDay
+    ? installedAppHistoryAllDays.findIndex((day) => day.scannedAt === selectedHistoryDay.scannedAt)
+    : -1
+  const selectedHistoryPreviousDay =
+    selectedHistoryAllDayIndex > 0 ? installedAppHistoryAllDays[selectedHistoryAllDayIndex - 1] ?? null : null
+
+  useEffect(() => {
+    if (selectedHistoryScannedAt && !installedAppHistoryDays.some((day) => day.scannedAt === selectedHistoryScannedAt)) {
+      setSelectedHistoryScannedAt(null)
+    }
+  }, [installedAppHistoryDays, selectedHistoryScannedAt])
 
   const settingsStats = [
     {
@@ -6557,15 +6643,47 @@ function SettingsView(props: {
           <div className="settings-maintenance-history settings-maintenance-history-pill">
             <div className="settings-maintenance-history-heading">
               <strong>Headset App Scan History</strong>
-              <span>Last 7 scans</span>
+              <span>
+                {installedAppHistoryAllDays.length
+                  ? `${installedAppHistoryPageStart + 1}-${installedAppHistoryPageEnd} of ${installedAppHistoryAllDays.length}`
+                  : 'No scans yet'}
+              </span>
             </div>
             {selectedDeviceId ? (
               installedAppHistoryDays.length ? (
-                <div className="settings-maintenance-history-chart">
+                <>
+                  {installedAppHistoryAllDays.length > installedAppHistoryPageSize ? (
+                    <div className="settings-maintenance-history-pager">
+                      <button
+                        className="action-pill action-pill-ghost settings-maintenance-history-pager-button"
+                        disabled={installedAppHistoryPageIndex === 0}
+                        onClick={() => setInstalledAppHistoryPageIndex((current) => Math.max(0, current - 1))}
+                        type="button"
+                      >
+                        Newer 10
+                      </button>
+                      <span className="settings-maintenance-history-pager-label">
+                        Page {installedAppHistoryPageIndex + 1} of {installedAppHistoryPageCount}
+                      </span>
+                      <button
+                        className="action-pill action-pill-ghost settings-maintenance-history-pager-button"
+                        disabled={installedAppHistoryPageIndex >= installedAppHistoryPageCount - 1}
+                        onClick={() =>
+                          setInstalledAppHistoryPageIndex((current) =>
+                            Math.min(installedAppHistoryPageCount - 1, current + 1)
+                          )
+                        }
+                        type="button"
+                      >
+                        Older 10
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="settings-maintenance-history-chart">
                   <div
                     className="settings-maintenance-history-histogram"
                     role="img"
-                    aria-label="Apps added to and removed from the headset across the last 7 scans"
+                    aria-label="Apps added to and removed from the headset across the selected scan page"
                   >
                     <div
                       className="settings-maintenance-history-bars"
@@ -6574,10 +6692,12 @@ function SettingsView(props: {
                       }}
                     >
                       {settingsHistoryBars.map((point) => (
-                        <div
-                          className="settings-maintenance-history-bar-column"
+                        <button
+                          className="settings-maintenance-history-bar-column settings-maintenance-history-bar-column-button"
                           key={point.day.scannedAt}
+                          onClick={() => setSelectedHistoryScannedAt(point.day.scannedAt)}
                           title={`${point.scannedAtLabel}: +${point.day.addedCount} / -${point.day.removedCount}, ${point.day.visibleAppCount} apps & games${point.day.hiddenPackageCount ? `, ${point.day.hiddenPackageCount} hidden packages` : ''}`}
+                          type="button"
                         >
                           <div className="settings-maintenance-history-bar-zone is-positive">
                             {point.day.addedCount > 0 ? (
@@ -6606,10 +6726,8 @@ function SettingsView(props: {
                               </span>
                             ) : null}
                           </div>
-                          <div className="settings-maintenance-history-axis-label">
-                          {point.label}
-                          </div>
-                        </div>
+                          <div className="settings-maintenance-history-axis-label">{point.label}</div>
+                        </button>
                       ))}
                     </div>
                     <div className="settings-maintenance-history-current">
@@ -6631,7 +6749,8 @@ function SettingsView(props: {
                       Removed
                     </span>
                   </div>
-                </div>
+                  </div>
+                </>
               ) : (
                 <div className="empty-state inventory-history-empty-state settings-maintenance-history-empty-state">
                   <strong>No installed-app history yet.</strong>
@@ -6646,6 +6765,18 @@ function SettingsView(props: {
             )}
           </div>
         </div>
+        {selectedHistoryDay
+          ? createPortal(
+              <InstalledAppHistoryDialog
+                day={selectedHistoryDay}
+                previousDay={selectedHistoryPreviousDay}
+                selectedDeviceId={selectedDeviceId}
+                headsetActionLog={headsetActionLog}
+                onClose={() => setSelectedHistoryScannedAt(null)}
+              />,
+              document.body
+            )
+          : null}
       </section>
 
     </section>
@@ -6845,6 +6976,119 @@ function OrphanedDataDialog(props: {
           </button>
         </div>
         <OrphanedDataContent {...orphanedDataProps} />
+      </section>
+    </>
+  )
+}
+
+function InstalledAppHistoryDialog(props: {
+  day: InstalledAppHistoryDay | null
+  previousDay: InstalledAppHistoryDay | null
+  selectedDeviceId: string | null
+  headsetActionLog: HeadsetActionLogResponse | null
+  onClose: () => void
+}) {
+  const { day, previousDay, selectedDeviceId, headsetActionLog, onClose } = props
+
+  if (!day) {
+    return null
+  }
+
+  return (
+    <>
+      <div className="library-scan-backdrop" onClick={onClose} />
+      <section
+        className="library-support-dialog surface-panel settings-maintenance-history-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Installed app scan details"
+      >
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Scan Details</p>
+            <h2>{new Date(day.scannedAt).toLocaleString()}</h2>
+            <p className="section-copy compact settings-section-copy-nowrap">
+              {day.addedCount || day.removedCount
+                ? `Compared to the previous scan: +${day.addedCount} added, -${day.removedCount} removed.`
+                : 'This scan had no app count changes relative to the previous scan.'}
+            </p>
+          </div>
+          <button className="close-pill" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+
+        <div className="settings-maintenance-history-dialog-summary">
+          <div className="settings-maintenance-history-dialog-summary-card">
+            <span>Tracked packages</span>
+            <strong>{day.appCount}</strong>
+          </div>
+          <div className="settings-maintenance-history-dialog-summary-card">
+            <span>Visible apps</span>
+            <strong>{day.visibleAppCount}</strong>
+          </div>
+          <div className="settings-maintenance-history-dialog-summary-card">
+            <span>Hidden packages</span>
+            <strong>{day.hiddenPackageCount}</strong>
+          </div>
+          <div className="settings-maintenance-history-dialog-summary-card">
+            <span>System apps</span>
+            <strong>{day.systemAppCount}</strong>
+          </div>
+        </div>
+
+        <div className="settings-maintenance-history-dialog-columns">
+          <section className="settings-maintenance-history-dialog-column">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Added</p>
+                <h3>{day.addedCount}</h3>
+              </div>
+            </div>
+            {day.addedApps.length ? (
+              <div className="settings-maintenance-history-dialog-list">
+                {day.addedApps.map((entry) => (
+                  <article className="settings-maintenance-history-dialog-entry" key={`added-${entry.packageId}`}>
+                    <strong>{formatInstalledAppScanChangeEntry(entry)}</strong>
+                    <code>{entry.packageId}</code>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state settings-maintenance-history-dialog-empty">
+                <strong>No apps were added in this scan.</strong>
+                <p>The headset inventory did not gain any new titles compared to the previous refresh.</p>
+              </div>
+            )}
+          </section>
+
+          <section className="settings-maintenance-history-dialog-column">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Removed</p>
+                <h3>{day.removedCount}</h3>
+              </div>
+            </div>
+            {day.removedApps.length ? (
+              <div className="settings-maintenance-history-dialog-list">
+                {day.removedApps.map((entry) => (
+                  <article className="settings-maintenance-history-dialog-entry" key={`removed-${entry.packageId}`}>
+                    <strong>{formatInstalledAppScanChangeEntry(entry)}</strong>
+                    <code>{entry.packageId}</code>
+                    <p className="settings-maintenance-history-dialog-cause">
+                      {formatInstalledAppRemovalCause(entry, day, previousDay, selectedDeviceId, headsetActionLog)}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state settings-maintenance-history-dialog-empty">
+                <strong>No apps were removed in this scan.</strong>
+                <p>The headset inventory did not lose any titles compared to the previous refresh.</p>
+              </div>
+            )}
+          </section>
+        </div>
       </section>
     </>
   )
@@ -7998,6 +8242,7 @@ export function WireframeShell(props: WireframeShellProps) {
               backupStorageIndex={backupStorageIndex}
               gameSavesPathStats={gameSavesPathStats}
               deviceAppsResponse={deviceAppsResponse}
+              headsetActionLog={headsetActionLog}
               selectedDeviceId={selectedDeviceId}
               deviceLeftoverResponse={deviceLeftoverResponse}
               deviceLeftoverBusy={deviceLeftoverBusy}

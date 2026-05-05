@@ -53,6 +53,7 @@
 
 - Shared Live queue for scans, installs, downloads, dependency setup, backups, deletes, and failures.
 - Headset Activity panel in Live that appears for new headset-operation failures and summarizes recent install/connect/uninstall activity.
+- Headset App Scan History popup that exposes the added and removed app names for each installed-app comparison.
 - Dedicated headset activity review dialog with filters, detail expansion, and reboot event support.
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
 - Shared drawer pattern for item detail interaction.
@@ -103,7 +104,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.8.2`
+Current documented release line: `0.8.3`
 
 ## Product Position
 

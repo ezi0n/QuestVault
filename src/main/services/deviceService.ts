@@ -28,6 +28,7 @@ import type {
 } from '@shared/types/ipc'
 import { dependencyService } from './dependencyService'
 import { headsetActionLogService, type HeadsetActionContext } from './headsetActionLogService'
+import { metaStoreService } from './metaStoreService'
 
 const execFileAsync = promisify(execFile)
 const PLATFORM_PACKAGE_PREFIXES = ['com.android.', 'com.oculus.', 'com.meta.', 'com.facebook.']
@@ -57,14 +58,24 @@ interface InstalledAppScanSnapshot {
   appCount: number
   systemAppCount: number
   packageIds: string[]
+  packageDisplayNamesById: Record<string, string>
 }
 
 interface InstalledAppScanHistoryStore {
-  version: 1
+  version: 2
   snapshots: InstalledAppScanSnapshot[]
 }
 
-const INSTALLED_APP_SCAN_HISTORY_VERSION = 1
+interface StoredInstalledAppScanSnapshot {
+  serial: string
+  scannedAt: string
+  appCount: number
+  systemAppCount: number
+  packageIds: unknown[]
+  packageDisplayNamesById?: unknown
+}
+
+const INSTALLED_APP_SCAN_HISTORY_VERSION = 2
 const INSTALLED_APP_SCAN_HISTORY_LIMIT_PER_SERIAL = 90
 
 class DeviceService {
@@ -117,6 +128,130 @@ class DeviceService {
     return `${year}-${month}-${day}`
   }
 
+  private normalizePackageDisplayName(value: unknown, fallback: string): string {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (trimmed) {
+        return trimmed
+      }
+    }
+
+    return fallback
+  }
+
+  private normalizePackageDisplayNameMap(value: unknown): Record<string, string> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {}
+    }
+
+    const candidate = value as Record<string, unknown>
+    const normalized: Record<string, string> = {}
+
+    for (const [packageId, displayName] of Object.entries(candidate)) {
+      const normalizedPackageId = packageId.trim().toLowerCase()
+      if (!normalizedPackageId) {
+        continue
+      }
+
+      normalized[normalizedPackageId] = this.normalizePackageDisplayName(displayName, packageId.trim())
+    }
+
+    return normalized
+  }
+
+  private async resolvePackageDisplayNames(packageIds: string[]): Promise<Record<string, string>> {
+    const normalizedPackageIds = Array.from(new Set(packageIds.map((packageId) => packageId.trim()).filter(Boolean)))
+    const resolved: Record<string, string> = {}
+    const chunkSize = 48
+
+    for (let offset = 0; offset < normalizedPackageIds.length; offset += chunkSize) {
+      const chunk = normalizedPackageIds.slice(offset, offset + chunkSize)
+      const response = await metaStoreService.peekCachedMatchesByPackageIds(chunk)
+
+      for (const [packageId, summary] of Object.entries(response.matches)) {
+        const normalizedPackageId = packageId.trim().toLowerCase()
+        if (!normalizedPackageId) {
+          continue
+        }
+
+        resolved[normalizedPackageId] = this.normalizePackageDisplayName(summary.title, packageId.trim())
+      }
+    }
+
+    return resolved
+  }
+
+  private async backfillInstalledAppScanSnapshots(
+    snapshots: Array<{
+      serial: string
+      scannedAt: string
+      appCount: number
+      systemAppCount: number
+      packageIds: string[]
+      packageDisplayNamesById?: Record<string, string> | null
+    }>
+  ): Promise<InstalledAppScanSnapshot[]> {
+    const baseSnapshots = snapshots.map((snapshot) => {
+      const packageIds = Array.from(
+        new Set(snapshot.packageIds.map((packageId) => packageId.trim()).filter(Boolean).sort((left, right) => left.localeCompare(right)))
+      )
+      const packageDisplayNamesById = this.normalizePackageDisplayNameMap(snapshot.packageDisplayNamesById)
+
+      return {
+        serial: snapshot.serial,
+        scannedAt: snapshot.scannedAt,
+        appCount: snapshot.appCount,
+        systemAppCount: snapshot.systemAppCount,
+        packageIds,
+        packageDisplayNamesById
+      }
+    })
+
+    const knownDisplayNamesByPackageId = new Map<string, string>()
+    for (const snapshot of baseSnapshots) {
+      for (const [packageId, displayName] of Object.entries(snapshot.packageDisplayNamesById)) {
+        if (displayName.trim()) {
+          knownDisplayNamesByPackageId.set(packageId, displayName.trim())
+        }
+      }
+    }
+
+    const packageIdsNeedingLookup = Array.from(
+      new Set(
+        baseSnapshots.flatMap((snapshot) =>
+          snapshot.packageIds
+            .map((packageId) => packageId.trim().toLowerCase())
+            .filter((packageId) => !knownDisplayNamesByPackageId.has(packageId))
+        )
+      )
+    )
+    const cachedDisplayNames = packageIdsNeedingLookup.length
+      ? await this.resolvePackageDisplayNames(packageIdsNeedingLookup)
+      : {}
+
+    return baseSnapshots.map((snapshot) => {
+      const packageDisplayNamesById: Record<string, string> = { ...snapshot.packageDisplayNamesById }
+
+      for (const packageId of snapshot.packageIds) {
+        const normalizedPackageId = packageId.trim().toLowerCase()
+        if (!normalizedPackageId) {
+          continue
+        }
+
+        packageDisplayNamesById[normalizedPackageId] =
+          packageDisplayNamesById[normalizedPackageId] ??
+          knownDisplayNamesByPackageId.get(normalizedPackageId) ??
+          cachedDisplayNames[normalizedPackageId] ??
+          packageId.trim()
+      }
+
+      return {
+        ...snapshot,
+        packageDisplayNamesById
+      }
+    })
+  }
+
   private async writeJsonFile(targetPath: string, value: unknown): Promise<void> {
     const previousWrite = this.pendingJsonWrites.get(targetPath) ?? Promise.resolve()
     const nextWrite = previousWrite
@@ -144,24 +279,39 @@ class DeviceService {
 
     try {
       const raw = await readFile(historyPath, 'utf8')
-      const parsed = JSON.parse(raw) as Partial<InstalledAppScanHistoryStore>
-      const snapshots = Array.isArray(parsed.snapshots)
-        ? parsed.snapshots.filter((entry): entry is InstalledAppScanSnapshot => {
-            return (
-              Boolean(entry) &&
-              typeof entry.serial === 'string' &&
-              typeof entry.scannedAt === 'string' &&
-              typeof entry.appCount === 'number' &&
-              typeof entry.systemAppCount === 'number' &&
-              Array.isArray(entry.packageIds)
-            )
-          })
-        : []
-
-      return {
-        version: INSTALLED_APP_SCAN_HISTORY_VERSION,
-        snapshots
+      const parsed = JSON.parse(raw) as Partial<InstalledAppScanHistoryStore> & {
+        snapshots?: StoredInstalledAppScanSnapshot[]
       }
+      const rawSnapshots = Array.isArray(parsed.snapshots) ? parsed.snapshots : []
+      const snapshots = rawSnapshots.filter(
+        (entry) =>
+          Boolean(entry) &&
+          typeof entry.serial === 'string' &&
+          typeof entry.scannedAt === 'string' &&
+          typeof entry.appCount === 'number' &&
+          typeof entry.systemAppCount === 'number' &&
+          Array.isArray(entry.packageIds)
+      )
+      const normalizedSnapshots = await this.backfillInstalledAppScanSnapshots(
+        snapshots.map((entry) => ({
+          serial: entry.serial,
+          scannedAt: entry.scannedAt,
+          appCount: entry.appCount,
+          systemAppCount: entry.systemAppCount,
+          packageIds: entry.packageIds.filter((packageId): packageId is string => typeof packageId === 'string'),
+          packageDisplayNamesById: entry.packageDisplayNamesById ?? null
+        }))
+      )
+      const store: InstalledAppScanHistoryStore = {
+        version: INSTALLED_APP_SCAN_HISTORY_VERSION,
+        snapshots: normalizedSnapshots
+      }
+
+      if (parsed.version !== INSTALLED_APP_SCAN_HISTORY_VERSION) {
+        await this.writeJsonFile(historyPath, store)
+      }
+
+      return store
     } catch {
       return {
         version: INSTALLED_APP_SCAN_HISTORY_VERSION,
@@ -193,7 +343,21 @@ class DeviceService {
       addedCount: addedPackages.length,
       removedCount: removedPackages.length,
       addedPackages,
-      removedPackages
+      removedPackages,
+      addedApps: addedPackages.map((packageId) => ({
+        packageId,
+        displayName: this.normalizePackageDisplayName(
+          nextSnapshot.packageDisplayNamesById[packageId.trim().toLowerCase()],
+          packageId
+        )
+      })),
+      removedApps: removedPackages.map((packageId) => ({
+        packageId,
+        displayName: this.normalizePackageDisplayName(
+          previousSnapshot.packageDisplayNamesById[packageId.trim().toLowerCase()],
+          packageId
+        )
+      }))
     }
   }
 
@@ -230,7 +394,9 @@ class DeviceService {
         hiddenPackageCount,
         systemAppCount: snapshot.systemAppCount,
         addedCount: delta?.addedCount ?? 0,
-        removedCount: delta?.removedCount ?? 0
+        removedCount: delta?.removedCount ?? 0,
+        addedApps: delta?.addedApps ?? [],
+        removedApps: delta?.removedApps ?? []
       }
     })
 
@@ -258,12 +424,22 @@ class DeviceService {
     const normalizedPackageIds = Array.from(
       new Set(apps.map((app) => app.packageId.trim()).filter(Boolean).sort((left, right) => left.localeCompare(right)))
     )
+    const packageDisplayNamesById = Object.fromEntries(
+      apps.map((app) => {
+        const packageId = app.packageId.trim()
+        return [
+          packageId.toLowerCase(),
+          this.normalizePackageDisplayName(app.label ?? app.inferredLabel, packageId)
+        ] as const
+      })
+    )
     const snapshot: InstalledAppScanSnapshot = {
       serial,
       scannedAt,
       appCount: apps.length,
       systemAppCount,
-      packageIds: normalizedPackageIds
+      packageIds: normalizedPackageIds,
+      packageDisplayNamesById
     }
 
     const previousSnapshot =

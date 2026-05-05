@@ -1005,6 +1005,29 @@ input {
   font-size: 0.72rem;
 }
 
+.settings-maintenance-history-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+
+.settings-maintenance-history-pager-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings-maintenance-history-pager-button {
+  min-height: 36px;
+  padding: 8px 12px;
+  font-size: 0.74rem;
+}
+
 .settings-maintenance-history-chart {
   display: grid;
   gap: 1px;
@@ -1041,6 +1064,42 @@ input {
   align-items: stretch;
   justify-items: center;
   min-width: 0;
+}
+
+.settings-maintenance-history-bar-column-button {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+  border-radius: 14px;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.settings-maintenance-history-bar-column-button:hover,
+.settings-maintenance-history-bar-column-button:focus-visible {
+  background: rgba(255, 255, 255, 0.028);
+  transform: translateY(-1px);
+}
+
+.settings-maintenance-history-bar-column-button:focus-visible {
+  outline: 2px solid rgba(255, 209, 119, 0.55);
+  outline-offset: 2px;
+}
+
+.settings-maintenance-history-bar-column-button:focus-visible .settings-maintenance-history-total,
+.settings-maintenance-history-bar-column-button:hover .settings-maintenance-history-total {
+  opacity: 1;
+}
+
+.settings-maintenance-history-bar-column-button:hover .settings-maintenance-history-axis-label,
+.settings-maintenance-history-bar-column-button:focus-visible .settings-maintenance-history-axis-label {
+  color: var(--ink);
 }
 
 .settings-maintenance-history-bar-zone {
@@ -1211,6 +1270,105 @@ input {
 
 .settings-maintenance-history-legend-swatch.is-removed {
   background: rgba(255, 148, 115, 0.95);
+}
+
+.settings-maintenance-history-dialog {
+  width: min(1080px, calc(100vw - 48px));
+}
+
+.settings-maintenance-history-dialog-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-maintenance-history-dialog-summary-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-maintenance-history-dialog-summary-card span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings-maintenance-history-dialog-summary-card strong {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.settings-maintenance-history-dialog-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.settings-maintenance-history-dialog-column {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-maintenance-history-dialog-list {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.settings-maintenance-history-dialog-entry {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.02);
+}
+
+.settings-maintenance-history-dialog-entry strong {
+  font-size: 0.95rem;
+  line-height: 1.3;
+}
+
+.settings-maintenance-history-dialog-entry code {
+  color: var(--muted);
+  font-size: 0.76rem;
+  word-break: break-all;
+}
+
+.settings-maintenance-history-dialog-cause {
+  margin: 0;
+  color: rgba(187, 201, 216, 0.9);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.settings-maintenance-history-dialog-empty {
+  min-height: 154px;
+}
+
+.settings-maintenance-history-dialog-empty strong {
+  font-size: 0.96rem;
+}
+
+@media (max-width: 980px) {
+  .settings-maintenance-history-dialog-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-maintenance-history-dialog-columns {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-maintenance-indicator {

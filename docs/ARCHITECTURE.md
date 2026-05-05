@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.8.2`
+Current documented application version: `0.8.3`
 
 ## Runtime Shape
 
@@ -37,7 +37,7 @@ The device service is responsible for headset-facing operations:
 - enrich device summaries with serial, storage, and HorizonOS details
 - scan installed packages
 - classify user-installed and system packages
-- persist installed-app scan snapshots and compute scan deltas/history for maintenance reporting
+- persist installed-app scan snapshots and compute scan deltas/history for maintenance reporting, including cached per-scan app names for delta popups
 - uninstall installed apps
 - back up installed APKs
 - reboot connected devices through ADB

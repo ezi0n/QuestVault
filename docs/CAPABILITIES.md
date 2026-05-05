@@ -57,7 +57,7 @@
 - Scan installed headset applications.
 - Distinguish user-installed counts from system package counts.
 - Show installed inventory in grid or list mode.
-- Record installed-app scan snapshots for recent-history comparison.
+- Record installed-app scan snapshots for recent-history comparison, including per-scan app names for added and removed titles.
 - Back up installed APKs.
 - Uninstall installed apps.
 - Review storage and leftover-data summary metrics above the inventory surface.
@@ -80,7 +80,7 @@
 - Configure Local Library, Backup Storage, and Game Saves paths.
 - Rescan indexed paths.
 - Review storage totals and content metrics.
-- Review a headset app scan delta histogram for additions/removals across recent scans.
+- Review a headset app scan delta histogram for additions/removals across recent scans and open a detail popup that calls out the app names behind each delta.
 - Open `Library Diagnostics` for raw index inspection and cleanup.
 - Open `Managed Dependencies` to inspect ADB / 7-Zip readiness.
 - Open `Orphaned OBB / Data` to inspect leftover headset storage.

@@ -95,6 +95,13 @@ export interface InstalledAppScanDelta {
   removedCount: number
   addedPackages: string[]
   removedPackages: string[]
+  addedApps: InstalledAppScanChangeEntry[]
+  removedApps: InstalledAppScanChangeEntry[]
+}
+
+export interface InstalledAppScanChangeEntry {
+  packageId: string
+  displayName: string
 }
 
 export interface InstalledAppHistoryDay {
@@ -106,6 +113,8 @@ export interface InstalledAppHistoryDay {
   systemAppCount: number
   addedCount: number
   removedCount: number
+  addedApps: InstalledAppScanChangeEntry[]
+  removedApps: InstalledAppScanChangeEntry[]
 }
 
 export interface InstalledAppHistoryResponse {
