@@ -2558,7 +2558,7 @@ function GamesView(props: {
   const selectedGameLowerLibraryVersions = selectedGame?.lowerLibraryVersions ?? []
   const selectedGameHasLowerLibraryVersions = selectedGameLowerLibraryVersions.length > 0
   const selectedLowerLibraryVersion =
-    selectedGameLowerLibraryVersions.find((entry) => entry.id === selectedLowerLibraryVersionId) ?? selectedGameLowerLibraryVersions[0] ?? null
+    selectedGameLowerLibraryVersions.find((entry) => entry.id === selectedLowerLibraryVersionId) ?? null
   const selectedGameLowerVersionPurgeBusy =
     purgeLowerVersionsBusy ||
     selectedGameLowerLibraryVersions.some((entry) => purgeLibraryItemBusyId === entry.itemId)
@@ -2768,9 +2768,7 @@ function GamesView(props: {
     }
 
     setSelectedLowerLibraryVersionId((current) =>
-      current && selectedGameLowerLibraryVersions.some((entry) => entry.id === current)
-        ? current
-        : selectedGameLowerLibraryVersions[0]?.id ?? null
+      current && selectedGameLowerLibraryVersions.some((entry) => entry.id === current) ? current : null
     )
   }, [selectedGameLowerLibraryVersions])
 
@@ -2916,6 +2914,15 @@ function GamesView(props: {
     } finally {
       setPurgeLowerVersionsBusy(false)
     }
+  }
+
+  async function installSelectedLowerLibraryVersion() {
+    if (!selectedLowerLibraryVersion?.itemId) {
+      return
+    }
+
+    setSelectedGameId(null)
+    await onInstallLocalLibraryItem(selectedLowerLibraryVersion.itemId)
   }
 
   async function installSelectedLocalLibraryItem() {
@@ -4442,7 +4449,7 @@ function GamesView(props: {
                   <div className="games-version-maintenance">
                     <div className="games-version-maintenance-copy">
                       <strong>Older local versions are hidden in Apps &amp; Games.</strong>
-                      <span>The newest version stays visible here. Pick one older payload below if you want to remove it.</span>
+                      <span>The newest version stays visible here. Pick one older payload below if you want to install or remove it.</span>
                     </div>
                     <div className="games-drawer-meta">
                       {selectedGameLowerLibraryVersions.map((entry) => (
@@ -4463,9 +4470,27 @@ function GamesView(props: {
                       ))}
                     </div>
                     {selectedLowerLibraryVersion ? (
-                      <span className="games-version-maintenance-selection">
-                        Selected: {selectedLowerLibraryVersion.versionLabel}
-                      </span>
+                      <div className="games-version-maintenance-selection">
+                        <span>Selected: {selectedLowerLibraryVersion.versionLabel}</span>
+                        <div className="stack-xs">
+                          <button
+                            className="action-pill"
+                            disabled={!selectedDeviceId}
+                            onClick={() => void installSelectedLowerLibraryVersion()}
+                            type="button"
+                          >
+                            Install Selected Version
+                          </button>
+                          <button
+                            className="action-pill action-pill-danger"
+                            disabled={purgeLowerVersionsBusy}
+                            onClick={() => void purgeSelectedLowerLibraryVersion()}
+                            type="button"
+                          >
+                            {purgeLowerVersionsBusy ? 'Removing…' : 'Remove Selected Version'}
+                          </button>
+                        </div>
+                      </div>
                     ) : null}
                   </div>
                 ) : null}
