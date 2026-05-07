@@ -2496,11 +2496,14 @@ function GamesView(props: {
     const matchingLibraryItem = getMatchingVrSrcLibraryItem(item)
     const highestLibraryVersion = matchingLibraryItem?.libraryVersion ?? matchingLibraryItem?.libraryVersionCode ?? null
     const isUpdate = itemStatus?.isUpdate ?? false
+    const isInstalled = installedPackageIds.has(item.packageName.toLowerCase())
     const isInLibrary = itemStatus?.isInLibrary ?? false
     const actionBusy = vrSrcActionBusyReleaseNames.includes(item.releaseName)
-    const statusLabel = isUpdate ? 'Update' : isInLibrary ? 'In Library' : 'New'
+    const statusLabel = isUpdate ? 'Update' : isInstalled ? 'Installed' : isInLibrary ? 'In Library' : 'New'
     const statusClassName = isUpdate
       ? 'status-pill status-pending'
+      : isInstalled
+        ? 'status-pill status-ready library-status-pill'
       : isInLibrary
         ? 'status-pill status-ready'
         : 'status-pill status-neutral'
@@ -2509,6 +2512,7 @@ function GamesView(props: {
       item,
       highestLibraryVersion,
       isUpdate,
+      isInstalled,
       isInLibrary,
       actionBusy,
       statusLabel,
@@ -2522,6 +2526,12 @@ function GamesView(props: {
     null
   const selectedVrSrcStatus = selectedVrSrcItem ? vrSrcItemStatusByReleaseName.get(selectedVrSrcItem.releaseName) : null
   const selectedVrSrcMatchingLibraryItem = selectedVrSrcItem ? getMatchingVrSrcLibraryItem(selectedVrSrcItem) : null
+  const selectedVrSrcIsInstalled = Boolean(
+    selectedVrSrcItem && installedPackageIds.has(selectedVrSrcItem.packageName.toLowerCase())
+  )
+  const selectedVrSrcInstalledVersion = selectedVrSrcItem
+    ? installedVersionsByPackageId.get(selectedVrSrcItem.packageName.toLowerCase()) ?? null
+    : null
   const selectedVrSrcLibraryCoversRemote = Boolean(
     selectedVrSrcItem &&
       selectedVrSrcMatchingLibraryItem &&
@@ -3417,7 +3427,7 @@ function GamesView(props: {
                       } as CSSProperties
                     }
                   >
-                    {filteredVrSrcEntries.map(({ item, isUpdate, isInLibrary, statusLabel, statusClassName, displayRemoteVersion }) => (
+                    {filteredVrSrcEntries.map(({ item, isUpdate, isInstalled, isInLibrary, statusLabel, statusClassName, displayRemoteVersion }) => (
                       <article
                         className={
                           selectedVrSrcReleaseName === item.releaseName
@@ -3461,12 +3471,21 @@ function GamesView(props: {
                               className={
                                 isUpdate
                                   ? `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-update`
-                                  : isInLibrary
-                                    ? `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-library`
-                                    : `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-new`
+                                  : isInstalled
+                                    ? 'status-pill status-ready game-action-indicator game-gallery-state'
+                                    : isInLibrary
+                                      ? `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-library`
+                                      : `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-new`
                               }
                             >
-                              {statusLabel}
+                              {isInstalled ? (
+                                <>
+                                  <span aria-hidden="true" className="game-action-indicator-check" />
+                                  <span>{statusLabel}</span>
+                                </>
+                              ) : (
+                                statusLabel
+                              )}
                             </span>
                           </div>
                         </div>
@@ -3965,6 +3984,12 @@ function GamesView(props: {
                   <span>Package</span>
                   <strong>{selectedVrSrcItem.packageName}</strong>
                 </div>
+                {selectedVrSrcInstalledVersion ? (
+                  <div className="signal-chip games-drawer-fact-wide">
+                    <span>Installed</span>
+                    <strong>{formatVersionLabel(selectedVrSrcInstalledVersion) ?? selectedVrSrcInstalledVersion}</strong>
+                  </div>
+                ) : null}
               </div>
             </div>
             <div className="stack-sm">
@@ -3978,6 +4003,8 @@ function GamesView(props: {
                   ? 'Working…'
                   : selectedVrSrcStatus?.isUpdate
                     ? 'Update Library'
+                    : selectedVrSrcIsInstalled
+                      ? 'Already Installed'
                     : selectedVrSrcLibraryCoversRemote
                       ? 'Already in Library'
                       : 'Download Only'}
