@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.9.1`
+Current documented application version: `0.9.2`
 
 ## Overview
 
