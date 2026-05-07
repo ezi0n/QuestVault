@@ -219,8 +219,8 @@ interface WireframeShellProps {
 }
 
 const primaryTabs: { id: PrimaryTab; label: string; note: string }[] = [
-  { id: 'games', label: 'Apps & Games', note: 'Manage your Library' },
-  { id: 'saves', label: 'Game Saves', note: 'Create, restore and manage your saves' },
+  { id: 'games', label: 'Apps & Games', note: 'Manage Your Library' },
+  { id: 'saves', label: 'Game Saves', note: 'Create, Restore and Manage Your saves' },
   { id: 'manager', label: 'ADB Manager', note: 'ADB, ADB-over-WiFi, and Live Devices' },
   { id: 'settings', label: 'Settings', note: 'Paths & Maintenance' }
 ]
