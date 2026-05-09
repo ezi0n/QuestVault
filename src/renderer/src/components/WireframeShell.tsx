@@ -220,7 +220,7 @@ interface WireframeShellProps {
 
 const primaryTabs: { id: PrimaryTab; label: string; note: string }[] = [
   { id: 'games', label: 'Apps & Games', note: 'Manage Your Library' },
-  { id: 'saves', label: 'Game Saves', note: 'Create, Restore and Manage Your saves' },
+  { id: 'saves', label: 'Game Saves', note: 'Create, Restore and Manage Your Saves' },
   { id: 'manager', label: 'ADB Manager', note: 'ADB, ADB-over-WiFi, and Live Devices' },
   { id: 'settings', label: 'Settings', note: 'Paths & Maintenance' }
 ]
@@ -287,6 +287,7 @@ type LibraryGameRow = {
   sizeBytes: number | null
   action: string
   note: string
+  indexedNote: string
   release: string
   cta: string
   fallback: string
@@ -2066,6 +2067,8 @@ function GamesView(props: {
   const [selectedVrSrcReleaseName, setSelectedVrSrcReleaseName] = useState<string | null>(null)
   const [selectedVrSrcDetails, setSelectedVrSrcDetails] = useState<VrSrcItemDetailsResponse | null>(null)
   const [selectedVrSrcDetailsBusy, setSelectedVrSrcDetailsBusy] = useState(false)
+  const [selectedGameVrSrcDetails, setSelectedGameVrSrcDetails] = useState<VrSrcItemDetailsResponse | null>(null)
+  const [selectedGameVrSrcDetailsBusy, setSelectedGameVrSrcDetailsBusy] = useState(false)
   const [gamesFilter, setGamesFilter] = useState<GamesFilterState>('all')
   const [gamesSearch, setGamesSearch] = useState('')
   const [vrSrcFilter, setVrSrcFilter] = useState<'all' | 'new'>('all')
@@ -2134,6 +2137,15 @@ function GamesView(props: {
     }
 
     return artwork
+  }, new Map<string, string>())
+  const vrSrcNoteByPackageId = (vrSrcCatalog?.items ?? []).reduce((notes, item) => {
+    const packageId = item.packageName.trim().toLowerCase()
+    const note = item.note?.trim() ?? ''
+    if (packageId && note && !notes.has(packageId)) {
+      notes.set(packageId, note)
+    }
+
+    return notes
   }, new Map<string, string>())
   const libraryGameRows = collapseLibraryGameRows(
     (localLibraryIndex?.items ?? [])
@@ -2216,6 +2228,7 @@ function GamesView(props: {
         sizeBytes: metaStoreMatch?.sizeBytes ?? item.sizeBytes,
         action: hasLibraryUpdate ? 'Update' : isInstalled ? 'Installed' : item.installReady ? 'Install' : 'Inspect',
         note: display.note,
+        indexedNote: item.note,
         release: display.release,
         cta: hasLibraryUpdate
           ? 'Upgrade Installed Version from Local Library'
@@ -2307,6 +2320,7 @@ function GamesView(props: {
           sizeBytes: metaStoreMatch?.sizeBytes ?? item.sizeBytes,
           action: isInstalled ? 'Installed' : 'Inspect',
           note: display.note,
+          indexedNote: item.note,
           release: display.release.replace(/^Indexed from /, 'Indexed from backup storage at '),
           cta: isInstalled ? 'Already Installed on Headset' : 'Review Backup Payload',
           fallback: 'Review Backup Storage Entry',
@@ -2547,6 +2561,14 @@ function GamesView(props: {
   const trailerEmbedOrigin =
     typeof window !== 'undefined' && window.location.origin ? encodeURIComponent(window.location.origin) : null
   const selectedGame = filteredGameRows.find((game) => game.id === selectedGameId) ?? combinedGameRows.find((game) => game.id === selectedGameId) ?? null
+  const selectedGameMatchingVrSrcItem =
+    selectedGame?.source === 'library'
+      ? (selectedGame.packageIds
+          .map((packageId) =>
+            vrSrcItems.find((item) => item.packageName.toLowerCase() === packageId.toLowerCase()) ?? null
+          )
+          .find((value): value is VrSrcCatalogResponse['items'][number] => Boolean(value)) ?? null)
+      : null
   const effectiveSelectedGameDetails = applyManualMetadataOverride(
     manualStorePreview ?? selectedGameDetails,
     manualMetadataDraft,
@@ -2602,6 +2624,16 @@ function GamesView(props: {
   const selectedGameSupportedPlayerModes = effectiveSelectedGameDetails?.supportedPlayerModes ?? []
   const selectedGameComfortLevel = effectiveSelectedGameDetails?.comfortLevel ?? null
   const selectedGameTrailerVideoId = effectiveSelectedGameDetails?.youtubeTrailerVideoId ?? null
+  const selectedGameIndexedNote =
+    selectedGame?.source === 'library' && selectedGame.indexedNote.trim() ? selectedGame.indexedNote.trim() : null
+  const selectedGameVrSrcNote =
+    selectedGameVrSrcDetails?.note?.trim() ??
+    (selectedGame?.source === 'library'
+      ? (selectedGame.packageIds
+          .map((packageId) => vrSrcNoteByPackageId.get(packageId.toLowerCase()) ?? null)
+          .find((value): value is string => Boolean(value)) ?? null)
+      : null)
+  const selectedGameResolvedNote = selectedGameVrSrcNote ?? selectedGameIndexedNote
   const selectedGameRatingAverage = effectiveSelectedGameDetails?.ratingAverage ?? null
   const selectedGameRatingLabel = formatRatingAverage(selectedGameRatingAverage)
   const selectedGameRatingFillPercentage = getRatingFillPercentage(selectedGameRatingAverage)
@@ -2740,6 +2772,49 @@ function GamesView(props: {
       cancelled = true
     }
   }, [selectedVrSrcItem])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!selectedGameMatchingVrSrcItem) {
+      setSelectedGameVrSrcDetails(null)
+      setSelectedGameVrSrcDetailsBusy(false)
+      return
+    }
+
+    setSelectedGameVrSrcDetails({
+      releaseName: selectedGameMatchingVrSrcItem.releaseName,
+      note: selectedGameMatchingVrSrcItem.note,
+      trailerVideoId: null
+    })
+    setSelectedGameVrSrcDetailsBusy(true)
+
+    void window.api.vrsrc
+      .getItemDetails(selectedGameMatchingVrSrcItem.releaseName, selectedGameMatchingVrSrcItem.name)
+      .then((details) => {
+        if (!cancelled) {
+          setSelectedGameVrSrcDetails(details)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedGameVrSrcDetails({
+            releaseName: selectedGameMatchingVrSrcItem.releaseName,
+            note: selectedGameMatchingVrSrcItem.note,
+            trailerVideoId: null
+          })
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSelectedGameVrSrcDetailsBusy(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedGameMatchingVrSrcItem])
 
   const toggleGamesSort = (key: GamesSortKey) => {
     if (gamesSortKey === key) {
@@ -3219,7 +3294,7 @@ function GamesView(props: {
                 className="gallery-scale-control"
                 title="Temporarily change gallery density in Apps & Games and vrSrc. 1.0x = 4 cards, 1.25x = 5 cards, 1.5x = 6 cards."
               >
-                <span>Scale</span>
+                <span>Grid</span>
                 <input
                   aria-label="Gallery scale"
                   className="gallery-scale-slider"
@@ -4200,38 +4275,48 @@ function GamesView(props: {
                 </div>
               </div>
             </div>
-            {selectedGameTrailerVideoId || selectedGameDetailsBusy ? (
+            {selectedGameTrailerVideoId || selectedGameResolvedNote || selectedGameDetailsBusy ? (
               <div className="games-drawer-sections">
-                <section className="games-drawer-section-card">
-                  <div className="games-drawer-media-header">
-                    <span>Trailer</span>
-                    {selectedGameTrailerVideoId ? (
-                      <a
-                        className="games-drawer-inline-link"
-                        href={`https://www.youtube.com/watch?v=${selectedGameTrailerVideoId}`}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        Open on YouTube
-                      </a>
-                    ) : null}
-                  </div>
-                  {selectedGameTrailerVideoId ? (
-                    <div className="games-drawer-video-shell">
-                      <iframe
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        allowFullScreen
-                        referrerPolicy="strict-origin-when-cross-origin"
-                        src={`https://www.youtube-nocookie.com/embed/${selectedGameTrailerVideoId}?rel=0${trailerEmbedOrigin ? `&origin=${trailerEmbedOrigin}` : ''}`}
-                        title={`${selectedGame.title} trailer`}
-                      />
+                {selectedGameTrailerVideoId || selectedGameDetailsBusy ? (
+                  <section className="games-drawer-section-card">
+                    <div className="games-drawer-media-header">
+                      <span>Trailer</span>
+                      {selectedGameTrailerVideoId ? (
+                        <a
+                          className="games-drawer-inline-link"
+                          href={`https://www.youtube.com/watch?v=${selectedGameTrailerVideoId}`}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Open on YouTube
+                        </a>
+                      ) : null}
                     </div>
-                  ) : (
-                    <p className="games-drawer-section-paragraph">
-                      {selectedGameDetailsBusy ? 'Searching for trailer…' : 'No trailer available for this title.'}
-                    </p>
-                  )}
-                </section>
+                    {selectedGameTrailerVideoId ? (
+                      <div className="games-drawer-video-shell">
+                        <iframe
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          allowFullScreen
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          src={`https://www.youtube-nocookie.com/embed/${selectedGameTrailerVideoId}?rel=0${trailerEmbedOrigin ? `&origin=${trailerEmbedOrigin}` : ''}`}
+                          title={`${selectedGame.title} trailer`}
+                        />
+                      </div>
+                    ) : (
+                      <p className="games-drawer-section-paragraph">
+                        {selectedGameDetailsBusy ? 'Searching for trailer…' : 'No trailer available for this title.'}
+                      </p>
+                    )}
+                  </section>
+                ) : null}
+                {selectedGameResolvedNote ? (
+                  <section className="games-drawer-section-card">
+                    <span>Notes</span>
+                    <div className="games-drawer-section-card-content">
+                      <p className="games-drawer-section-paragraph">{selectedGameResolvedNote}</p>
+                    </div>
+                  </section>
+                ) : null}
               </div>
             ) : null}
             {selectedGame.source === 'library' && selectedGame.itemId ? (
