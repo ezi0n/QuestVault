@@ -488,6 +488,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<PrimaryTab>('games')
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsBusy, setSettingsBusy] = useState(false)
+  const [settingsPathBusyKey, setSettingsPathBusyKey] = useState<SettingsPathKey | null>(null)
   const [libraryRescanBusy, setLibraryRescanBusy] = useState(false)
   const [removeMissingLibraryItemBusyId, setRemoveMissingLibraryItemBusyId] = useState<string | null>(null)
   const [purgeLibraryItemBusyId, setPurgeLibraryItemBusyId] = useState<string | null>(null)
@@ -547,6 +548,7 @@ function App() {
   const [headsetActionLogBusy, setHeadsetActionLogBusy] = useState(false)
   const [isHeadsetActionLogVisible, setIsHeadsetActionLogVisible] = useState(false)
   const [isHeadsetActivityReviewOpen, setIsHeadsetActivityReviewOpen] = useState(false)
+  const [hasCompletedStartupUpdateCheck, setHasCompletedStartupUpdateCheck] = useState(false)
   const deviceResponseRef = useRef<DeviceListResponse | null>(null)
   const hasCompletedInitialScanRef = useRef(false)
   const deviceRefreshInFlightRef = useRef(false)
@@ -1083,6 +1085,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           actionLabel: null,
           actionUrl: null
         })
+      } finally {
+        setHasCompletedStartupUpdateCheck(true)
       }
     })()
   }, [])
@@ -1096,7 +1100,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }, [vrSrcActionBusyReleaseNames])
 
   useEffect(() => {
-    if (vrSrcSyncBusy || vrSrcInitialSyncAttemptedRef.current || !vrSrcStatus || !vrSrcCatalog) {
+    if (
+      !hasCompletedStartupUpdateCheck ||
+      vrSrcSyncBusy ||
+      vrSrcInitialSyncAttemptedRef.current ||
+      !vrSrcStatus ||
+      !vrSrcCatalog
+    ) {
       return
     }
 
@@ -1104,14 +1114,9 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       return
     }
 
-    const hasExistingCatalog = Boolean(vrSrcStatus.lastSyncAt || vrSrcCatalog.syncedAt || vrSrcCatalog.items.length)
-    if (hasExistingCatalog) {
-      return
-    }
-
     vrSrcInitialSyncAttemptedRef.current = true
     void syncVrSrcCatalog({ openPanelOnSuccess: false })
-  }, [vrSrcCatalog, vrSrcStatus, vrSrcSyncBusy])
+  }, [hasCompletedStartupUpdateCheck, vrSrcCatalog, vrSrcStatus, vrSrcSyncBusy])
 
   useEffect(() => {
     metaStoreMatchesByItemIdRef.current = metaStoreMatchesByItemId
@@ -2966,7 +2971,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }
 
   async function chooseSettingsPath(key: SettingsPathKey) {
-    setSettingsBusy(true)
+    setSettingsPathBusyKey(key)
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('scan', `settings-path-${key}`),
       title: formatSettingsPathLabel(key),
@@ -3026,12 +3031,12 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details: message
       })
     } finally {
-      setSettingsBusy(false)
+      setSettingsPathBusyKey((current) => (current === key ? null : current))
     }
   }
 
   async function clearSettingsPath(key: SettingsPathKey) {
-    setSettingsBusy(true)
+    setSettingsPathBusyKey(key)
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('cleanup', `settings-clear-${key}`),
       title: formatSettingsPathLabel(key),
@@ -3084,7 +3089,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details: message
       })
     } finally {
-      setSettingsBusy(false)
+      setSettingsPathBusyKey((current) => (current === key ? null : current))
     }
   }
 
@@ -4228,6 +4233,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onRetryQueueItem={retryLiveQueueItem}
       settings={settings}
       settingsBusy={settingsBusy}
+      settingsPathBusyKey={settingsPathBusyKey}
       libraryRescanBusy={libraryRescanBusy}
       removeMissingLibraryItemBusyId={removeMissingLibraryItemBusyId}
       purgeLibraryItemBusyId={purgeLibraryItemBusyId}

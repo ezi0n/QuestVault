@@ -609,6 +609,7 @@ export interface LocalLibraryIndexedItem {
   discoveryState: 'new' | 'changed' | 'existing' | 'missing'
   installReady: boolean
   sizeBytes: number
+  indexedAt: string
   modifiedAt: string
   childCount: number
   apkCount: number

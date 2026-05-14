@@ -1571,6 +1571,7 @@ class DeviceService {
               discoveryState: 'existing',
               installReady: true,
               sizeBytes: 0,
+              indexedAt: new Date().toISOString(),
               modifiedAt: new Date().toISOString(),
               childCount: 0,
               apkCount: 0,

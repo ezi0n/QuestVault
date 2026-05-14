@@ -126,6 +126,7 @@ interface WireframeShellProps {
   onRetryQueueItem: (itemId: string) => Promise<void>
   settings: AppSettings | null
   settingsBusy: boolean
+  settingsPathBusyKey: SettingsPathKey | null
   libraryRescanBusy: boolean
   removeMissingLibraryItemBusyId: string | null
   purgeLibraryItemBusyId: string | null
@@ -265,7 +266,7 @@ const gameFilters = [
 
 type GamesFilterId = (typeof gameFilters)[number]['id']
 type GamesFilterState = GamesFilterId | 'new'
-type GamesSortKey = 'title' | 'date' | 'size'
+type GamesSortKey = 'title' | 'date' | 'added' | 'size'
 type GamesSortDirection = 'asc' | 'desc'
 type GamesDisplayMode = ViewDisplayMode
 
@@ -302,6 +303,7 @@ type LibraryGameRow = {
   heroImageUri: string | null
   thumbnailUri: string | null
   installReady: boolean
+  indexedAt: string
   sourceLastUpdatedAt: string | null
   modifiedAt: string | null
   kind: LocalLibraryIndexedItem['kind']
@@ -1598,11 +1600,13 @@ function NoticeBanner(props: { notice: UiNotice; className?: string }) {
 
 function QueueRail(props: {
   items: LiveQueueItem[]
+  vrSrcQueuedItems: LiveQueueItem[]
   headsetActionLog: HeadsetActionLogResponse | null
   headsetActionLogBusy: boolean
   isHeadsetActionLogVisible: boolean
   isOpen: boolean
   onClose: () => void
+  onOpenVrSrcQueue: () => void
   onHideHeadsetActionLog: () => void
   onOpenHeadsetActivityReview: () => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
@@ -1612,11 +1616,13 @@ function QueueRail(props: {
 }) {
   const {
     items,
+    vrSrcQueuedItems,
     headsetActionLog,
     headsetActionLogBusy,
     isHeadsetActionLogVisible,
     isOpen,
     onClose,
+    onOpenVrSrcQueue,
     onHideHeadsetActionLog,
     onOpenHeadsetActivityReview,
     onPauseVrSrcTransfer,
@@ -1817,6 +1823,9 @@ function QueueRail(props: {
           <h2>Active Operations</h2>
         </div>
         <div className="queue-drawer-controls">
+          <button className="close-pill" onClick={onOpenVrSrcQueue} type="button">
+            Queue {vrSrcQueuedItems.length}
+          </button>
           <button className="close-pill" onClick={onClose} type="button">
             Close
           </button>
@@ -1974,6 +1983,54 @@ function QueueRail(props: {
         )}
       </div>
     </aside>
+  )
+}
+
+function VrSrcQueueDialog(props: {
+  isOpen: boolean
+  items: LiveQueueItem[]
+  onClose: () => void
+}) {
+  const { isOpen, items, onClose } = props
+
+  if (!isOpen) {
+    return null
+  }
+
+  return (
+    <>
+      <div className="library-scan-backdrop" onClick={onClose} />
+      <section className="library-support-dialog surface-panel" role="dialog" aria-modal="true" aria-label="vrSrc queue">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Remote Source</p>
+            <h2>Queued vrSrc Transfers</h2>
+            <p className="section-copy compact settings-section-copy-nowrap">
+              Waiting items will start automatically as soon as one of the three active download lanes frees up.
+            </p>
+          </div>
+          <button className="close-pill" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        {items.length ? (
+          <div className="settings-maintenance-history-dialog-list">
+            {items.map((item) => (
+              <article className="settings-maintenance-history-dialog-entry" key={item.id}>
+                <strong>{item.title}</strong>
+                <code>{item.subtitle}</code>
+                <p>{item.details}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state settings-maintenance-history-dialog-empty">
+            <strong>No vrSrc transfers are waiting right now.</strong>
+            <p>Up to three vrSrc downloads can run at once, and anything beyond that appears here until a slot opens.</p>
+          </div>
+        )}
+      </section>
+    </>
   )
 }
 
@@ -2261,6 +2318,7 @@ function GamesView(props: {
         filterTags,
         heroImageUri: display.heroImageUri,
         installReady: item.installReady,
+        indexedAt: item.indexedAt,
         sourceLastUpdatedAt: resolvedSourceLastUpdatedAt,
         modifiedAt: item.modifiedAt ?? null,
         kind: item.kind,
@@ -2346,6 +2404,7 @@ function GamesView(props: {
           filterTags,
           heroImageUri: display.heroImageUri,
           installReady: false,
+          indexedAt: item.indexedAt,
           sourceLastUpdatedAt: resolvedSourceLastUpdatedAt,
           modifiedAt: item.modifiedAt ?? null,
           kind: item.kind,
@@ -2374,6 +2433,17 @@ function GamesView(props: {
     if (gamesSortKey === 'date') {
       const leftDate = left.sourceLastUpdatedAt ? Date.parse(left.sourceLastUpdatedAt) : Number.NEGATIVE_INFINITY
       const rightDate = right.sourceLastUpdatedAt ? Date.parse(right.sourceLastUpdatedAt) : Number.NEGATIVE_INFINITY
+      const safeLeftDate = Number.isNaN(leftDate) ? Number.NEGATIVE_INFINITY : leftDate
+      const safeRightDate = Number.isNaN(rightDate) ? Number.NEGATIVE_INFINITY : rightDate
+
+      if (safeLeftDate !== safeRightDate) {
+        return gamesSortDirection === 'asc' ? safeLeftDate - safeRightDate : safeRightDate - safeLeftDate
+      }
+    }
+
+    if (gamesSortKey === 'added') {
+      const leftDate = left.indexedAt ? Date.parse(left.indexedAt) : Number.NEGATIVE_INFINITY
+      const rightDate = right.indexedAt ? Date.parse(right.indexedAt) : Number.NEGATIVE_INFINITY
       const safeLeftDate = Number.isNaN(leftDate) ? Number.NEGATIVE_INFINITY : leftDate
       const safeRightDate = Number.isNaN(rightDate) ? Number.NEGATIVE_INFINITY : rightDate
 
@@ -2826,14 +2896,20 @@ function GamesView(props: {
     setGamesSortDirection(key === 'title' ? 'asc' : 'desc')
   }
   const toggleLocalLibrarySortMode = () => {
-    if (gamesSortKey === 'date') {
-      setGamesSortKey('title')
-      setGamesSortDirection('asc')
+    if (gamesSortKey === 'title') {
+      setGamesSortKey('date')
+      setGamesSortDirection('desc')
       return
     }
 
-    setGamesSortKey('date')
-    setGamesSortDirection('desc')
+    if (gamesSortKey === 'date') {
+      setGamesSortKey('added')
+      setGamesSortDirection('desc')
+      return
+    }
+
+    setGamesSortKey('title')
+    setGamesSortDirection('asc')
   }
 
   useEffect(() => {
@@ -3727,11 +3803,22 @@ function GamesView(props: {
               <button
                 className="vrsrc-summary-pill"
                 onClick={toggleLocalLibrarySortMode}
-                title="Toggle Local Library sorting between title order and remote/source date order."
+                title="Cycle Local Library sorting between title, source/latest date, and added-to-library order."
                 type="button"
               >
                 <span className="eyebrow">Sort</span>
-                <strong>{gamesSortKey === 'date' ? 'Date' : 'Title'}</strong>
+                <strong>
+                  {gamesSortKey === 'date' ? 'Latest' : gamesSortKey === 'added' ? 'Added' : 'Title'}
+                </strong>
+              </button>
+              <button
+                className="vrsrc-summary-pill"
+                onClick={() => setGamesSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))}
+                title="Reverse the Local Library sort direction."
+                type="button"
+              >
+                <span className="eyebrow">Order</span>
+                <strong>{gamesSortDirection === 'asc' ? '↑' : '↓'}</strong>
               </button>
             </div>
           </div>
@@ -3822,7 +3909,7 @@ function GamesView(props: {
                 onClick={() => toggleGamesSort('date')}
                 type="button"
               >
-                <span>Date</span>
+                <span>Latest</span>
                 <strong>{gamesSortKey === 'date' ? (gamesSortDirection === 'asc' ? '↑' : '↓') : '↕'}</strong>
               </button>
               <button
@@ -6484,6 +6571,7 @@ function GameSavesView(props: {
 function SettingsView(props: {
   settings: AppSettings | null
   settingsBusy: boolean
+  settingsPathBusyKey: SettingsPathKey | null
   libraryRescanBusy: boolean
   settingsMessage: string | null
   dependencyIndicatorTone: 'ready' | 'warning' | 'error'
@@ -6509,6 +6597,7 @@ function SettingsView(props: {
   const {
     settings,
     settingsBusy,
+    settingsPathBusyKey,
     libraryRescanBusy,
     settingsMessage,
     dependencyIndicatorTone,
@@ -6688,6 +6777,7 @@ function SettingsView(props: {
         <div className="settings-path-grid">
           {settingsPathFields.map((field) => {
             const value = settings?.[field.key] ?? null
+            const pathBusy = settingsPathBusyKey === field.key
 
             return (
               <article className="settings-path-card" key={field.key}>
@@ -6710,14 +6800,14 @@ function SettingsView(props: {
                   <div className="settings-path-actions">
                     <button
                       className="action-pill action-pill-ghost"
-                      disabled={settingsBusy}
+                      disabled={pathBusy}
                       onClick={() => void onChooseSettingsPath(field.key)}
                     >
-                      {settingsBusy ? 'Opening…' : value ? 'Change Folder' : 'Choose Folder'}
+                      {pathBusy ? 'Opening…' : value ? 'Change Folder' : 'Choose Folder'}
                     </button>
                     <button
                       className="action-pill action-pill-ghost action-pill-destructive"
-                      disabled={settingsBusy || !value}
+                      disabled={pathBusy || !value}
                       onClick={() => void onClearSettingsPath(field.key)}
                     >
                       Clear
@@ -7903,6 +7993,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onRetryQueueItem,
     settings,
     settingsBusy,
+    settingsPathBusyKey,
     libraryRescanBusy,
     removeMissingLibraryItemBusyId,
     purgeLibraryItemBusyId,
@@ -8029,7 +8120,11 @@ export function WireframeShell(props: WireframeShellProps) {
       : dependencyReadyCount > 0
         ? 'warning'
         : 'error'
+  const vrSrcQueuedItems = liveQueueItems.filter(
+    (item) => item.phase === 'queued' && item.id.startsWith('vrsrc-') && (item.kind === 'download' || item.kind === 'install')
+  )
   const [isQueueOpen, setIsQueueOpen] = useState(false)
+  const [isVrSrcQueueOpen, setIsVrSrcQueueOpen] = useState(false)
   const [isManagedDependenciesOpen, setIsManagedDependenciesOpen] = useState(false)
   const [isLibraryDiagnosticsOpen, setIsLibraryDiagnosticsOpen] = useState(false)
   const [isOrphanedDataOpen, setIsOrphanedDataOpen] = useState(false)
@@ -8372,6 +8467,7 @@ export function WireframeShell(props: WireframeShellProps) {
             <SettingsView
               settings={settings}
               settingsBusy={settingsBusy}
+              settingsPathBusyKey={settingsPathBusyKey}
               libraryRescanBusy={libraryRescanBusy}
               settingsMessage={settingsMessage}
               dependencyIndicatorTone={dependencyIndicatorTone}
@@ -8410,10 +8506,12 @@ export function WireframeShell(props: WireframeShellProps) {
       <QueueRail
         isOpen={isQueueOpen}
         items={liveQueueItems}
+        vrSrcQueuedItems={vrSrcQueuedItems}
         headsetActionLog={headsetActionLog}
         headsetActionLogBusy={headsetActionLogBusy}
         isHeadsetActionLogVisible={isHeadsetActionLogVisible}
         onClose={() => setIsQueueOpen(false)}
+        onOpenVrSrcQueue={() => setIsVrSrcQueueOpen(true)}
         onHideHeadsetActionLog={onHideHeadsetActionLog}
         onOpenHeadsetActivityReview={onOpenHeadsetActivityReview}
         onPauseVrSrcTransfer={onPauseVrSrcTransfer}
@@ -8434,6 +8532,11 @@ export function WireframeShell(props: WireframeShellProps) {
         isOpen={isManagedDependenciesOpen}
         onClose={() => setIsManagedDependenciesOpen(false)}
         dependencyStatus={dependencyStatus}
+      />
+      <VrSrcQueueDialog
+        isOpen={isVrSrcQueueOpen}
+        items={vrSrcQueuedItems}
+        onClose={() => setIsVrSrcQueueOpen(false)}
       />
       <OrphanedDataDialog
         isOpen={isOrphanedDataOpen}

@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.9.4`
+Current documented application version: `0.9.5`
 
 ## Overview
 
@@ -230,5 +230,7 @@ The `Live` drawer is the main source of truth for long-running operations such a
 - failures and recovery states
 
 Success-only inline banners have been reduced in several areas in favor of Live.
+
+When vrSrc has more than three waiting downloads or download-and-install actions, use the `Queue` pill in the `Live` header to inspect the waiting items. Those queued vrSrc transfers start automatically as active download lanes free up.
 
 Installed-app refreshes are also deferred slightly after install and uninstall bursts so repeated device mutations do not flood Live with redundant refreshes.

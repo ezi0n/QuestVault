@@ -106,7 +106,7 @@ class VrSrcService {
   private transferProgressListeners = new Set<(update: VrSrcTransferProgressUpdate) => void>()
   private trailerVideoIdCache = new Map<string, string | null>()
   private transferControls = new Map<string, VrSrcTransferControlState>()
-  private readonly maxConcurrentPayloadPreparations = 5
+  private readonly maxConcurrentPayloadPreparations = 1
   private readonly maxConcurrentQueuedRequests = 3
   private activePayloadPreparations = 0
   private payloadPreparationWaiters: Array<() => void> = []

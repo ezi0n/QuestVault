@@ -1163,6 +1163,7 @@ class SettingsService {
         discoveryState: 'new',
         installReady: summary.apkCount > 0,
         sizeBytes: summary.sizeBytes,
+        indexedAt: new Date().toISOString(),
         modifiedAt: itemStats.mtime.toISOString(),
         childCount: summary.childCount,
         apkCount: summary.apkCount,
@@ -1201,6 +1202,7 @@ class SettingsService {
       discoveryState: 'new',
       installReady: kind === 'apk',
       sizeBytes: itemStats.size,
+      indexedAt: new Date().toISOString(),
       modifiedAt: itemStats.mtime.toISOString(),
       childCount: 0,
       apkCount: kind === 'apk' ? 1 : 0,
@@ -1293,6 +1295,7 @@ class SettingsService {
       return {
         ...item,
         discoveryState,
+        indexedAt: previousItem?.indexedAt ?? item.indexedAt,
         sourceLastUpdatedAt: previousItem?.sourceLastUpdatedAt ?? null,
         manualStoreId: previousItem?.manualStoreId ?? null,
         manualStoreIdEdited: previousItem?.manualStoreIdEdited ?? false,
@@ -1378,6 +1381,16 @@ class SettingsService {
     }
 
     return apkBackedItems.some((item) => item.libraryVersion !== null || item.libraryVersionCode !== null)
+  }
+
+  private hasIndexedAddedAtMetadata(index: LocalLibraryScanResponse | null): boolean {
+    if (!index) {
+      return false
+    }
+
+    return index.items.every(
+      (item) => Object.prototype.hasOwnProperty.call(item, 'indexedAt') && typeof item.indexedAt === 'string'
+    )
   }
 
   private normalizePath(value: string): string {
@@ -1628,7 +1641,7 @@ class SettingsService {
       const parsed = await this.readStoredLocalLibraryIndex()
 
       if (parsed?.path === libraryPath) {
-        if (!this.hasIndexedVersionMetadata(parsed)) {
+        if (!this.hasIndexedVersionMetadata(parsed) || !this.hasIndexedAddedAtMetadata(parsed)) {
           return this.rescanLocalLibrary()
         }
         return {
@@ -1672,7 +1685,7 @@ class SettingsService {
       const parsed = await this.readStoredBackupStorageIndex()
 
       if (parsed?.path === backupPath) {
-        if (!this.hasIndexedVersionMetadata(parsed)) {
+        if (!this.hasIndexedVersionMetadata(parsed) || !this.hasIndexedAddedAtMetadata(parsed)) {
           return this.rescanBackupStorage()
         }
         return {

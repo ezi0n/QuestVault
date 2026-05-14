@@ -52,10 +52,12 @@
 ## Cross-Cutting UX Features
 
 - Shared Live queue for scans, installs, downloads, dependency setup, backups, deletes, and failures.
+- Live Queue header access to a dedicated vrSrc waiting-list popup so queued remote transfers can be reviewed without leaving Live.
 - Headset Activity panel in Live that appears for new headset-operation failures and summarizes recent install/connect/uninstall activity.
 - Headset App Scan History popup that exposes the added and removed app names for each installed-app comparison.
 - Dedicated headset activity review dialog with filters, detail expansion, and reboot event support.
 - Startup GitHub release check surfaced through Live, with direct release-link action when an update is available.
+- Startup vrSrc sync automatically begins after the release check completes.
 - Shared drawer pattern for item detail interaction.
 - Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
 - vrSrc drawer content now wraps long title/package/header/note strings more safely so outlier releases do not create sideways overflow or clipped header controls.
@@ -78,6 +80,8 @@
 ## vrSrc-Specific Features
 
 - Sync Source controls inside Apps & Games.
+- Three concurrent vrSrc downloads with additional items serialized into a visible waiting queue.
+- Single-lane vrSrc payload unpack/extract flow so only one remote payload is prepared at a time.
 - Remote list + grid modes.
 - Remote `New` filtering and display-only remote `Updates` counts, with update filtering handled by the global filter row.
 - Remote notes and trailer embedding in the vrSrc drawer.
@@ -104,7 +108,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.9.4`
+Current documented release line: `0.9.5`
 
 ## Product Position
 
