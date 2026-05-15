@@ -180,6 +180,7 @@ export interface DeviceLibraryInstallResponse {
   message: string
   details: string | null
   packageName: string | null
+  verificationToken: string | null
 }
 
 export interface DeviceManualInstallResponse {
@@ -190,6 +191,7 @@ export interface DeviceManualInstallResponse {
   message: string
   details: string | null
   packageName: string | null
+  verificationToken: string | null
 }
 
 export interface DeviceInstalledAppActionResponse {
@@ -552,6 +554,7 @@ export interface VrSrcInstallNowResponse {
   packageName: string | null
   message: string
   details: string | null
+  verificationToken: string | null
 }
 
 export interface VrSrcDownloadAndInstallResponse {
@@ -564,6 +567,7 @@ export interface VrSrcDownloadAndInstallResponse {
   packageName: string | null
   message: string
   details: string | null
+  verificationToken: string | null
 }
 
 export type VrSrcTransferOperation = 'download-to-library' | 'download-to-library-and-install' | 'install-now'

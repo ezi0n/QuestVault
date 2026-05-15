@@ -56,7 +56,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.6.9',
+  version: '0.9.7',
   ping: (): string => 'pong',
   app: {
     checkForUpdates: (): Promise<ReleaseCheckResponse> => ipcRenderer.invoke('app:check-for-updates')
@@ -97,6 +97,8 @@ const api = {
       ipcRenderer.invoke('devices:backup-installed-app', serial, packageId, backupPath),
     installLocalLibraryItem: (serial: string, itemId: string): Promise<DeviceLibraryInstallResponse> =>
       ipcRenderer.invoke('devices:install-local-library-item', serial, itemId),
+    completeInstallVerification: (token: string): Promise<boolean> =>
+      ipcRenderer.invoke('devices:complete-install-verification', token),
     chooseManualInstallApk: (): Promise<string | null> => ipcRenderer.invoke('devices:choose-manual-install-apk'),
     chooseManualInstallFolder: (): Promise<string | null> => ipcRenderer.invoke('devices:choose-manual-install-folder'),
     installManualPath: (serial: string, sourcePath: string): Promise<DeviceManualInstallResponse> =>

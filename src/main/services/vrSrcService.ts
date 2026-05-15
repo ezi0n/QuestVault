@@ -64,6 +64,10 @@ type VrSrcTransferControlState = {
 
 type VrSrcQueuedRequestState = 'queued' | 'running'
 
+function isVrSrcInstallQueuedOperation(operation: VrSrcTransferOperation): boolean {
+  return operation === 'install-now' || operation === 'download-to-library-and-install'
+}
+
 type VrSrcQueuedRequestRecord = {
   id: string
   releaseName: string
@@ -102,6 +106,7 @@ class VrSrcService {
   private queuedRequestLoadPromise: Promise<void> | null = null
   private queuedRequestWritePromise: Promise<void> | null = null
   private activeQueuedRequests = 0
+  private activeInstallQueuedRequests = 0
   private drainQueuedRequestsScheduled = false
   private transferProgressListeners = new Set<(update: VrSrcTransferProgressUpdate) => void>()
   private trailerVideoIdCache = new Map<string, string | null>()
@@ -377,7 +382,17 @@ class VrSrcService {
     await this.loadQueuedRequests()
 
     while (this.activeQueuedRequests < this.maxConcurrentQueuedRequests) {
-      const nextRecord = this.queuedRequestRecords.find((entry) => entry.state === 'queued')
+      const nextRecord = this.queuedRequestRecords.find((entry) => {
+        if (entry.state !== 'queued') {
+          return false
+        }
+
+        if (isVrSrcInstallQueuedOperation(entry.operation) && this.activeInstallQueuedRequests > 0) {
+          return false
+        }
+
+        return true
+      })
       if (!nextRecord) {
         return
       }
@@ -390,6 +405,9 @@ class VrSrcService {
 
       nextRecord.state = 'running'
       this.activeQueuedRequests += 1
+      if (isVrSrcInstallQueuedOperation(nextRecord.operation)) {
+        this.activeInstallQueuedRequests += 1
+      }
       await this.persistQueuedRequests()
 
       void (async () => {
@@ -400,6 +418,9 @@ class VrSrcService {
           runner.reject(error)
         } finally {
           this.activeQueuedRequests = Math.max(0, this.activeQueuedRequests - 1)
+          if (isVrSrcInstallQueuedOperation(nextRecord.operation)) {
+            this.activeInstallQueuedRequests = Math.max(0, this.activeInstallQueuedRequests - 1)
+          }
           this.queuedRequestRunners.delete(key)
           this.queuedRequestPromiseByReleaseName.delete(key)
           this.queuedRequestRecords = this.queuedRequestRecords.filter(
@@ -2173,7 +2194,8 @@ class VrSrcService {
         targetPath: null,
         packageName: null,
         message: 'Select a Local Library path before downloading and installing vrSrc items.',
-        details: null
+        details: null,
+        verificationToken: null
       }
     }
 
@@ -2269,7 +2291,8 @@ class VrSrcService {
         message: installResponse.success
           ? `${releaseName} was added to the Local Library and installed on the selected headset.`
           : `${releaseName} was added to the Local Library, but the headset install did not complete.`,
-        details: installResponse.details ?? targetPath
+        details: installResponse.details ?? targetPath,
+        verificationToken: installResponse.verificationToken
       }
     } catch (error) {
       if (error instanceof VrSrcTransferCancelledError) {
@@ -2282,7 +2305,8 @@ class VrSrcService {
           targetPath: null,
           packageName: null,
           message: `${releaseName} download was cancelled.`,
-          details: null
+          details: null,
+          verificationToken: null
         }
       }
 
@@ -2295,7 +2319,8 @@ class VrSrcService {
         targetPath: null,
         packageName: null,
         message: `Unable to download and install ${releaseName} from vrSrc.`,
-        details: error instanceof Error ? error.message : String(error)
+        details: error instanceof Error ? error.message : String(error),
+        verificationToken: null
       }
     } finally {
       this.clearTransferControl(releaseName)
@@ -2402,7 +2427,8 @@ class VrSrcService {
         sourcePath: installResponse.success ? null : sourcePath,
         packageName: installResponse.packageName ?? catalogItem?.packageName ?? null,
         message: installResponse.message,
-        details: installResponse.details
+        details: installResponse.details,
+        verificationToken: installResponse.verificationToken
       }
     } catch (error) {
       if (error instanceof VrSrcTransferCancelledError) {
@@ -2414,7 +2440,8 @@ class VrSrcService {
           sourcePath: null,
           packageName: null,
           message: `${releaseName} install was cancelled.`,
-          details: null
+          details: null,
+          verificationToken: null
         }
       }
 
@@ -2426,7 +2453,8 @@ class VrSrcService {
         sourcePath: null,
         packageName: null,
         message: `Unable to install ${releaseName} from vrSrc.`,
-        details: error instanceof Error ? error.message : String(error)
+        details: error instanceof Error ? error.message : String(error),
+        verificationToken: null
       }
     } finally {
       this.clearTransferControl(releaseName)

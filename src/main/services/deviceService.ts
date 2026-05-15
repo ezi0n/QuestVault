@@ -83,6 +83,8 @@ class DeviceService {
   private blockedLeftoverDeletes = new Map<string, string>()
   private installQueue: Promise<void> = Promise.resolve()
   private installQueueDepth = 0
+  private installVerificationBarrier: Promise<void> = Promise.resolve()
+  private installVerificationResolvers = new Map<string, () => void>()
   private pendingJsonWrites = new Map<string, Promise<void>>()
 
   private async runQueuedDeviceTask<T>(task: () => Promise<T>, hooks?: InstallQueueHooks): Promise<T> {
@@ -109,7 +111,53 @@ class DeviceService {
   }
 
   private async runQueuedInstall<T>(task: () => Promise<T>, hooks?: InstallQueueHooks): Promise<T> {
-    return this.runQueuedDeviceTask(task, hooks)
+    const queuedBehindAnotherInstall = this.installQueueDepth > 0
+    if (queuedBehindAnotherInstall) {
+      await hooks?.onQueued?.()
+    }
+
+    this.installQueueDepth += 1
+
+    const run = this.installQueue.then(async () => {
+      await this.installVerificationBarrier
+      await hooks?.onStarted?.()
+      return task()
+    })
+
+    this.installQueue = run
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        this.installQueueDepth = Math.max(0, this.installQueueDepth - 1)
+      })
+
+    return run
+  }
+
+  private issueInstallVerificationToken(): string {
+    const token = randomUUID()
+    this.installVerificationBarrier = new Promise((resolve) => {
+      this.installVerificationResolvers.set(token, () => {
+        this.installVerificationResolvers.delete(token)
+        resolve()
+      })
+    })
+    return token
+  }
+
+  async completeInstallVerification(token: string): Promise<boolean> {
+    const normalizedToken = token.trim()
+    if (!normalizedToken) {
+      return false
+    }
+
+    const resolver = this.installVerificationResolvers.get(normalizedToken)
+    if (!resolver) {
+      return false
+    }
+
+    resolver()
+    return true
   }
 
   private getInstalledAppScanHistoryPath(): string {
@@ -1366,7 +1414,8 @@ class DeviceService {
         success: false,
         message: runtime.message,
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 
@@ -1383,7 +1432,8 @@ class DeviceService {
         success: false,
         message: 'No device selected for installation.',
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 
@@ -1396,7 +1446,8 @@ class DeviceService {
         success: false,
         message: 'Only present library items can be installed.',
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 
@@ -1409,7 +1460,8 @@ class DeviceService {
         success: false,
         message: 'This library item is not install-ready yet.',
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 
@@ -1433,6 +1485,7 @@ class DeviceService {
             })
           }
 
+          const verificationToken = installResult.success ? this.issueInstallVerificationToken() : null
           return {
             runtime,
             serial: normalizedSerial,
@@ -1440,7 +1493,8 @@ class DeviceService {
             success: installResult.success,
             message: installResult.message,
             details: installResult.details,
-            packageName: installResult.packageName
+            packageName: installResult.packageName,
+            verificationToken
           }
         },
         {
@@ -1469,7 +1523,8 @@ class DeviceService {
         success: false,
         message,
         details,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
   }
@@ -1500,7 +1555,8 @@ class DeviceService {
         success: false,
         message: runtime.message,
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 
@@ -1514,7 +1570,8 @@ class DeviceService {
         success: false,
         message,
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 
@@ -1528,7 +1585,8 @@ class DeviceService {
         success: false,
         message,
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 
@@ -1553,7 +1611,8 @@ class DeviceService {
                 success: false,
                 message,
                 details: null,
-                packageName: null
+                packageName: null,
+                verificationToken: null
               }
             }
 
@@ -1597,7 +1656,8 @@ class DeviceService {
               success: false,
               message,
               details: null,
-              packageName: null
+              packageName: null,
+              verificationToken: null
             }
           }
 
@@ -1613,6 +1673,7 @@ class DeviceService {
             })
           }
 
+          const verificationToken = installResult.success ? this.issueInstallVerificationToken() : null
           return {
             runtime,
             serial: normalizedSerial,
@@ -1620,7 +1681,8 @@ class DeviceService {
             success: installResult.success,
             message: installResult.message,
             details: installResult.details,
-            packageName: installResult.packageName
+            packageName: installResult.packageName,
+            verificationToken
           }
         },
         {
@@ -1647,7 +1709,8 @@ class DeviceService {
         success: false,
         message,
         details,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
   }

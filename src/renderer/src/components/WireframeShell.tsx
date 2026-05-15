@@ -771,10 +771,13 @@ function getLibraryGameVersionLines(row: LibraryGameRow): string[] {
 }
 
 function getLibraryGameDedupeKey(row: LibraryGameRow): string {
-  const normalizedPackageIds = row.packageIds
-    .map((packageId) => packageId.trim().toLowerCase())
-    .filter(Boolean)
-    .sort()
+  const normalizedPackageIds = Array.from(
+    new Set(
+      row.packageIds
+        .map((packageId) => packageId.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  ).sort()
 
   if (normalizedPackageIds.length) {
     return `package:${normalizedPackageIds.join('|')}`
@@ -786,12 +789,13 @@ function getLibraryGameDedupeKey(row: LibraryGameRow): string {
     return `manual:${manualStoreId.toLowerCase()}`
   }
 
-  if (row.kind === 'folder') {
-    return `folder:${row.source}:${normalizeLibraryGameIdentity(row.relativePath)}`
-  }
-
+  const normalizedRelease = normalizeLibraryGameIdentity(row.release)
   const normalizedTitle = normalizeLibraryGameIdentity(row.title)
   const normalizedPublisher = normalizeLibraryGameIdentity(row.note)
+
+  if (normalizedRelease) {
+    return `release:${normalizedRelease}|publisher:${normalizedPublisher}`
+  }
 
   if (normalizedTitle) {
     return `title:${normalizedTitle}|publisher:${normalizedPublisher}`
@@ -799,6 +803,10 @@ function getLibraryGameDedupeKey(row: LibraryGameRow): string {
 
   if (row.metaStoreMatch?.storeItemId) {
     return `store:${row.metaStoreMatch.storeItemId}`
+  }
+
+  if (row.kind === 'folder') {
+    return `folder:${row.source}:${normalizeLibraryGameIdentity(row.relativePath)}`
   }
 
   return `package:${row.packageIds[0]?.toLowerCase() ?? row.id}`
@@ -3401,7 +3409,9 @@ function GamesView(props: {
                 title="Refresh metadata and artwork for titles in Apps & Games"
                 type="button"
               >
-                {metaStoreSyncProgress ? 'Updating Metadata…' : 'Update Metadata'}
+                {metaStoreSyncProgress
+                  ? `Updating Metadata ${Math.min(metaStoreSyncProgress.completed, metaStoreSyncProgress.total)}/${metaStoreSyncProgress.total}…`
+                  : 'Update Metadata'}
               </button>
             </div>
             <div className="games-username-shell">

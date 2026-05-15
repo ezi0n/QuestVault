@@ -77,6 +77,7 @@ interface ElectronApi {
     reboot: (serial: string) => Promise<DeviceRebootResponse>
     backupInstalledApp: (serial: string, packageId: string, backupPath: string) => Promise<DeviceInstalledAppBackupResponse>
     installLocalLibraryItem: (serial: string, itemId: string) => Promise<DeviceLibraryInstallResponse>
+    completeInstallVerification: (token: string) => Promise<boolean>
     chooseManualInstallApk: () => Promise<string | null>
     chooseManualInstallFolder: () => Promise<string | null>
     installManualPath: (serial: string, sourcePath: string) => Promise<DeviceManualInstallResponse>

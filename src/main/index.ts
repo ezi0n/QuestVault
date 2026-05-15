@@ -277,6 +277,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('devices:install-manual-path', async (_event, serial: string, sourcePath: string) =>
     deviceService.installManualPath(serial, sourcePath)
   )
+  ipcMain.handle('devices:complete-install-verification', async (_event, token: string) =>
+    deviceService.completeInstallVerification(token)
+  )
   ipcMain.handle(
     'savegames:list-backups',
     async () => savegameService.listBackups()
@@ -361,7 +364,8 @@ app.whenReady().then(async () => {
         success: false,
         message: 'That library item is no longer available in the current index.',
         details: null,
-        packageName: null
+        packageName: null,
+        verificationToken: null
       }
     }
 

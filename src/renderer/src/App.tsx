@@ -262,6 +262,8 @@ function buildDependencyQueueId(dependencyId: DependencyBootstrapProgressUpdate[
   return `dependency-${dependencyId}`
 }
 
+const METADATA_REFRESH_QUEUE_ID = 'queue-scan-metadata-active'
+
 type InstalledAppsRefreshReason = 'normal' | 'verification'
 
 function mapDependencyPhaseToLivePhase(phase: DependencyBootstrapProgressUpdate['phase']): LiveQueueItem['phase'] {
@@ -569,6 +571,8 @@ function App() {
   const pendingInstalledAppsRefreshSerialRef = useRef<string | null>(null)
   const pendingInstalledAppsRefreshReasonRef = useRef<InstalledAppsRefreshReason>('normal')
   const pendingInstalledAppsRefreshQueueIdRef = useRef<string | null>(null)
+  const installOperationQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const installOperationQueueDepthRef = useRef(0)
   const latestSeenFailedHeadsetActionLogRef = useRef<string | null>(null)
   const subtitle =
     activeTab === 'manager'
@@ -685,6 +689,13 @@ function App() {
     vrSrcQueueRemovalTimersRef.current.set(itemId, timeoutId)
   }
 
+  async function removeLiveQueueItemAndWait(itemId: string): Promise<void> {
+    removeLiveQueueItem(itemId)
+    await new Promise<void>((resolve) => {
+      window.setTimeout(() => resolve(), 0)
+    })
+  }
+
   function describeVrSrcQueueSubtitle(operation: VrSrcTransferOperation): string {
     if (operation === 'download-to-library') {
       return 'vrSrc to Local Library'
@@ -759,6 +770,36 @@ function App() {
     pendingInstalledAppsRefreshReasonRef.current = 'normal'
     pendingInstalledAppsRefreshQueueIdRef.current = null
     void refreshInstalledApps(serial, { reason, queueId })
+  }
+
+  async function runQueuedInstallOperation<T>(
+    queueId: string,
+    task: () => Promise<T>,
+    options?: {
+      onQueued?: () => void
+      onStarted?: () => void
+    }
+  ): Promise<T> {
+    const queuedBehindAnotherInstallOperation = installOperationQueueDepthRef.current > 0
+    if (queuedBehindAnotherInstallOperation) {
+      options?.onQueued?.()
+    }
+
+    installOperationQueueDepthRef.current += 1
+
+    const run = installOperationQueueRef.current.then(async () => {
+      options?.onStarted?.()
+      return task()
+    })
+
+    installOperationQueueRef.current = run
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        installOperationQueueDepthRef.current = Math.max(0, installOperationQueueDepthRef.current - 1)
+      })
+
+    return run
   }
 
   function beginInstalledAppsMutation(serial: string) {
@@ -1647,6 +1688,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       message: string
       details: string | null
       packageName?: string | null
+      verificationToken?: string | null
     }>
     retryAfterSignatureMismatch?: () => Promise<{
       success: boolean
@@ -1654,10 +1696,18 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       message: string
       details: string | null
       packageName?: string | null
+      verificationToken?: string | null
     }>
     serialForRecovery?: string | null
     onInstalledAppsChanged?: () => void
-    onSuccess?: () => Promise<void>
+    onSuccess?: (response: {
+      success: boolean
+      cancelled: boolean
+      message: string
+      details: string | null
+      packageName?: string | null
+      verificationToken?: string | null
+    }) => Promise<void>
     keepSuccessVisibleUntilRefresh?: boolean
     onFailureText: string
   }) {
@@ -1669,7 +1719,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     vrSrcActionBusyReleaseNamesRef.current = [...vrSrcActionBusyReleaseNamesRef.current, options.releaseName]
     setVrSrcActionBusyReleaseNames((current) => [...current, options.releaseName])
 
-    try {
+    const runTransferAction = async () => {
       let response = await options.execute()
       if (
         isSignatureMismatchFailure(response) &&
@@ -1740,9 +1790,37 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       }
       if (response.success) {
         setVrSrcMessage(null)
-        await options.onSuccess?.()
+        await options.onSuccess?.(response)
       } else {
         setVrSrcMessage(null)
+      }
+    }
+
+    try {
+      if (options.keepSuccessVisibleUntilRefresh) {
+        await runQueuedInstallOperation(queueId, runTransferAction, {
+          onQueued: () => {
+            updateLiveQueueItem(queueId, {
+              phase: 'queued',
+              progress: 8,
+              details: 'Waiting for the current install and verification cycle to finish before starting...',
+              transferControl: null
+            })
+          },
+          onStarted: () => {
+            const existingQueueItem = liveQueueItems.find((item) => item.id === queueId)
+            if (!existingQueueItem || existingQueueItem.phase === 'queued') {
+              updateLiveQueueItem(queueId, {
+                phase: 'installing',
+                progress: 18,
+                details: 'Preparing this install now that the previous install cycle is complete...',
+                transferControl: null
+              })
+            }
+          }
+        })
+      } else {
+        await runTransferAction()
       }
     } catch (error) {
       const details = error instanceof Error ? error.message : 'Unknown error.'
@@ -1823,8 +1901,6 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
 
     setVrSrcMessage(null)
-    beginInstalledAppsMutation(targetDeviceId)
-    let shouldRefreshInstalledApps = false
     registerLiveQueueRetryHandler(buildVrSrcQueueId('install-now', releaseName), () =>
       installVrSrcNow(releaseName, targetDeviceId)
     )
@@ -1836,28 +1912,30 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       execute: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
       retryAfterSignatureMismatch: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
       serialForRecovery: targetDeviceId,
-      onInstalledAppsChanged: () => {
-        shouldRefreshInstalledApps = true
-      },
-      onSuccess: async () => {
-        shouldRefreshInstalledApps = true
-        const [libraryIndex, backupIndex] = await Promise.all([
-          window.api.settings.getLocalLibraryIndex(),
-          window.api.settings.getBackupStorageIndex()
-        ])
-        setLocalLibraryIndex(libraryIndex)
-        setBackupStorageIndex(backupIndex)
-        void refreshMetaStoreMatches(libraryIndex, backupIndex)
+      onInstalledAppsChanged: () => undefined,
+      onSuccess: async (response) => {
+        try {
+          const [libraryIndex, backupIndex] = await Promise.all([
+            window.api.settings.getLocalLibraryIndex(),
+            window.api.settings.getBackupStorageIndex()
+          ])
+          setLocalLibraryIndex(libraryIndex)
+          setBackupStorageIndex(backupIndex)
+          void refreshMetaStoreMatches(libraryIndex, backupIndex)
+          await refreshInstalledApps(targetDeviceId, {
+            reason: 'verification',
+            queueId: buildVrSrcQueueId('install-now', releaseName),
+            awaitMetadataCompletion: true
+          })
+        } finally {
+          if (response.verificationToken) {
+            await window.api.devices.completeInstallVerification(response.verificationToken)
+          }
+        }
       },
       keepSuccessVisibleUntilRefresh: true,
       onFailureText: `Unable to install ${releaseName} from vrSrc.`
     })
-    endInstalledAppsMutation(
-      targetDeviceId,
-      shouldRefreshInstalledApps,
-      shouldRefreshInstalledApps ? 'verification' : 'normal',
-      shouldRefreshInstalledApps ? buildVrSrcQueueId('install-now', releaseName) : null
-    )
   }
 
   async function downloadVrSrcToLibraryAndInstall(releaseName: string, targetDeviceId = selectedDeviceId) {
@@ -1871,8 +1949,6 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
 
     setVrSrcMessage(null)
-    beginInstalledAppsMutation(targetDeviceId)
-    let shouldRefreshInstalledApps = false
     registerLiveQueueRetryHandler(buildVrSrcQueueId('download-to-library-and-install', releaseName), () =>
       downloadVrSrcToLibraryAndInstall(releaseName, targetDeviceId)
     )
@@ -1884,27 +1960,29 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       execute: () => window.api.vrsrc.downloadToLibraryAndInstall(targetDeviceId, releaseName),
       retryAfterSignatureMismatch: () => window.api.vrsrc.downloadToLibraryAndInstall(targetDeviceId, releaseName),
       serialForRecovery: targetDeviceId,
-      onInstalledAppsChanged: () => {
-        shouldRefreshInstalledApps = true
-      },
-      onSuccess: async () => {
-        shouldRefreshInstalledApps = true
-        const [libraryIndex, backupIndex] = await Promise.all([
-          window.api.settings.getLocalLibraryIndex(),
-          window.api.settings.getBackupStorageIndex()
-        ])
-        setLocalLibraryIndex(libraryIndex)
-        setBackupStorageIndex(backupIndex)
+      onInstalledAppsChanged: () => undefined,
+      onSuccess: async (response) => {
+        try {
+          const [libraryIndex, backupIndex] = await Promise.all([
+            window.api.settings.getLocalLibraryIndex(),
+            window.api.settings.getBackupStorageIndex()
+          ])
+          setLocalLibraryIndex(libraryIndex)
+          setBackupStorageIndex(backupIndex)
+          await refreshInstalledApps(targetDeviceId, {
+            reason: 'verification',
+            queueId: buildVrSrcQueueId('download-to-library-and-install', releaseName),
+            awaitMetadataCompletion: true
+          })
+        } finally {
+          if (response.verificationToken) {
+            await window.api.devices.completeInstallVerification(response.verificationToken)
+          }
+        }
       },
       keepSuccessVisibleUntilRefresh: true,
       onFailureText: `Unable to download and install ${releaseName} from vrSrc.`
     })
-    endInstalledAppsMutation(
-      targetDeviceId,
-      shouldRefreshInstalledApps,
-      shouldRefreshInstalledApps ? 'verification' : 'normal',
-      shouldRefreshInstalledApps ? buildVrSrcQueueId('download-to-library-and-install', releaseName) : null
-    )
   }
 
   useEffect(() => {
@@ -2057,7 +2135,12 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
   async function refreshInstalledApps(
     serial: string,
-    options?: { reason?: InstalledAppsRefreshReason; queueId?: string | null }
+    options?: {
+      reason?: InstalledAppsRefreshReason
+      queueId?: string | null
+      awaitMetadataCompletion?: boolean
+      awaitQueueRemoval?: boolean
+    }
   ) {
     setDeviceAppsBusy(true)
     let handedOffMetadataRefresh = false
@@ -2128,7 +2211,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           .join(' ')
       })
 
-      void refreshInstalledAppMetadata(response, ({ completed, total, resolvedCount, phase }) => {
+      const metadataRefreshPromise = refreshInstalledAppMetadata(response, ({ completed, total, resolvedCount, phase }) => {
         const progressBase = 72
         const progressSpan = 26
         const normalizedTotal = Math.max(total, 1)
@@ -2148,6 +2231,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
                 : `Installed apps loaded. Installed metadata is already current (${resolvedCount}/${installedPackageCount} matched).`
         })
       })
+      const finalizeMetadataRefreshPromise = metadataRefreshPromise
         .then((metadataMatches) => {
           updateLiveQueueItem(queueId, {
             phase: 'completed',
@@ -2161,6 +2245,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
               .join(' ')
           })
           if (options?.queueId) {
+            if (options.awaitQueueRemoval) {
+              return removeLiveQueueItemAndWait(queueId)
+            }
+
             scheduleVrSrcQueueRemoval(queueId, 5000)
           }
         })
@@ -2182,6 +2270,12 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             scheduleVrSrcQueueRemoval(queueId, 30_000)
           }
         })
+
+      if (options?.awaitMetadataCompletion) {
+        await finalizeMetadataRefreshPromise
+      } else {
+        void finalizeMetadataRefreshPromise
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to load installed apps.'
       setDeviceAppsMessage(message)
@@ -3528,80 +3622,103 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     gamesInstallBusyIdsRef.current = [...gamesInstallBusyIdsRef.current, itemId]
     setGamesInstallBusyIds((current) => [...current, itemId])
     setGamesMessage(null)
-    beginInstalledAppsMutation(targetDeviceId)
-    let shouldRefreshInstalledApps = false
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('install', itemId),
       title: queueTitle,
       subtitle: queueSubtitle,
       kind: 'install',
-      phase: 'installing',
-      progress: 34,
-      details: installPhaseMessage,
+      phase: 'queued',
+      progress: 8,
+      details: 'Waiting for the current install and verification cycle to finish before starting...',
       artworkUrl: queueArtworkUrl
     })
     registerLiveQueueRetryHandler(queueId, () => installLocalLibraryItem(itemId, targetDeviceId))
 
     try {
-      let response = await window.api.devices.installLocalLibraryItem(targetDeviceId, itemId)
-      const recoveryPackageName = response.packageName ?? indexedItem?.packageIds[0] ?? null
-      if (isSignatureMismatchFailure(response) && recoveryPackageName) {
-        const confirmed = await requestSignatureMismatchConfirmation(recoveryPackageName)
-
-        if (confirmed) {
-          updateLiveQueueItem(queueId, {
-            phase: 'uninstalling',
-            progress: 52,
-            details: `Installed copy uses a different signature. Removing ${recoveryPackageName} before retrying...`
-          })
-
-          const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, recoveryPackageName)
-          if (!uninstallResponse.success) {
-            updateLiveQueueItem(queueId, {
-              phase: 'failed',
-              progress: 100,
-              details: uninstallResponse.details ?? uninstallResponse.message
-            })
-            setGamesMessage(null)
-            return
-          }
-
-          shouldRefreshInstalledApps = true
+      await runQueuedInstallOperation(
+        queueId,
+        async () => {
           updateLiveQueueItem(queueId, {
             phase: 'installing',
-            progress: 58,
-            details: `Removed ${recoveryPackageName}. Retrying install...`
+            progress: 34,
+            details: installPhaseMessage
           })
-          response = await window.api.devices.installLocalLibraryItem(targetDeviceId, itemId)
+
+          let response = await window.api.devices.installLocalLibraryItem(targetDeviceId, itemId)
+          const recoveryPackageName = response.packageName ?? indexedItem?.packageIds[0] ?? null
+          if (isSignatureMismatchFailure(response) && recoveryPackageName) {
+            const confirmed = await requestSignatureMismatchConfirmation(recoveryPackageName)
+
+            if (confirmed) {
+              updateLiveQueueItem(queueId, {
+                phase: 'uninstalling',
+                progress: 52,
+                details: `Installed copy uses a different signature. Removing ${recoveryPackageName} before retrying...`
+              })
+
+              const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, recoveryPackageName)
+              if (!uninstallResponse.success) {
+                updateLiveQueueItem(queueId, {
+                  phase: 'failed',
+                  progress: 100,
+                  details: uninstallResponse.details ?? uninstallResponse.message
+                })
+                setGamesMessage(null)
+                return
+              }
+
+              updateLiveQueueItem(queueId, {
+                phase: 'installing',
+                progress: 58,
+                details: `Removed ${recoveryPackageName}. Retrying install...`
+              })
+              response = await window.api.devices.installLocalLibraryItem(targetDeviceId, itemId)
+            }
+          }
+
+          updateLiveQueueItem(queueId, {
+            phase: response.success ? 'completed' : 'failed',
+            progress: 100,
+            details: response.details ?? response.message
+          })
+
+          if (!response.success) {
+            setGamesMessage(null)
+          }
+
+          if (response.success) {
+            suppressNextHeadsetActionLogRevealRef.current = true
+            const [libraryIndex, backupIndex] = await Promise.all([
+              window.api.settings.getLocalLibraryIndex(),
+              window.api.settings.getBackupStorageIndex()
+            ])
+            setLocalLibraryIndex(libraryIndex)
+            setBackupStorageIndex(backupIndex)
+            void refreshMetaStoreMatches(libraryIndex, backupIndex)
+            updateLiveQueueItem(queueId, {
+              phase: 'verifying',
+              progress: 96,
+              details: 'Install finished. Verifying installed apps on the headset...'
+            })
+            try {
+              await refreshInstalledApps(targetDeviceId, { reason: 'verification', queueId, awaitMetadataCompletion: true })
+            } finally {
+              if (response.verificationToken) {
+                await window.api.devices.completeInstallVerification(response.verificationToken)
+              }
+            }
+          }
+        },
+        {
+          onStarted: () => {
+            updateLiveQueueItem(queueId, {
+              phase: 'installing',
+              progress: 34,
+              details: installPhaseMessage
+            })
+          }
         }
-      }
-
-      updateLiveQueueItem(queueId, {
-        phase: response.success ? 'completed' : 'failed',
-        progress: 100,
-        details: response.details ?? response.message
-      })
-
-      if (!response.success) {
-        setGamesMessage(null)
-      }
-
-      if (response.success) {
-        shouldRefreshInstalledApps = true
-        suppressNextHeadsetActionLogRevealRef.current = true
-        const [libraryIndex, backupIndex] = await Promise.all([
-          window.api.settings.getLocalLibraryIndex(),
-          window.api.settings.getBackupStorageIndex()
-        ])
-        setLocalLibraryIndex(libraryIndex)
-        setBackupStorageIndex(backupIndex)
-        void refreshMetaStoreMatches(libraryIndex, backupIndex)
-        updateLiveQueueItem(queueId, {
-          phase: 'verifying',
-          progress: 96,
-          details: 'Install finished. Verifying installed apps on the headset...'
-        })
-      }
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to install the selected local payload.'
       updateLiveQueueItem(queueId, {
@@ -3613,12 +3730,6 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     } finally {
       gamesInstallBusyIdsRef.current = gamesInstallBusyIdsRef.current.filter((entry) => entry !== itemId)
       setGamesInstallBusyIds((current) => current.filter((entry) => entry !== itemId))
-      endInstalledAppsMutation(
-        targetDeviceId,
-        shouldRefreshInstalledApps,
-        shouldRefreshInstalledApps ? 'verification' : 'normal',
-        shouldRefreshInstalledApps ? queueId : null
-      )
     }
   }
 
@@ -3634,8 +3745,6 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
     setManualInstallBusyKind(kind)
     setGamesMessage(null)
-    beginInstalledAppsMutation(targetDeviceId)
-    let shouldRefreshInstalledApps = false
     let queueId: string | null = null
 
     try {
@@ -3654,79 +3763,112 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         title: sourceName,
         subtitle: kind === 'apk' ? 'Manual APK install' : 'Manual folder install',
         kind: 'install',
-        phase: 'installing',
-        progress: 34,
-        details:
-          kind === 'apk'
-            ? `Installing APK payload ${sourceName}...`
-            : `Installing folder payload ${sourceName}...`,
+        phase: 'queued',
+        progress: 8,
+        details: 'Waiting for the current install and verification cycle to finish before starting...',
         artworkUrl: null
       })
       registerLiveQueueRetryHandler(queueId, () => installManualLibrarySource(kind, targetDeviceId))
+      const activeQueueId = queueId
 
-      let response = await window.api.devices.installManualPath(targetDeviceId, sourcePath)
-      if (isSignatureMismatchFailure(response) && response.packageName) {
-        const confirmed = await requestSignatureMismatchConfirmation(response.packageName)
+      const installPhaseMessage =
+        kind === 'apk'
+          ? `Installing APK payload ${sourceName}...`
+          : `Installing folder payload ${sourceName}...`
 
-        if (confirmed) {
-          updateLiveQueueItem(queueId, {
-            phase: 'uninstalling',
-            progress: 52,
-            details: `Installed copy uses a different signature. Removing ${response.packageName} before retrying...`
+      await runQueuedInstallOperation(
+        activeQueueId,
+        async () => {
+          updateLiveQueueItem(activeQueueId, {
+            phase: 'installing',
+            progress: 34,
+            details: installPhaseMessage
           })
 
-          const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, response.packageName)
-          if (!uninstallResponse.success) {
-            updateLiveQueueItem(queueId, {
-              phase: 'failed',
-              progress: 100,
-              details: uninstallResponse.details ?? uninstallResponse.message
-            })
+          let response = await window.api.devices.installManualPath(targetDeviceId, sourcePath)
+          if (isSignatureMismatchFailure(response) && response.packageName) {
+            const confirmed = await requestSignatureMismatchConfirmation(response.packageName)
+
+            if (confirmed) {
+              updateLiveQueueItem(activeQueueId, {
+                phase: 'uninstalling',
+                progress: 52,
+                details: `Installed copy uses a different signature. Removing ${response.packageName} before retrying...`
+              })
+
+              const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, response.packageName)
+              if (!uninstallResponse.success) {
+                updateLiveQueueItem(activeQueueId, {
+                  phase: 'failed',
+                  progress: 100,
+                  details: uninstallResponse.details ?? uninstallResponse.message
+                })
+                setGamesMessage(null)
+                return
+              }
+
+              updateLiveQueueItem(activeQueueId, {
+                phase: 'installing',
+                progress: 58,
+                details: `Removed ${response.packageName}. Retrying install...`
+              })
+              response = await window.api.devices.installManualPath(targetDeviceId, sourcePath)
+            }
+          }
+
+          updateLiveQueueItem(activeQueueId, {
+            phase: response.success ? 'verifying' : 'failed',
+            progress: response.success ? 96 : 100,
+            details: response.details ?? response.message
+          })
+
+          if (!response.success) {
             setGamesMessage(null)
             return
           }
 
-          shouldRefreshInstalledApps = true
-          updateLiveQueueItem(queueId, {
-            phase: 'installing',
-            progress: 58,
-            details: `Removed ${response.packageName}. Retrying install...`
+          suppressNextHeadsetActionLogRevealRef.current = true
+          setGamesMessage(null)
+          updateLiveQueueItem(activeQueueId, {
+            phase: 'verifying',
+            progress: 96,
+            details: 'Install finished. Verifying installed apps on the headset...'
           })
-          response = await window.api.devices.installManualPath(targetDeviceId, sourcePath)
+          try {
+            await refreshInstalledApps(targetDeviceId, {
+              reason: 'verification',
+              queueId: activeQueueId,
+              awaitMetadataCompletion: true
+            })
+          } finally {
+            if (response.verificationToken) {
+              await window.api.devices.completeInstallVerification(response.verificationToken)
+            }
+          }
+        },
+        {
+          onStarted: () => {
+            updateLiveQueueItem(activeQueueId, {
+              phase: 'installing',
+              progress: 34,
+              details: installPhaseMessage
+            })
+          }
         }
-      }
-
-      updateLiveQueueItem(queueId, {
-        phase: response.success ? 'verifying' : 'failed',
-        progress: response.success ? 96 : 100,
-        details: response.details ?? response.message
-      })
-
-      if (!response.success) {
-        setGamesMessage(null)
-        return
-      }
-
-      shouldRefreshInstalledApps = true
-      suppressNextHeadsetActionLogRevealRef.current = true
-      setGamesMessage(null)
-      updateLiveQueueItem(queueId, {
-        phase: 'verifying',
-        progress: 96,
-        details: 'Install finished. Verifying installed apps on the headset...'
-      })
+      )
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unable to complete the manual install.'
+      if (queueId) {
+        updateLiveQueueItem(queueId, {
+          phase: 'failed',
+          progress: 100,
+          details: message
+        })
+      }
       setGamesMessage(null)
     } finally {
       setManualInstallBusyKind(null)
-      endInstalledAppsMutation(
-        targetDeviceId,
-        shouldRefreshInstalledApps,
-        shouldRefreshInstalledApps ? 'verification' : 'normal',
-        shouldRefreshInstalledApps ? queueId : null
-      )
     }
   }
 
@@ -3935,33 +4077,28 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     const runId = metaStoreRefreshRunRef.current + 1
     metaStoreRefreshRunRef.current = runId
     const refreshMode = options?.mode ?? 'full'
-    const queueId =
-      options?.announceInQueue === true
-        ? enqueueLiveQueueItem({
-            id: createLiveQueueId('scan', `metadata-${runId}`),
-            title: options.queueTitle ?? 'Metadata Refresh',
-            subtitle: options.queueSubtitle ?? null,
-            kind: 'scan',
-            phase: 'scanning',
-            progress: 10,
-            details:
-              refreshMode === 'incremental'
-                ? 'Refreshing metadata for new, changed, or stale items...'
-                : 'Refreshing stored metadata matches...',
-            artworkUrl: null
-          })
-        : null
+    const queueId = enqueueLiveQueueItem({
+      id: METADATA_REFRESH_QUEUE_ID,
+      title: options?.queueTitle ?? 'Metadata Refresh',
+      subtitle: options?.queueSubtitle ?? (refreshMode === 'incremental' ? 'Background Refresh' : null),
+      kind: 'scan',
+      phase: 'scanning',
+      progress: 10,
+      details:
+        refreshMode === 'incremental'
+          ? 'Refreshing metadata for new, changed, or stale items...'
+          : 'Refreshing stored metadata matches...',
+      artworkUrl: null
+    })
 
     if (!items.length) {
       setMetaStoreMatchesByItemId({})
       setMetaStoreSyncProgress(null)
-      if (queueId) {
-        updateLiveQueueItem(queueId, {
-          phase: 'completed',
-          progress: 100,
-          details: 'No library or backup items with package metadata were available to refresh.'
-        })
-      }
+      updateLiveQueueItem(queueId, {
+        phase: 'completed',
+        progress: 100,
+        details: 'No library or backup items with package metadata were available to refresh.'
+      })
       return
     }
 
@@ -4048,30 +4185,26 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       let completedSteps = 0
 
       setMetaStoreSyncProgress(totalSteps > 0 ? { completed: 0, total: totalSteps } : null)
-      if (queueId) {
-        updateLiveQueueItem(queueId, {
-          details:
-            totalSteps > 0
-              ? refreshMode === 'incremental'
-                ? `Refreshing metadata for new, changed, or stale items (0/${totalSteps})...`
-                : `Refreshing metadata matches (0/${totalSteps})...`
-              : refreshMode === 'incremental'
-                ? 'Metadata is already current for known library items.'
-                : 'No library or backup items required metadata refresh.'
-        })
-      }
+      updateLiveQueueItem(queueId, {
+        details:
+          totalSteps > 0
+            ? refreshMode === 'incremental'
+              ? `Refreshing metadata for new, changed, or stale items (0/${totalSteps})...`
+              : `Refreshing metadata matches (0/${totalSteps})...`
+            : refreshMode === 'incremental'
+              ? 'Metadata is already current for known library items.'
+              : 'No library or backup items required metadata refresh.'
+      })
 
       if (!totalSteps) {
-        if (queueId) {
-          updateLiveQueueItem(queueId, {
-            phase: 'completed',
-            progress: 100,
-            details:
-              refreshMode === 'incremental'
-                ? 'Metadata is already current for known library items.'
-                : 'No library or backup items required metadata refresh.'
-          })
-        }
+        updateLiveQueueItem(queueId, {
+          phase: 'completed',
+          progress: 100,
+          details:
+            refreshMode === 'incremental'
+              ? 'Metadata is already current for known library items.'
+              : 'No library or backup items required metadata refresh.'
+        })
         return
       }
 
@@ -4089,15 +4222,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
         completedSteps += 1
         setMetaStoreSyncProgress({ completed: completedSteps, total: totalSteps })
-        if (queueId) {
-          updateLiveQueueItem(queueId, {
-            progress: Math.min(95, Math.round((completedSteps / Math.max(totalSteps, 1)) * 85) + 10),
-            details:
-              refreshMode === 'incremental'
-                ? `Refreshing metadata for new, changed, or stale items (${completedSteps}/${totalSteps})...`
-                : `Refreshing metadata matches (${completedSteps}/${totalSteps})...`
-          })
-        }
+        updateLiveQueueItem(queueId, {
+          progress: Math.min(95, Math.round((completedSteps / Math.max(totalSteps, 1)) * 85) + 10),
+          details:
+            refreshMode === 'incremental'
+              ? `Refreshing metadata for new, changed, or stale items (${completedSteps}/${totalSteps})...`
+              : `Refreshing metadata matches (${completedSteps}/${totalSteps})...`
+        })
       }
 
       for (const manualStoreEntry of manualStoreItemsToRefresh) {
@@ -4119,39 +4250,33 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
         completedSteps += 1
         setMetaStoreSyncProgress({ completed: completedSteps, total: totalSteps })
-        if (queueId) {
-          updateLiveQueueItem(queueId, {
-            progress: Math.min(95, Math.round((completedSteps / Math.max(totalSteps, 1)) * 85) + 10),
-            details:
-              refreshMode === 'incremental'
-                ? `Refreshing metadata for new, changed, or stale items (${completedSteps}/${totalSteps})...`
-                : `Refreshing metadata matches (${completedSteps}/${totalSteps})...`
-          })
-        }
+        updateLiveQueueItem(queueId, {
+          progress: Math.min(95, Math.round((completedSteps / Math.max(totalSteps, 1)) * 85) + 10),
+          details:
+            refreshMode === 'incremental'
+              ? `Refreshing metadata for new, changed, or stale items (${completedSteps}/${totalSteps})...`
+              : `Refreshing metadata matches (${completedSteps}/${totalSteps})...`
+        })
       }
 
       if (metaStoreRefreshRunRef.current === runId) {
         setMetaStoreMatchesByItemId(buildNextMatchesByItemId())
-        if (queueId) {
-          updateLiveQueueItem(queueId, {
-            phase: 'completed',
-            progress: 100,
-            details:
-              refreshMode === 'incremental'
-                ? `Metadata refresh completed for ${totalSteps} new, changed, stale, or unresolved lookup${totalSteps === 1 ? '' : 's'}.`
-                : `Metadata refresh completed for ${items.length} item${items.length === 1 ? '' : 's'}.`
-          })
-        }
+        updateLiveQueueItem(queueId, {
+          phase: 'completed',
+          progress: 100,
+          details:
+            refreshMode === 'incremental'
+              ? `Metadata refresh completed for ${totalSteps} new, changed, stale, or unresolved lookup${totalSteps === 1 ? '' : 's'}.`
+              : `Metadata refresh completed for ${items.length} item${items.length === 1 ? '' : 's'}.`
+        })
       }
     } catch (error) {
       if (metaStoreRefreshRunRef.current === runId) {
-        if (queueId) {
-          updateLiveQueueItem(queueId, {
-            phase: 'failed',
-            progress: 100,
-            details: error instanceof Error ? error.message : 'Unable to refresh stored metadata matches.'
-          })
-        }
+        updateLiveQueueItem(queueId, {
+          phase: 'failed',
+          progress: 100,
+          details: error instanceof Error ? error.message : 'Unable to refresh stored metadata matches.'
+        })
       }
     } finally {
       if (metaStoreRefreshRunRef.current === runId) {
