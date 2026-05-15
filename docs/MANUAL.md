@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.9.7`
+Current documented application version: `0.9.8`
 
 ## Overview
 
@@ -102,6 +102,8 @@ On Windows, vrSrc sync now prefers IPv4 for remote requests. This helps avoid Cl
 QuestVault now uses `rclone` for vrSrc metadata archive and payload transfers, while Telegram credential resolution still uses `curl`. Remote source requests pin the transport user agent to `rclone/v1.72.1`, matching the request profile currently accepted by the vrSrc host.
 
 If an older managed or system `rclone` runtime is present, QuestVault now checks its version and refreshes it automatically when it is below the minimum version currently required for vrSrc sync.
+
+vrSrc sync now stages remote metadata refreshes transactionally. QuestVault keeps the current cached archive, extracted metadata, and catalog in place until a replacement `meta.7z` has downloaded successfully, extracted successfully, and produced a valid replacement catalog. If the downloaded archive matches the current one, QuestVault keeps the existing cache untouched.
 
 Selecting a vrSrc item opens a remote detail drawer that can include:
 

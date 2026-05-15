@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { appendFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, extname, join } from 'node:path'
 import { execFile as execFileCallback, spawn } from 'node:child_process'
@@ -504,8 +504,20 @@ class VrSrcService {
     return join(this.getRootPath(), 'meta.7z')
   }
 
+  private getStagedMetaArchivePath(): string {
+    return join(this.getRootPath(), 'meta.next.7z')
+  }
+
   private getMetaExtractPath(): string {
     return join(this.getRootPath(), 'meta')
+  }
+
+  private getStagedMetaExtractPath(): string {
+    return join(this.getRootPath(), 'meta.next')
+  }
+
+  private getStagedCatalogPath(): string {
+    return join(this.getRootPath(), 'catalog.next.json')
   }
 
   private getDownloadsPath(): string {
@@ -865,6 +877,48 @@ class VrSrcService {
     }
 
     return totalBytes
+  }
+
+  private async hashFile(path: string): Promise<string | null> {
+    try {
+      const contents = await readFile(path)
+      return createHash('sha256').update(contents).digest('hex')
+    } catch {
+      return null
+    }
+  }
+
+  private async isStagedMetaArchiveNewerOrDifferent(stagedArchivePath: string): Promise<boolean> {
+    const liveArchivePath = this.getMetaArchivePath()
+    if (!(await this.fileExists(liveArchivePath))) {
+      return true
+    }
+
+    const [stagedHash, liveHash] = await Promise.all([this.hashFile(stagedArchivePath), this.hashFile(liveArchivePath)])
+    if (!stagedHash || !liveHash) {
+      return true
+    }
+
+    return stagedHash !== liveHash
+  }
+
+  private async finalizeStagedCatalog(
+    stagedArchivePath: string,
+    stagedExtractPath: string,
+    stagedCatalogPath: string,
+    logger?: VrSrcLogger
+  ): Promise<void> {
+    await logger?.info('Promoting staged vrSrc metadata into the live cache.', {
+      stagedArchivePath,
+      stagedExtractPath,
+      stagedCatalogPath
+    })
+    await rm(this.getMetaArchivePath(), { force: true })
+    await rm(this.getMetaExtractPath(), { recursive: true, force: true })
+    await rm(this.getCatalogPath(), { force: true })
+    await rename(stagedArchivePath, this.getMetaArchivePath())
+    await rename(stagedExtractPath, this.getMetaExtractPath())
+    await rename(stagedCatalogPath, this.getCatalogPath())
   }
 
   private async syncMetaArchiveWithRclone(baseUri: string, destinationPath: string, logger?: VrSrcLogger): Promise<void> {
@@ -1384,23 +1438,28 @@ class VrSrcService {
 
   private async resetCachedState(
     options?: {
+      includeCatalog?: boolean
       includeDownloads?: boolean
       includeCredentials?: boolean
       logger?: VrSrcLogger
       reason?: string
     }
   ): Promise<void> {
+    const includeCatalog = options?.includeCatalog ?? true
     const includeDownloads = options?.includeDownloads ?? false
     const includeCredentials = options?.includeCredentials ?? false
     const logger = options?.logger
 
     this.trailerVideoIdCache.clear()
     await logger?.info('Resetting cached vrSrc state.', {
+      includeCatalog,
       includeDownloads,
       includeCredentials,
       reason: options?.reason ?? null
     })
-    await rm(this.getCatalogPath(), { force: true })
+    if (includeCatalog) {
+      await rm(this.getCatalogPath(), { force: true })
+    }
     await rm(this.getMetaArchivePath(), { force: true })
     await rm(this.getMetaExtractPath(), { recursive: true, force: true })
     if (includeDownloads) {
@@ -1435,8 +1494,15 @@ class VrSrcService {
     return Number.isFinite(sizeBytes) && sizeBytes > 0
   }
 
-  private async buildCatalog(logger?: VrSrcLogger): Promise<VrSrcCatalogResponse> {
-    const rootPath = this.getMetaExtractPath()
+  private async buildCatalog(
+    logger?: VrSrcLogger,
+    options?: {
+      rootPath?: string
+      catalogPath?: string
+    }
+  ): Promise<VrSrcCatalogResponse> {
+    const rootPath = options?.rootPath ?? this.getMetaExtractPath()
+    const catalogPath = options?.catalogPath ?? this.getCatalogPath()
     const gameListPath =
       (await this.findFirstMatchingFile(rootPath, ['VRP-GameList.txt', 'GameList.txt'])) ??
       join(rootPath, 'VRP-GameList.txt')
@@ -1504,13 +1570,14 @@ class VrSrcService {
       items
     }
 
-    await writeFile(this.getCatalogPath(), JSON.stringify(catalog, null, 2), 'utf8')
+    await writeFile(catalogPath, JSON.stringify(catalog, null, 2), 'utf8')
     await logger?.info('vrSrc catalog rebuilt successfully.', {
       itemCount: items.length,
       excludedZeroSizeCount,
       artworkCount,
       missingArtworkCount: items.length - artworkCount,
-      syncedAt: catalog.syncedAt
+      syncedAt: catalog.syncedAt,
+      catalogPath
     })
     return catalog
   }
@@ -1958,24 +2025,48 @@ class VrSrcService {
       try {
         await logger.info('vrSrc sync started.')
         await this.ensureDirectories()
-        await this.resetCachedState({
-          includeDownloads: false,
-          includeCredentials: true,
-          logger,
-          reason: 'Fresh sync requested.'
-        })
         const credentials = await this.resolveCredentials(logger, { allowCachedFallback: false })
         const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
+        const stagedArchivePath = this.getStagedMetaArchivePath()
+        const stagedExtractPath = this.getStagedMetaExtractPath()
+        const stagedCatalogPath = this.getStagedCatalogPath()
+        await rm(stagedArchivePath, { force: true })
+        await rm(stagedExtractPath, { recursive: true, force: true })
+        await rm(stagedCatalogPath, { force: true })
         await logger.debug('Resolved vrSrc sync target.', {
           baseUriHost: new URL(credentials.baseUri).host,
           credentialsPath: this.getCredentialsPath(),
-          archivePath: this.getMetaArchivePath(),
-          extractPath: this.getMetaExtractPath(),
-          catalogPath: this.getCatalogPath()
+          archivePath: stagedArchivePath,
+          extractPath: stagedExtractPath,
+          catalogPath: stagedCatalogPath
         })
-        await this.syncMetaArchiveWithRclone(credentials.baseUri, this.getMetaArchivePath(), logger)
-        await this.extractArchive(this.getMetaArchivePath(), this.getMetaExtractPath(), decodedPassword, logger)
-        const catalog = await this.buildCatalog(logger)
+        await this.syncMetaArchiveWithRclone(credentials.baseUri, stagedArchivePath, logger)
+        const shouldPromoteStagedArchive =
+          (await this.isStagedMetaArchiveNewerOrDifferent(stagedArchivePath)) ||
+          !(await this.fileExists(this.getMetaExtractPath())) ||
+          !(await this.fileExists(this.getCatalogPath()))
+
+        if (!shouldPromoteStagedArchive) {
+          await logger.info('Downloaded vrSrc metadata matches the current archive. Keeping the existing cache intact.')
+          await rm(stagedArchivePath, { force: true })
+          const catalog = await this.readCatalog()
+          const status = await this.buildStatus()
+          return {
+            success: true,
+            message: `vrSrc metadata is already current with ${catalog.items.length} remote entries.`,
+            details: null,
+            usedCachedCatalog: false,
+            status,
+            catalog
+          }
+        }
+
+        await this.extractArchive(stagedArchivePath, stagedExtractPath, decodedPassword, logger)
+        const catalog = await this.buildCatalog(logger, {
+          rootPath: stagedExtractPath,
+          catalogPath: stagedCatalogPath
+        })
+        await this.finalizeStagedCatalog(stagedArchivePath, stagedExtractPath, stagedCatalogPath, logger)
         const status = await this.buildStatus()
         await logger.info('vrSrc sync completed successfully.', {
           itemCount: catalog.items.length,
@@ -2016,6 +2107,9 @@ class VrSrcService {
           catalog
         }
       } finally {
+        await rm(this.getStagedMetaArchivePath(), { force: true }).catch(() => undefined)
+        await rm(this.getStagedMetaExtractPath(), { recursive: true, force: true }).catch(() => undefined)
+        await rm(this.getStagedCatalogPath(), { force: true }).catch(() => undefined)
         await logger.info('vrSrc sync finished.', {
           inFlightPreparations: this.activePayloadPreparations
         })
@@ -2041,6 +2135,7 @@ class VrSrcService {
 
     try {
       await this.resetCachedState({
+        includeCatalog: true,
         includeDownloads: true,
         includeCredentials: true,
         reason: 'Manual cache clear requested.'
