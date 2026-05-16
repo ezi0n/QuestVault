@@ -534,6 +534,7 @@ function App() {
   const [vrSrcMaintenanceBusy, setVrSrcMaintenanceBusy] = useState(false)
   const [vrSrcActionBusyReleaseNames, setVrSrcActionBusyReleaseNames] = useState<string[]>([])
   const [vrSrcMessage, setVrSrcMessage] = useState<UiNotice | null>(null)
+  const [hasLoadedVrSrc, setHasLoadedVrSrc] = useState(false)
   const [signatureMismatchDialog, setSignatureMismatchDialog] = useState<SignatureMismatchDialogState | null>(null)
   const [signatureMismatchAcknowledged, setSignatureMismatchAcknowledged] = useState(false)
   const [saveGamesBusy, setSaveGamesBusy] = useState(false)
@@ -560,6 +561,8 @@ function App() {
   const hasAppliedStartupTabRef = useRef(false)
   const hasCheckedForUpdatesRef = useRef(false)
   const vrSrcInitialSyncAttemptedRef = useRef(false)
+  const vrSrcStartupBootstrapCompletedRef = useRef(false)
+  const vrSrcStartupBootstrapPromiseRef = useRef<Promise<void> | null>(null)
   const gamesInstallBusyIdsRef = useRef<string[]>([])
   const vrSrcActionBusyReleaseNamesRef = useRef<string[]>([])
   const vrSrcQueueRemovalTimersRef = useRef(new Map<string, number>())
@@ -1351,10 +1354,20 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       return
     }
 
-    void refreshInstalledApps(selectedDeviceId)
+    const dependenciesReady =
+      dependencyStatus !== null && dependencyStatus.statuses.every((entry) => entry.status === 'ready')
+
+    if (!dependenciesReady || !hasLoadedVrSrc) {
+      return
+    }
+
+    void (async () => {
+      await ensureVrSrcCatalogReadyForFirstHeadsetRefresh()
+      await refreshInstalledApps(selectedDeviceId)
+    })()
     void refreshDeviceUserName(selectedDeviceId)
     void refreshLeftoverData(selectedDeviceId, false)
-  }, [selectedDeviceId])
+  }, [dependencyStatus, hasLoadedVrSrc, selectedDeviceId])
 
   useEffect(() => {
     flushInstalledAppsRefreshIfQuiet()
@@ -1630,7 +1643,38 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details: error instanceof Error ? error.message : 'Unknown error.',
         tone: 'danger'
       })
+    } finally {
+      setHasLoadedVrSrc(true)
     }
+  }
+
+  async function ensureVrSrcCatalogReadyForFirstHeadsetRefresh(): Promise<void> {
+    if (
+      vrSrcStartupBootstrapCompletedRef.current ||
+      !hasLoadedVrSrc ||
+      (vrSrcCatalog?.items.length ?? 0) > 0
+    ) {
+      vrSrcStartupBootstrapCompletedRef.current =
+        vrSrcStartupBootstrapCompletedRef.current || (vrSrcCatalog?.items.length ?? 0) > 0
+      return
+    }
+
+    if (vrSrcStartupBootstrapPromiseRef.current) {
+      await vrSrcStartupBootstrapPromiseRef.current
+      return
+    }
+
+    vrSrcInitialSyncAttemptedRef.current = true
+    const bootstrapPromise = syncVrSrcCatalog({ openPanelOnSuccess: false })
+      .catch(() => {
+        // A failed first-run sync should not block the first headset refresh.
+      })
+      .finally(() => {
+        vrSrcStartupBootstrapCompletedRef.current = true
+        vrSrcStartupBootstrapPromiseRef.current = null
+      })
+    vrSrcStartupBootstrapPromiseRef.current = bootstrapPromise
+    await bootstrapPromise
   }
 
   async function syncVrSrcCatalog(options?: { openPanelOnSuccess?: boolean }) {
@@ -2204,8 +2248,8 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           response.runtime.message,
           installedAppChangeDetails,
           options?.reason === 'verification'
-            ? 'Install verified. Checking cached metadata before any background refresh...'
-            : 'Installed apps loaded. Checking cached metadata before any background refresh...'
+            ? 'Install verified. Checking cached metadata before continuing the metadata refresh...'
+            : 'Installed apps loaded. Checking cached metadata before continuing the metadata refresh...'
         ]
           .filter(Boolean)
           .join(' ')
@@ -2227,7 +2271,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             phase === 'persisting'
               ? `Installed apps loaded. Saving refreshed metadata index (${resolvedCount}/${total})...`
               : total > 0
-                ? `Installed apps loaded. Refreshing metadata in the background (${completed}/${total}, ${resolvedCount} matched)...`
+                ? `Installed apps loaded. Refreshing metadata now (${completed}/${total}, ${resolvedCount} matched)...`
                 : `Installed apps loaded. Installed metadata is already current (${resolvedCount}/${installedPackageCount} matched).`
         })
       })
@@ -2411,6 +2455,30 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
     setInstalledMetaStoreMatchesByPackageId(nextMatches)
     return nextMatches
+  }
+
+  async function upsertInstalledPackageSummaryFromDetails(
+    packageId: string,
+    details: MetaStoreGameDetails
+  ): Promise<void> {
+    const normalizedPackageId = packageId.trim().toLowerCase()
+    if (!normalizedPackageId) {
+      return
+    }
+
+    const nextSummary = buildSummaryFromDetails(details)
+    const nextMatches = {
+      ...installedMetaStoreMatchesByPackageId,
+      [normalizedPackageId]: nextSummary
+    }
+
+    setInstalledMetaStoreMatchesByPackageId(nextMatches)
+
+    try {
+      await window.api.metaStore.replaceInstalledPackageIndex(nextMatches)
+    } catch {
+      // Keep the richer in-memory summary even if the persisted index write fails.
+    }
   }
 
   async function refreshLeftoverData(serial: string, announceInQueue = true) {
@@ -3089,26 +3157,55 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         return
       }
       if (!response.canceled && key === 'localLibraryPath') {
+        updateLiveQueueItem(queueId, {
+          progress: 54,
+          details: 'Folder stored. Refreshing the local library index...'
+        })
         const [libraryIndex, backupIndex] = await Promise.all([
-          window.api.settings.getLocalLibraryIndex(),
+          window.api.settings.rescanLocalLibrary(),
           window.api.settings.getBackupStorageIndex()
         ])
         setLocalLibraryIndex(libraryIndex)
         setBackupStorageIndex(backupIndex)
-        void refreshMetaStoreMatches(libraryIndex, backupIndex)
+        await refreshMetaStoreMatches(libraryIndex, backupIndex, {
+          announceInQueue: true,
+          queueTitle: 'Library Metadata Refresh',
+          queueSubtitle: response.settings.localLibraryPath ?? 'Local Library',
+          mode: 'incremental'
+        })
       }
       if (!response.canceled && key === 'backupPath') {
-        const backupIndex = await window.api.settings.getBackupStorageIndex()
+        updateLiveQueueItem(queueId, {
+          progress: 54,
+          details: 'Folder stored. Refreshing the backup storage index...'
+        })
+        const backupIndex = await window.api.settings.rescanBackupStorage()
         setBackupStorageIndex(backupIndex)
-        void refreshMetaStoreMatches(localLibraryIndex, backupIndex)
+        await refreshMetaStoreMatches(localLibraryIndex, backupIndex, {
+          announceInQueue: true,
+          queueTitle: 'Backup Metadata Refresh',
+          queueSubtitle: response.settings.backupPath ?? 'Backup Storage',
+          mode: 'incremental'
+        })
       }
       if (!response.canceled && key === 'gameSavesPath') {
+        updateLiveQueueItem(queueId, {
+          progress: 54,
+          details: 'Folder stored. Refreshing saved states...'
+        })
         const [gameSavesStats, saveBackups] = await Promise.all([
           window.api.settings.getPathStats('gameSavesPath'),
           window.api.savegames.listBackups()
         ])
         setGameSavesPathStats(gameSavesStats)
         setSaveBackupsResponse(saveBackups)
+        if (selectedDeviceId && (deviceAppsResponse?.apps.length ?? 0) > 0) {
+          await scanSavePackages(true, undefined, {
+            queueTitle: 'Saved States Refresh',
+            queueSubtitle: response.settings.gameSavesPath ?? 'Game Saves',
+            queueDetails: 'Refreshing headset save data after updating the Game Saves folder...'
+          })
+        }
       }
       setSettingsMessage(response.canceled ? null : 'Folder updated.')
       updateLiveQueueItem(queueId, {
@@ -3204,19 +3301,15 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       const response = await window.api.settings.rescanLocalLibrary()
       setLocalLibraryIndex(response)
       updateLiveQueueItem(queueId, {
-        progress: 60,
+        phase: 'completed',
+        progress: 100,
         details: response.message
       })
       await refreshMetaStoreMatches(response, undefined, {
         announceInQueue: true,
-        queueTitle: 'Metadata Refresh',
-        queueSubtitle: 'Library Scan',
+        queueTitle: 'Library Metadata Refresh',
+        queueSubtitle: settings?.localLibraryPath ?? 'Local Library',
         mode: 'incremental'
-      })
-      updateLiveQueueItem(queueId, {
-        phase: 'completed',
-        progress: 100,
-        details: response.message
       })
       setSettingsMessage(response.message)
       setIsLibraryScanDialogOpen(true)
@@ -4074,19 +4167,38 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       }
     ]
     const items = indexedSources.flatMap((entry) => entry.items)
+    const libraryItemCount = indexedSources.find((entry) => entry.source === 'library')?.items.length ?? 0
+    const backupItemCount = indexedSources.find((entry) => entry.source === 'backup')?.items.length ?? 0
     const runId = metaStoreRefreshRunRef.current + 1
     metaStoreRefreshRunRef.current = runId
     const refreshMode = options?.mode ?? 'full'
+    const indexedItemCount = libraryItemCount + backupItemCount
+    const describeMetadataSources = () => {
+      if (libraryItemCount > 0 && backupItemCount > 0) {
+        return `${libraryItemCount} library item${libraryItemCount === 1 ? '' : 's'} and ${backupItemCount} backup item${backupItemCount === 1 ? '' : 's'}`
+      }
+
+      if (libraryItemCount > 0) {
+        return `${libraryItemCount} library item${libraryItemCount === 1 ? '' : 's'}`
+      }
+
+      if (backupItemCount > 0) {
+        return `${backupItemCount} backup item${backupItemCount === 1 ? '' : 's'}`
+      }
+
+      return 'known items'
+    }
+    const describeIndexedScope = () => `${indexedItemCount} indexed item${indexedItemCount === 1 ? '' : 's'}`
     const queueId = enqueueLiveQueueItem({
       id: METADATA_REFRESH_QUEUE_ID,
       title: options?.queueTitle ?? 'Metadata Refresh',
-      subtitle: options?.queueSubtitle ?? (refreshMode === 'incremental' ? 'Background Refresh' : null),
+      subtitle: options?.queueSubtitle ?? (refreshMode === 'incremental' ? 'Library + Backup' : null),
       kind: 'scan',
       phase: 'scanning',
       progress: 10,
       details:
         refreshMode === 'incremental'
-          ? 'Refreshing metadata for new, changed, or stale items...'
+          ? `Preparing metadata lookups for ${describeMetadataSources()} (${describeIndexedScope()})...`
           : 'Refreshing stored metadata matches...',
       artworkUrl: null
     })
@@ -4189,10 +4301,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         details:
           totalSteps > 0
             ? refreshMode === 'incremental'
-              ? `Refreshing metadata for new, changed, or stale items (0/${totalSteps})...`
+              ? `Refreshing ${totalSteps} metadata lookup${totalSteps === 1 ? '' : 's'} expanded from ${describeMetadataSources()} (${describeIndexedScope()}; 0/${totalSteps} complete)...`
               : `Refreshing metadata matches (0/${totalSteps})...`
             : refreshMode === 'incremental'
-              ? 'Metadata is already current for known library items.'
+              ? `Metadata is already current for ${describeMetadataSources()}.`
               : 'No library or backup items required metadata refresh.'
       })
 
@@ -4202,31 +4314,37 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           progress: 100,
           details:
             refreshMode === 'incremental'
-              ? 'Metadata is already current for known library items.'
+              ? `Metadata is already current for ${describeMetadataSources()}.`
               : 'No library or backup items required metadata refresh.'
         })
         return
       }
 
-      for (const packageId of packagesToRefresh) {
-        const response = await window.api.metaStore.getCachedMatchesByPackageIds([packageId])
+      const packageIdsToRefresh = Array.from(packagesToRefresh)
+      const packageChunkSize = 12
+
+      for (let offset = 0; offset < packageIdsToRefresh.length; offset += packageChunkSize) {
+        const chunk = packageIdsToRefresh.slice(offset, offset + packageChunkSize)
+        const response = await window.api.metaStore.getCachedMatchesByPackageIds(chunk)
 
         if (metaStoreRefreshRunRef.current !== runId) {
           return
         }
 
-        const match = response.matches[packageId]
-        if (match) {
-          matchesByPackageId[packageId] = match
+        for (const packageId of chunk) {
+          const match = response.matches[packageId]
+          if (match) {
+            matchesByPackageId[packageId] = match
+          }
         }
 
-        completedSteps += 1
+        completedSteps += chunk.length
         setMetaStoreSyncProgress({ completed: completedSteps, total: totalSteps })
         updateLiveQueueItem(queueId, {
           progress: Math.min(95, Math.round((completedSteps / Math.max(totalSteps, 1)) * 85) + 10),
           details:
             refreshMode === 'incremental'
-              ? `Refreshing metadata for new, changed, or stale items (${completedSteps}/${totalSteps})...`
+              ? `Refreshing ${totalSteps} metadata lookup${totalSteps === 1 ? '' : 's'} expanded from ${describeMetadataSources()} (${describeIndexedScope()}; ${completedSteps}/${totalSteps} complete)...`
               : `Refreshing metadata matches (${completedSteps}/${totalSteps})...`
         })
       }
@@ -4254,7 +4372,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           progress: Math.min(95, Math.round((completedSteps / Math.max(totalSteps, 1)) * 85) + 10),
           details:
             refreshMode === 'incremental'
-              ? `Refreshing metadata for new, changed, or stale items (${completedSteps}/${totalSteps})...`
+              ? `Refreshing ${totalSteps} metadata lookup${totalSteps === 1 ? '' : 's'} expanded from ${describeMetadataSources()} (${describeIndexedScope()}; ${completedSteps}/${totalSteps} complete)...`
               : `Refreshing metadata matches (${completedSteps}/${totalSteps})...`
         })
       }
@@ -4266,7 +4384,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           progress: 100,
           details:
             refreshMode === 'incremental'
-              ? `Metadata refresh completed for ${totalSteps} new, changed, stale, or unresolved lookup${totalSteps === 1 ? '' : 's'}.`
+              ? `Metadata refresh completed: ${totalSteps} lookup target${totalSteps === 1 ? '' : 's'} across ${describeMetadataSources()} (${describeIndexedScope()}).`
               : `Metadata refresh completed for ${items.length} item${items.length === 1 ? '' : 's'}.`
         })
       }
@@ -4389,6 +4507,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       deviceLeftoverMessage={deviceLeftoverMessage}
       inventoryMessage={inventoryMessage}
       inventoryActionBusyPackageId={inventoryActionBusyPackageId}
+      onUpsertInstalledPackageSummaryFromDetails={upsertInstalledPackageSummaryFromDetails}
       gamesInstallBusyIds={gamesInstallBusyIds}
       manualInstallBusyKind={manualInstallBusyKind}
       backupStorageActionBusyItemId={backupStorageActionBusyItemId}

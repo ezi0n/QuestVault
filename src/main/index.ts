@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } from 'electron'
 import { createServer, type Server } from 'node:http'
-import { cp, mkdir, readFile, readdir } from 'node:fs/promises'
+import { access, cp, copyFile, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { electronApp, is } from '@electron-toolkit/utils'
 import { dirname, extname, join, normalize, resolve } from 'path'
 import { pathToFileURL } from 'url'
@@ -16,6 +16,8 @@ import { headsetActionLogService } from './services/headsetActionLogService'
 const APP_DISPLAY_NAME = 'QuestVault'
 const LEGACY_USER_DATA_DIR_NAME = 'quest-archive-manager'
 const PRODUCTION_RENDERER_SCHEME = 'http://127.0.0.1'
+const APP_PREFERENCES_DOMAIN = 'com.questvault'
+const LEGACY_APP_PREFERENCES_DOMAIN = 'com.apprenticevr.questvault'
 
 let productionRendererServer: Server | null = null
 let productionRendererServerUrl: string | null = null
@@ -43,6 +45,15 @@ async function directoryEntryCount(path: string): Promise<number> {
   }
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function migrateLegacyUserDataIfNeeded(): Promise<void> {
   const appDataPath = app.getPath('appData')
   const preferredUserDataPath = join(appDataPath, APP_DISPLAY_NAME)
@@ -62,6 +73,31 @@ async function migrateLegacyUserDataIfNeeded(): Promise<void> {
 
   await mkdir(dirname(preferredUserDataPath), { recursive: true })
   await cp(legacyUserDataPath, preferredUserDataPath, { recursive: true, force: false })
+}
+
+async function migrateLegacyMacPreferencesIfNeeded(): Promise<void> {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  const preferencesDir = join(app.getPath('home'), 'Library', 'Preferences')
+  const preferredPreferencesPath = join(preferencesDir, `${APP_PREFERENCES_DOMAIN}.plist`)
+  const legacyPreferencesPath = join(preferencesDir, `${LEGACY_APP_PREFERENCES_DOMAIN}.plist`)
+
+  if (await pathExists(preferredPreferencesPath)) {
+    if (await pathExists(legacyPreferencesPath)) {
+      await rm(legacyPreferencesPath, { force: true })
+    }
+    return
+  }
+
+  if (!(await pathExists(legacyPreferencesPath))) {
+    return
+  }
+
+  await mkdir(preferencesDir, { recursive: true })
+  await copyFile(legacyPreferencesPath, preferredPreferencesPath)
+  await rm(legacyPreferencesPath, { force: true })
 }
 
 function getRendererMimeType(filePath: string): string {
@@ -203,6 +239,7 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   await migrateLegacyUserDataIfNeeded()
+  await migrateLegacyMacPreferencesIfNeeded()
 
   electronApp.setAppUserModelId('com.questvault')
 

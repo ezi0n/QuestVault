@@ -157,6 +157,7 @@ interface WireframeShellProps {
   deviceLeftoverMessage: string | null
   inventoryMessage: UiNotice | null
   inventoryActionBusyPackageId: string | null
+  onUpsertInstalledPackageSummaryFromDetails: (packageId: string, details: MetaStoreGameDetails) => Promise<void>
   gamesInstallBusyIds: string[]
   manualInstallBusyKind: 'apk' | 'folder' | null
   backupStorageActionBusyItemId: string | null
@@ -3430,7 +3431,7 @@ function GamesView(props: {
                 type="button"
               >
                 {metaStoreSyncProgress
-                  ? `Updating Metadata ${Math.min(metaStoreSyncProgress.completed, metaStoreSyncProgress.total)}/${metaStoreSyncProgress.total}…`
+                  ? `Updating Lookups ${Math.min(metaStoreSyncProgress.completed, metaStoreSyncProgress.total)}/${metaStoreSyncProgress.total}…`
                   : 'Update Metadata'}
               </button>
             </div>
@@ -5124,6 +5125,7 @@ function InventoryView(props: {
   backupStorageIndex: LocalLibraryScanResponse | null
   metaStoreMatchesByItemId: Record<string, MetaStoreGameSummary>
   installedMetaStoreMatchesByPackageId: Record<string, MetaStoreGameSummary>
+  vrSrcCatalog: VrSrcCatalogResponse | null
   deviceAppsBusy: boolean
   deviceAppsMessage: string | null
   inventoryMessage: UiNotice | null
@@ -5136,6 +5138,7 @@ function InventoryView(props: {
   onRefreshInstalledApps: (serial: string) => Promise<void>
   onUninstallInstalledApp: (packageId: string) => Promise<void>
   onBackupInstalledApp: (packageId: string) => Promise<void>
+  onUpsertInstalledPackageSummaryFromDetails: (packageId: string, details: MetaStoreGameDetails) => Promise<void>
 }) {
   const {
     selectedDeviceId,
@@ -5146,10 +5149,12 @@ function InventoryView(props: {
     backupStorageIndex,
     metaStoreMatchesByItemId,
     installedMetaStoreMatchesByPackageId,
+    vrSrcCatalog,
     deviceAppsBusy,
     deviceAppsMessage,
     inventoryMessage,
     inventoryActionBusyPackageId,
+    onUpsertInstalledPackageSummaryFromDetails,
     runtimeStatus,
     runtimeMessage,
     displayMode,
@@ -5180,6 +5185,14 @@ function InventoryView(props: {
     metaStoreMatchesByItemId,
     installedMetaStoreMatchesByPackageId
   )
+  const vrSrcArtworkByPackageId = (vrSrcCatalog?.items ?? []).reduce((artwork, item) => {
+    const packageId = item.packageName.trim().toLowerCase()
+    if (packageId && item.artworkUrl && !artwork.has(packageId)) {
+      artwork.set(packageId, item.artworkUrl)
+    }
+
+    return artwork
+  }, new Map<string, string>())
   const visibleApps = (deviceAppsResponse?.apps ?? [])
     .slice()
     .sort((left, right) => {
@@ -5205,7 +5218,11 @@ function InventoryView(props: {
       )
     : null
   const effectiveSelectedInventoryDetails = selectedInventoryDetails ?? selectedInventorySummary
-  const selectedInventoryArtworkUri = resolveMetaStoreArtworkUri(effectiveSelectedInventoryDetails)
+  const selectedInventoryArtworkUri =
+    resolveMetaStoreArtworkUri(effectiveSelectedInventoryDetails) ??
+    (selectedInventoryApp
+      ? (vrSrcArtworkByPackageId.get(selectedInventoryApp.packageId.trim().toLowerCase()) ?? null)
+      : null)
   const selectedInventoryDisplayLabel =
     selectedInventoryApp?.label ?? selectedInventoryApp?.inferredLabel ?? 'Installed app'
   const selectedInventoryTrailerVideoId = effectiveSelectedInventoryDetails?.youtubeTrailerVideoId ?? null
@@ -5257,6 +5274,9 @@ function InventoryView(props: {
         const response = await window.api.metaStore.getDetails(selectedInventorySummary.storeId)
         if (!cancelled) {
           setSelectedInventoryDetails(response.details)
+          if (response.details && selectedInventoryApp) {
+            void onUpsertInstalledPackageSummaryFromDetails(selectedInventoryApp.packageId, response.details)
+          }
         }
       } catch {
         if (!cancelled) {
@@ -5398,7 +5418,9 @@ function InventoryView(props: {
                     packageSummaryByPackageId,
                     installedMetaStoreMatchesByPackageId
                   )
-                  const artworkUri = resolveMetaStoreArtworkUri(summary)
+                  const artworkUri =
+                    resolveMetaStoreArtworkUri(summary) ??
+                    (vrSrcArtworkByPackageId.get(app.packageId.trim().toLowerCase()) ?? null)
                   const displayLabel = app.label ?? app.inferredLabel
 
                   return (
@@ -5485,7 +5507,9 @@ function InventoryView(props: {
                       packageSummaryByPackageId,
                       installedMetaStoreMatchesByPackageId
                     )
-                    const artworkUri = resolveMetaStoreArtworkUri(summary)
+                    const artworkUri =
+                      resolveMetaStoreArtworkUri(summary) ??
+                      (vrSrcArtworkByPackageId.get(app.packageId.trim().toLowerCase()) ?? null)
                     const displayLabel = app.label ?? app.inferredLabel
 
                     return (
@@ -5888,6 +5912,7 @@ function GameSavesView(props: {
   backupStorageIndex: LocalLibraryScanResponse | null
   metaStoreMatchesByItemId: Record<string, MetaStoreGameSummary>
   installedMetaStoreMatchesByPackageId: Record<string, MetaStoreGameSummary>
+  vrSrcCatalog: VrSrcCatalogResponse | null
   saveBackupsResponse: SaveBackupsResponse | null
   saveScanResponse: SavePackagesScanResponse | null
   saveGamesBusy: boolean
@@ -5912,6 +5937,7 @@ function GameSavesView(props: {
     backupStorageIndex,
     metaStoreMatchesByItemId,
     installedMetaStoreMatchesByPackageId,
+    vrSrcCatalog,
     saveBackupsResponse,
     saveScanResponse,
     saveGamesBusy,
@@ -5939,6 +5965,14 @@ function GameSavesView(props: {
     metaStoreMatchesByItemId,
     installedMetaStoreMatchesByPackageId
   )
+  const vrSrcArtworkByPackageId = (vrSrcCatalog?.items ?? []).reduce((artwork, item) => {
+    const packageId = item.packageName.trim().toLowerCase()
+    if (packageId && item.artworkUrl && !artwork.has(packageId)) {
+      artwork.set(packageId, item.artworkUrl)
+    }
+
+    return artwork
+  }, new Map<string, string>())
   const installedAppsByPackageId = new Map((deviceAppsResponse?.apps ?? []).map((app) => [app.packageId.toLowerCase(), app]))
   const saveScanByPackageId = new Map((saveScanResponse?.results ?? []).map((result) => [result.packageId.toLowerCase(), result]))
   const backupsByPackageId = new Map<string, SaveBackupEntry[]>()
@@ -5999,7 +6033,7 @@ function GameSavesView(props: {
       return {
         packageId: installedApp?.packageId ?? latestBackup?.packageId ?? saveScan?.packageId ?? normalizedPackageId,
         title,
-        artworkUri: resolveMetaStoreArtworkUri(summary),
+        artworkUri: resolveMetaStoreArtworkUri(summary) ?? (vrSrcArtworkByPackageId.get(normalizedPackageId) ?? null),
         metaStoreSummary: summary,
         isInstalled,
         installedLabel: installedApp?.label ?? installedApp?.inferredLabel ?? latestBackup?.appName ?? null,
@@ -8054,6 +8088,7 @@ export function WireframeShell(props: WireframeShellProps) {
     deviceLeftoverMessage,
     inventoryMessage,
     inventoryActionBusyPackageId,
+    onUpsertInstalledPackageSummaryFromDetails,
     gamesInstallBusyIds,
     manualInstallBusyKind,
     backupStorageActionBusyItemId,
@@ -8437,6 +8472,7 @@ export function WireframeShell(props: WireframeShellProps) {
               backupStorageIndex={backupStorageIndex}
               metaStoreMatchesByItemId={metaStoreMatchesByItemId}
               installedMetaStoreMatchesByPackageId={installedMetaStoreMatchesByPackageId}
+              vrSrcCatalog={vrSrcCatalog}
               saveBackupsResponse={saveBackupsResponse}
               saveScanResponse={saveScanResponse}
               saveGamesBusy={saveGamesBusy}
@@ -8464,10 +8500,12 @@ export function WireframeShell(props: WireframeShellProps) {
               backupStorageIndex={backupStorageIndex}
               metaStoreMatchesByItemId={metaStoreMatchesByItemId}
               installedMetaStoreMatchesByPackageId={installedMetaStoreMatchesByPackageId}
+              vrSrcCatalog={vrSrcCatalog}
               deviceAppsBusy={deviceAppsBusy}
               deviceAppsMessage={deviceAppsMessage}
               inventoryMessage={inventoryMessage}
               inventoryActionBusyPackageId={inventoryActionBusyPackageId}
+              onUpsertInstalledPackageSummaryFromDetails={onUpsertInstalledPackageSummaryFromDetails}
               runtimeStatus={deviceResponse?.runtime.status ?? null}
               runtimeMessage={deviceResponse?.runtime.message ?? null}
               displayMode={inventoryDisplayMode}
