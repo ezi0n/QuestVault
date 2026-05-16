@@ -74,7 +74,7 @@ class MetaStoreService {
   }
 
   private toLocalAssetUri(absolutePath: string): string {
-    return `qam-asset://${encodeURIComponent(absolutePath)}`
+    return `qam-asset://${absolutePath.split('/').map(encodeURIComponent).join('/')}`
   }
 
   private async ensureCacheLoaded(): Promise<MetaStoreCache> {

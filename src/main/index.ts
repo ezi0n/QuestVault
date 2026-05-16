@@ -20,6 +20,18 @@ const PRODUCTION_RENDERER_SCHEME = 'http://127.0.0.1'
 let productionRendererServer: Server | null = null
 let productionRendererServerUrl: string | null = null
 
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'qam-asset',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true
+    }
+  }
+])
+
 app.setName(APP_DISPLAY_NAME)
 
 async function directoryEntryCount(path: string): Promise<number> {
@@ -88,6 +100,27 @@ async function ensureProductionRendererServer(): Promise<string> {
   productionRendererServer = createServer(async (request, response) => {
     try {
       const requestPath = request.url ? new URL(request.url, PRODUCTION_RENDERER_SCHEME).pathname : '/'
+      if (request.url) {
+        const requestUrl = new URL(request.url, PRODUCTION_RENDERER_SCHEME)
+        if (requestUrl.pathname === '/__qam_asset__') {
+          const requestedPath = requestUrl.searchParams.get('path')
+          if (!requestedPath) {
+            response.writeHead(400)
+            response.end('Missing asset path')
+            return
+          }
+
+          const decodedAssetPath = decodeURIComponent(requestedPath)
+          const payload = await readFile(decodedAssetPath)
+          response.writeHead(200, {
+            'Content-Type': getRendererMimeType(decodedAssetPath),
+            'Cache-Control': 'no-cache'
+          })
+          response.end(payload)
+          return
+        }
+      }
+
       const normalizedRequestPath = normalize(decodeURIComponent(requestPath)).replace(/^(\.\.[/\\])+/, '')
       const relativeRequestPath =
         normalizedRequestPath === '/' || normalizedRequestPath === '.'
@@ -175,8 +208,10 @@ app.whenReady().then(async () => {
 
   protocol.handle('qam-asset', (request) => {
     const requestUrl = new URL(request.url)
-    const encodedPath = `${requestUrl.host}${requestUrl.pathname}`.replace(/^\/+/, '')
-    const filePath = decodeURIComponent(encodedPath)
+    const legacyEncodedPath = `${requestUrl.host}${requestUrl.pathname}`.replace(/^\/+/, '')
+    const filePath = requestUrl.host
+      ? decodeURIComponent(legacyEncodedPath)
+      : decodeURIComponent(requestUrl.pathname)
     return net.fetch(pathToFileURL(filePath).toString())
   })
 

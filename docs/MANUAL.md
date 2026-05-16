@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.9.8`
+Current documented application version: `0.9.9`
 
 ## Overview
 
@@ -104,6 +104,8 @@ QuestVault now uses `rclone` for vrSrc metadata archive and payload transfers, w
 If an older managed or system `rclone` runtime is present, QuestVault now checks its version and refreshes it automatically when it is below the minimum version currently required for vrSrc sync.
 
 vrSrc sync now stages remote metadata refreshes transactionally. QuestVault keeps the current cached archive, extracted metadata, and catalog in place until a replacement `meta.7z` has downloaded successfully, extracted successfully, and produced a valid replacement catalog. If the downloaded archive matches the current one, QuestVault keeps the existing cache untouched.
+
+Packaged builds now handle vrSrc artwork more defensively as well. Local vrSrc thumbnails are normalized through the app's packaged renderer path, staged `meta.next` artwork references are repaired back to the live `meta/` cache when needed, and packaged release builds are now expected to be cut only after rebuilding `out/**/*` so fresh renderer and main-process fixes are actually included.
 
 Selecting a vrSrc item opens a remote detail drawer that can include:
 

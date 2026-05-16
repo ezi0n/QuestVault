@@ -529,7 +529,33 @@ class VrSrcService {
   }
 
   private toLocalAssetUri(absolutePath: string): string {
-    return `qam-asset://${encodeURIComponent(absolutePath)}`
+    return `qam-asset://${absolutePath.split('/').map(encodeURIComponent).join('/')}`
+  }
+
+  private normalizeVrSrcArtworkUrl(value: unknown): string | null {
+    if (typeof value !== 'string') {
+      return null
+    }
+
+    const normalizedValue = value.trim()
+    if (!normalizedValue) {
+      return null
+    }
+
+    const stagedPath = this.getStagedMetaExtractPath()
+    const livePath = this.getMetaExtractPath()
+    const legacyEncodedStagedPath = encodeURIComponent(`${stagedPath}/`)
+    const legacyEncodedLivePath = encodeURIComponent(`${livePath}/`)
+
+    if (normalizedValue.includes(legacyEncodedStagedPath)) {
+      return normalizedValue.replace(legacyEncodedStagedPath, legacyEncodedLivePath)
+    }
+
+    if (normalizedValue.includes(`${stagedPath}/`)) {
+      return normalizedValue.replace(`${stagedPath}/`, `${livePath}/`)
+    }
+
+    return normalizedValue
   }
 
   private sanitizeSegment(value: string): string {
@@ -1499,14 +1525,17 @@ class VrSrcService {
     options?: {
       rootPath?: string
       catalogPath?: string
+      assetRootPath?: string
     }
   ): Promise<VrSrcCatalogResponse> {
     const rootPath = options?.rootPath ?? this.getMetaExtractPath()
     const catalogPath = options?.catalogPath ?? this.getCatalogPath()
+    const assetRootPath = options?.assetRootPath ?? rootPath
     const gameListPath =
       (await this.findFirstMatchingFile(rootPath, ['VRP-GameList.txt', 'GameList.txt'])) ??
       join(rootPath, 'VRP-GameList.txt')
     const thumbnailsPath = join(rootPath, '.meta', 'thumbnails')
+    const assetThumbnailsPath = join(assetRootPath, '.meta', 'thumbnails')
     await logger?.debug('Building vrSrc catalog from extracted metadata.', {
       gameListPath,
       thumbnailsPath
@@ -1542,7 +1571,8 @@ class VrSrcService {
       }
 
       const artworkPath = join(thumbnailsPath, `${packageName}.jpg`)
-      const artworkUrl = (await this.fileExists(artworkPath)) ? this.toLocalAssetUri(artworkPath) : null
+      const artworkAssetPath = join(assetThumbnailsPath, `${packageName}.jpg`)
+      const artworkUrl = (await this.fileExists(artworkPath)) ? this.toLocalAssetUri(artworkAssetPath) : null
       if (artworkUrl) {
         artworkCount += 1
       }
@@ -1590,6 +1620,7 @@ class VrSrcService {
         ? parsed.items
             .map((item) => ({
               ...item,
+              artworkUrl: this.normalizeVrSrcArtworkUrl(item?.artworkUrl),
               versionName:
                 typeof item?.versionName === 'string'
                   ? item.versionName
@@ -2064,7 +2095,8 @@ class VrSrcService {
         await this.extractArchive(stagedArchivePath, stagedExtractPath, decodedPassword, logger)
         const catalog = await this.buildCatalog(logger, {
           rootPath: stagedExtractPath,
-          catalogPath: stagedCatalogPath
+          catalogPath: stagedCatalogPath,
+          assetRootPath: this.getMetaExtractPath()
         })
         await this.finalizeStagedCatalog(stagedArchivePath, stagedExtractPath, stagedCatalogPath, logger)
         const status = await this.buildStatus()

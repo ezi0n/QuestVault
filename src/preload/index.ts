@@ -56,9 +56,10 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.9.8',
+  version: '0.9.9',
   ping: (): string => 'pong',
   app: {
+    isPackaged: !process.env.ELECTRON_RENDERER_URL,
     checkForUpdates: (): Promise<ReleaseCheckResponse> => ipcRenderer.invoke('app:check-for-updates')
   },
   dependencies: {

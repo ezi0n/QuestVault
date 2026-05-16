@@ -120,7 +120,7 @@ class SettingsService {
   }
 
   private toLocalAssetUri(absolutePath: string): string {
-    return `qam-asset://${encodeURIComponent(absolutePath)}`
+    return `qam-asset://${absolutePath.split('/').map(encodeURIComponent).join('/')}`
   }
 
   private async pathStillExists(absolutePath: string): Promise<boolean> {

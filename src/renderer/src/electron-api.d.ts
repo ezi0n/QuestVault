@@ -57,6 +57,7 @@ interface ElectronApi {
   version: string
   ping: () => string
   app: {
+    isPackaged: boolean
     checkForUpdates: () => Promise<ReleaseCheckResponse>
   }
   dependencies: {

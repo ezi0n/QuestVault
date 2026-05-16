@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Documented application version: `0.9.8`
+Documented application version: `0.9.9`
 
 ## Packaging Targets
 
@@ -44,6 +44,8 @@ pnpm dist:win:arm64
 pnpm dist:linux
 pnpm dist:linux:arm64
 ```
+
+When producing a packaged release, rebuild `out/**/*` first. `electron-builder` packages the compiled `out/` tree, so invoking it against stale output can ship an older renderer or main-process build than the current source tree.
 
 ## Packaging Stack
 
@@ -103,7 +105,7 @@ If packaging fails, classify the issue as one of:
 
 ## Current Validation Status
 
-Validated in this workspace for `0.9.8` with:
+Validated in this workspace for `0.9.9` with:
 
 ```bash
 pnpm typecheck
@@ -128,7 +130,7 @@ Observed outcomes:
 - unsigned Windows arm64 packaged build passed
 - unsigned Linux x64 packaged build passed
 - unsigned Linux arm64 packaged build passed
-- v0.6.3-style release asset check passed for `0.9.8`
+- v0.6.3-style release asset check passed for `0.9.9`
 
 ## Current Icon Set
 

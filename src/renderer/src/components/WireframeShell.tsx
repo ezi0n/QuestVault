@@ -482,6 +482,25 @@ function buildFallbackArtworkStyle(uri: string): CSSProperties {
   }
 }
 
+function resolveArtworkImageSrc(src: string | null | undefined): string | null {
+  if (!src) {
+    return null
+  }
+
+  if (!window.api.app.isPackaged || !src.startsWith('qam-asset://')) {
+    return src
+  }
+
+  try {
+    const assetUrl = new URL(src)
+    const legacyEncodedPath = `${assetUrl.host}${assetUrl.pathname}`.replace(/^\/+/, '')
+    const filePath = assetUrl.host ? decodeURIComponent(legacyEncodedPath) : decodeURIComponent(assetUrl.pathname)
+    return `${window.location.origin}/__qam_asset__?path=${encodeURIComponent(filePath)}`
+  } catch {
+    return src
+  }
+}
+
 function renderFallbackArtworkSurface(
   label: string | null | undefined,
   artworkKey: string | null | undefined,
@@ -517,16 +536,17 @@ function ResilientArtworkImage({
   fallbackClassName: string
 }): ReactNode {
   const [loadFailed, setLoadFailed] = useState(false)
+  const resolvedSrc = resolveArtworkImageSrc(src)
 
   useEffect(() => {
     setLoadFailed(false)
-  }, [src])
+  }, [resolvedSrc])
 
-  if (!src || loadFailed) {
+  if (!resolvedSrc || loadFailed) {
     return renderFallbackArtworkSurface(label, artworkKey, variant, fallbackClassName)
   }
 
-  return <img alt={alt} className={className} onError={() => setLoadFailed(true)} src={src} />
+  return <img alt={alt} className={className} onError={() => setLoadFailed(true)} src={resolvedSrc} />
 }
 
 function formatGameActionLabel(action: string): string {
