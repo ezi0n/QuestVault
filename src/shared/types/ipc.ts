@@ -134,7 +134,7 @@ export interface DeviceAppsResponse {
   scannedAt: string
 }
 
-export type DeviceLeftoverLocation = 'obb' | 'data'
+export type DeviceLeftoverLocation = 'obb' | 'data' | 'superseded-obb'
 
 export interface DeviceLeftoverItem {
   id: string
@@ -144,6 +144,7 @@ export interface DeviceLeftoverItem {
   sizeBytes: number | null
   deleteBlocked: boolean
   deleteBlockedReason: string | null
+  details: string | null
 }
 
 export interface DeviceLeftoverScanResponse {

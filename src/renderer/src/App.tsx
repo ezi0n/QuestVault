@@ -130,6 +130,18 @@ function buildIndexedItemMatchKey(source: IndexedSourceKind, itemId: string): st
   return `${source}:${itemId}`
 }
 
+function findPackageMatch(
+  matchesByPackageId: Record<string, MetaStoreGameSummary>,
+  packageId: string
+): MetaStoreGameSummary | null {
+  const trimmed = packageId.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  return matchesByPackageId[trimmed] ?? matchesByPackageId[trimmed.toLowerCase()] ?? null
+}
+
 function formatIndexedSourceLabel(source: IndexedSourceKind): string {
   return source === 'library' ? 'Library' : 'Backup Storage'
 }
@@ -1570,12 +1582,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       if (installedMetadataIndexResult.status === 'fulfilled') {
         setInstalledMetaStoreMatchesByPackageId(
           Object.fromEntries(
-            Object.entries(installedMetadataIndexResult.value.matches).map(([packageId, summary]) => [
-              packageId.toLowerCase(),
-              summary
-            ])
-          )
-        )
+          Object.entries(installedMetadataIndexResult.value.matches).map(([packageId, summary]) => [
+            packageId.toLowerCase(),
+            summary
+          ])
+        ))
       } else {
         loadFailures.push(
           installedMetadataIndexResult.reason instanceof Error
@@ -2491,7 +2502,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           kind: 'scan',
           phase: 'scanning',
           progress: 36,
-          details: 'Scanning /sdcard/Android/obb and /sdcard/Android/data for leftover folders...',
+          details: 'Scanning /sdcard/Android/obb and /sdcard/Android/data for orphaned folders and superseded versioned OBBs...',
           artworkUrl: null
         })
       : null
@@ -4107,13 +4118,20 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     const target = deviceLeftoverResponse?.items.find((item) => item.id === itemId) ?? null
     const queueId = enqueueLiveQueueItem({
       id: createLiveQueueId('cleanup', itemId),
-      title: target?.packageId ?? 'Leftover data cleanup',
-      subtitle: target ? `/sdcard/Android/${target.location}` : selectedDeviceId,
+      title: target?.packageId ?? 'Headset cleanup',
+      subtitle:
+        target?.location === 'superseded-obb'
+          ? '/sdcard/Android/obb'
+          : target
+            ? `/sdcard/Android/${target.location}`
+            : selectedDeviceId,
       kind: 'cleanup',
       phase: 'cleaning-up',
       progress: 34,
       details: target
-        ? `Deleting leftover ${target.location.toUpperCase()} data for ${target.packageId}...`
+        ? target.location === 'superseded-obb'
+          ? `Deleting superseded versioned OBB ${target.absolutePath.split('/').pop() ?? target.absolutePath} for ${target.packageId}...`
+          : `Deleting leftover ${target.location.toUpperCase()} data for ${target.packageId}...`
         : 'Deleting leftover headset data...',
       artworkUrl: null
     })
@@ -4255,7 +4273,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           for (const item of sourceItems) {
             const match =
               matchesByManualStoreId[buildIndexedItemMatchKey(source, item.id)] ??
-              item.packageIds.map((packageId) => matchesByPackageId[packageId]).find(Boolean)
+              item.packageIds.map((packageId) => findPackageMatch(matchesByPackageId, packageId)).find(Boolean)
             if (match) {
               nextMatchesByItemId[buildIndexedItemMatchKey(source, item.id)] = match
             }

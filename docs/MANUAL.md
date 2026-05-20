@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.9.11`
+Current documented application version: `0.9.13`
 
 ## Overview
 
@@ -204,9 +204,9 @@ Open `Library Diagnostics` to inspect raw index data, review missing items, and 
 
 Open `Orphaned OBB / Data` to:
 
-- scan headset leftovers
-- inspect orphaned paths
-- delete leftover data from apps that are no longer installed
+- scan headset leftovers after refactors or incomplete upgrades
+- inspect orphaned paths and superseded versioned OBB files
+- delete leftover `Android/data` and `Android/obb` folders from apps that are no longer installed so you can reclaim that space
 
 ### Headset App Scan History
 

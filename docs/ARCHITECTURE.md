@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.9.11`
+Current documented application version: `0.9.13`
 
 ## Runtime Shape
 
@@ -41,7 +41,7 @@ The device service is responsible for headset-facing operations:
 - uninstall installed apps
 - back up installed APKs
 - reboot connected devices through ADB
-- inspect leftover data under `/sdcard/Android/data` and `/sdcard/Android/obb`
+- inspect leftover data under `/sdcard/Android/data` and `/sdcard/Android/obb`, including superseded versioned OBB files that can be left behind after incomplete upgrades or refactors
 - write headset action records for connect, install, uninstall, reboot, APK install, and OBB transfer progress/failures
 
 Folder install flows prefer the package ID already stored in the local library index when choosing the OBB destination directory. Filename-based OBB package inference remains a fallback for entries without indexed package metadata.

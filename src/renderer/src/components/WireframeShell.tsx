@@ -488,14 +488,15 @@ function resolveArtworkImageSrc(src: string | null | undefined): string | null {
     return null
   }
 
-  if (!window.api.app.isPackaged || !src.startsWith('qam-asset://')) {
+  if (!src.startsWith('qam-asset://')) {
     return src
   }
 
   try {
-    const assetUrl = new URL(src)
-    const legacyEncodedPath = `${assetUrl.host}${assetUrl.pathname}`.replace(/^\/+/, '')
-    const filePath = assetUrl.host ? decodeURIComponent(legacyEncodedPath) : decodeURIComponent(assetUrl.pathname)
+    const encodedPath = src.slice('qam-asset://'.length)
+    const filePath = decodeURIComponent(
+      encodedPath.startsWith('/') ? encodedPath : `/${encodedPath}`
+    )
     return `${window.location.origin}/__qam_asset__?path=${encodeURIComponent(filePath)}`
   } catch {
     return src
@@ -2695,17 +2696,23 @@ function GamesView(props: {
     selectedGameLowerLibraryVersions.some((entry) => purgeLibraryItemBusyId === entry.itemId)
   const selectedGameUninstallBusy =
     selectedGamePrimaryPackageId !== null && inventoryActionBusyPackageId === selectedGamePrimaryPackageId
+  const selectedGameFallbackHeroUri = selectedGame?.heroImageUri ?? null
+  const selectedGameFallbackCardArtUri = selectedGame?.thumbnailUri ?? selectedGame?.heroImageUri ?? null
   const selectedGameHeroUri =
     effectiveSelectedGameDetails?.heroImage?.uri ??
     effectiveSelectedGameDetails?.portraitImage?.uri ??
     effectiveSelectedGameDetails?.thumbnail?.uri ??
     effectiveSelectedGameDetails?.iconImage?.uri ??
     effectiveSelectedGameDetails?.logoImage?.uri ??
+    selectedGameFallbackHeroUri ??
+    selectedGameFallbackCardArtUri ??
     null
   const selectedGameCardArtUri =
     effectiveSelectedGameDetails?.thumbnail?.uri ??
     effectiveSelectedGameDetails?.portraitImage?.uri ??
+    effectiveSelectedGameDetails?.iconImage?.uri ??
     selectedGameHeroUri ??
+    selectedGameFallbackCardArtUri ??
     null
   const selectedGameHeaderArtUri = selectedGameCardArtUri
   const selectedGameStoreVersion = effectiveSelectedGameDetails?.version ?? selectedGame?.storeVersion ?? null
@@ -7114,7 +7121,10 @@ function OrphanedDataContent(props: {
       {!selectedDeviceId ? (
         <div className="empty-state">
           <strong>Select a headset first.</strong>
-          <p>Choose a ready device in ADB Manager to scan `/sdcard/Android/obb` and `/sdcard/Android/data` for leftover folders.</p>
+          <p>
+            Choose a ready device in ADB Manager to scan `/sdcard/Android/obb` and `/sdcard/Android/data` for orphaned folders
+            and superseded versioned OBB files.
+          </p>
         </div>
       ) : deviceLeftoverResponse?.items.length ? (
         <div className="leftover-grid">
@@ -7124,10 +7134,11 @@ function OrphanedDataContent(props: {
                 <div className="row-title">
                   <strong>{item.packageId}</strong>
                   <p>{item.absolutePath}</p>
+                  {item.details ? <p className="leftover-card-note">{item.details}</p> : null}
                   {item.deleteBlockedReason ? <p className="leftover-card-note">{item.deleteBlockedReason}</p> : null}
                 </div>
                 <div className="inline-actions">
-                  <span className="meta-chip">{item.location.toUpperCase()}</span>
+                  <span className="meta-chip">{item.location === 'superseded-obb' ? 'SUPERSEDED OBB' : item.location.toUpperCase()}</span>
                   <span className="meta-chip">{formatBytes(item.sizeBytes)}</span>
                   {item.deleteBlocked ? <span className="meta-chip leftover-protected-chip">Protected</span> : null}
                   <button
@@ -7137,10 +7148,18 @@ function OrphanedDataContent(props: {
                     title={
                       item.deleteBlocked
                         ? 'Quest is blocking deletion of this leftover path through standard ADB.'
-                        : 'Delete this orphaned Android/data or Android/obb entry from the headset.'
+                        : item.location === 'superseded-obb'
+                          ? 'Delete this superseded versioned OBB file from the headset.'
+                          : 'Delete this orphaned Android/data or Android/obb entry from the headset.'
                     }
                   >
-                    {item.deleteBlocked ? 'Protected' : deviceLeftoverBusyItemId === item.id ? 'Deleting...' : 'Delete leftover'}
+                    {item.deleteBlocked
+                      ? 'Protected'
+                      : deviceLeftoverBusyItemId === item.id
+                        ? 'Deleting...'
+                        : item.location === 'superseded-obb'
+                          ? 'Delete OBB'
+                          : 'Delete leftover'}
                   </button>
                 </div>
               </div>
@@ -7149,9 +7168,10 @@ function OrphanedDataContent(props: {
         </div>
       ) : (
         <div className="empty-state">
-          <strong>No leftover app data found.</strong>
+          <strong>No cleanup candidates found.</strong>
           <p>
-            {deviceLeftoverMessage ?? 'No orphaned Android/data or Android/obb folders were found for apps that are no longer installed.'}
+            {deviceLeftoverMessage ??
+              'No orphaned Android/data or Android/obb folders, or superseded versioned OBB files, were found.'}
           </p>
         </div>
       )}

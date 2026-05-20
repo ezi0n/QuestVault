@@ -937,6 +937,7 @@ class SettingsService {
     primaryApkName: string | null
     primaryApkVersion: string | null
     primaryApkVersionCode: string | null
+    primaryApkPackageId: string | null
     searchTerms: string[]
     packageIds: string[]
   }> {
@@ -948,6 +949,7 @@ class SettingsService {
     let primaryApkName: string | null = null
     let primaryApkVersion: string | null = null
     let primaryApkVersionCode: string | null = null
+    let primaryApkPackageId: string | null = null
     let primaryApkScore = Number.NEGATIVE_INFINITY
     const searchTerms = new Set<string>()
     const packageIds = new Set<string>()
@@ -1001,6 +1003,7 @@ class SettingsService {
         primaryApkName = candidateName
         primaryApkVersion = candidateVersion
         primaryApkVersionCode = candidateVersionCode
+        primaryApkPackageId = candidatePackageId?.trim() || null
       }
     }
 
@@ -1050,7 +1053,7 @@ class SettingsService {
           nested.primaryApkName,
           nested.primaryApkVersion,
           nested.primaryApkVersionCode,
-          nested.packageIds[0] ?? null,
+          nested.primaryApkPackageId,
           nested.sizeBytes
         )
         continue
@@ -1089,6 +1092,26 @@ class SettingsService {
       }
     }
 
+    const orderedPackageIds = Array.from(packageIds)
+    if (primaryApkPackageId) {
+      const primaryPackageId = String(primaryApkPackageId)
+      const normalizedPrimary = primaryPackageId.trim().toLowerCase()
+      orderedPackageIds.sort((left, right) => {
+        const normalizedLeft = left.trim().toLowerCase()
+        const normalizedRight = right.trim().toLowerCase()
+
+        if (normalizedLeft === normalizedPrimary && normalizedRight !== normalizedPrimary) {
+          return -1
+        }
+
+        if (normalizedRight === normalizedPrimary && normalizedLeft !== normalizedPrimary) {
+          return 1
+        }
+
+        return left.localeCompare(right)
+      })
+    }
+
     return {
       sizeBytes,
       childCount,
@@ -1098,8 +1121,9 @@ class SettingsService {
       primaryApkName,
       primaryApkVersion,
       primaryApkVersionCode,
+      primaryApkPackageId,
       searchTerms: [...searchTerms],
-      packageIds: [...packageIds]
+      packageIds: orderedPackageIds
     }
   }
 

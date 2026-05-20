@@ -194,6 +194,70 @@ class MetaStoreService {
     return null
   }
 
+  private extractLocalAssetPath(uri: string | null | undefined): string | null {
+    if (!uri || !uri.startsWith('qam-asset://')) {
+      return null
+    }
+
+    try {
+      const assetUrl = new URL(uri)
+      const legacyEncodedPath = `${assetUrl.host}${assetUrl.pathname}`.replace(/^\/+/, '')
+      return assetUrl.host ? decodeURIComponent(legacyEncodedPath) : decodeURIComponent(assetUrl.pathname)
+    } catch {
+      return null
+    }
+  }
+
+  private async hasAccessibleLocalAsset(uri: string | null | undefined): Promise<boolean> {
+    const filePath = this.extractLocalAssetPath(uri)
+    if (!filePath) {
+      return true
+    }
+
+    try {
+      await access(filePath)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async hasAccessibleSummaryAssets(summary: MetaStoreGameSummary): Promise<boolean> {
+    const assets = [
+      summary.thumbnail?.uri,
+      summary.heroImage?.uri,
+      summary.portraitImage?.uri,
+      summary.iconImage?.uri,
+      summary.logoImage?.uri
+    ].filter((value): value is string => Boolean(value))
+
+    for (const assetUri of assets) {
+      if (!(await this.hasAccessibleLocalAsset(assetUri))) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  private async hasAccessibleDetailAssets(details: MetaStoreGameDetails): Promise<boolean> {
+    const assets = [
+      details.thumbnail?.uri,
+      details.heroImage?.uri,
+      details.portraitImage?.uri,
+      details.iconImage?.uri,
+      details.logoImage?.uri
+    ].filter((value): value is string => Boolean(value))
+
+    for (const assetUri of assets) {
+      if (!(await this.hasAccessibleLocalAsset(assetUri))) {
+        return false
+      }
+    }
+
+    return true
+  }
+
   private getImageExtensionFromContentType(contentType: string | null): string {
     const normalized = contentType?.toLowerCase().split(';')[0].trim() ?? ''
     switch (normalized) {
@@ -1047,7 +1111,11 @@ class MetaStoreService {
     const hydrationPromise = (async () => {
       const cache = await this.ensureCacheLoaded()
       const existingDetails = this.findDetailsByPackageId(cache, normalizedPackageId)
-      if (existingDetails?.source === 'remote' && this.hasRequiredRemoteDetailFields(existingDetails)) {
+      if (
+        existingDetails?.source === 'remote' &&
+        this.hasRequiredRemoteDetailFields(existingDetails) &&
+        (await this.hasAccessibleDetailAssets(existingDetails))
+      ) {
         return this.backfillTrailerVideoIdIfMissing(existingDetails, cache)
       }
 
@@ -1355,7 +1423,7 @@ class MetaStoreService {
 
     for (const packageId of uniquePackageIds) {
       const summary = this.findSummaryByPackageId(cache, packageId)
-      if (summary) {
+      if (summary && (summary.source !== 'remote' || (await this.hasAccessibleSummaryAssets(summary)))) {
         matches[packageId] = summary
       }
     }

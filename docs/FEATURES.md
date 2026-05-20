@@ -98,7 +98,7 @@
 
 - Library diagnostics for raw index review.
 - Managed dependency readiness inspection for ADB and 7-Zip.
-- Orphaned OBB / Data inspection and cleanup.
+- Orphaned OBB / Data inspection and cleanup, including leftover `Android/data` and `Android/obb` folders plus superseded versioned OBB files from apps that are no longer installed.
 - Missing-item review surfaces.
 - Manual metadata save/override support.
 
@@ -110,7 +110,7 @@ QuestVault is currently configured for:
 - Windows x64 / arm64
 - Linux x64 / arm64
 
-Current documented release line: `0.9.11`
+Current documented release line: `0.9.13`
 
 ## Product Position
 

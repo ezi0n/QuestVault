@@ -75,6 +75,15 @@ interface StoredInstalledAppScanSnapshot {
   packageDisplayNamesById?: unknown
 }
 
+interface VersionedObbFile {
+  fileName: string
+  absolutePath: string
+  packageId: string
+  kind: 'main' | 'patch'
+  versionCode: number
+  sizeBytes: number | null
+}
+
 const INSTALLED_APP_SCAN_HISTORY_VERSION = 2
 const INSTALLED_APP_SCAN_HISTORY_LIMIT_PER_SERIAL = 90
 
@@ -776,15 +785,17 @@ class DeviceService {
 
     try {
       const installedPackages = await this.readInstalledPackageIds(runtime.adbPath, normalizedSerial)
-      const [obbDirs, dataDirs] = await Promise.all([
+      const [obbDirs, dataDirs, supersededObbFiles] = await Promise.all([
         this.readPackageDirectories(runtime.adbPath, normalizedSerial, 'obb', '/sdcard/Android/obb'),
-        this.readPackageDirectories(runtime.adbPath, normalizedSerial, 'data', '/sdcard/Android/data')
+        this.readPackageDirectories(runtime.adbPath, normalizedSerial, 'data', '/sdcard/Android/data'),
+        this.readSupersededVersionedObbFiles(runtime.adbPath, normalizedSerial, installedPackages)
       ])
       const items = [...obbDirs, ...dataDirs]
         .filter((item) => {
           const packageId = item.packageId.toLowerCase()
           return !installedPackages.has(packageId) && this.isPotentialThirdPartyPackage(packageId)
         })
+        .concat(supersededObbFiles)
         .map((item) => {
           const blockedReason = this.blockedLeftoverDeletes.get(this.buildLeftoverDeleteBlockKey(normalizedSerial, item.absolutePath)) ?? null
           return {
@@ -803,9 +814,9 @@ class DeviceService {
         scannedAt: new Date().toISOString(),
         message: items.length
           ? blockedCount
-            ? `Found ${items.length} leftover ${items.length === 1 ? 'entry' : 'entries'} on the headset. Some orphaned Android/data folders are visible but protected by Quest storage permissions; ${blockedCount} ${blockedCount === 1 ? 'entry is' : 'entries are'} not removable through standard ADB cleanup.`
-            : `Found ${items.length} leftover ${items.length === 1 ? 'entry' : 'entries'} on the headset.`
-          : 'No leftover Android/data or Android/obb folders were found.'
+            ? `Found ${items.length} cleanup ${items.length === 1 ? 'entry' : 'entries'} on the headset. Some orphaned Android/data folders are visible but protected by Quest storage permissions; ${blockedCount} ${blockedCount === 1 ? 'entry is' : 'entries are'} not removable through standard ADB cleanup.`
+            : `Found ${items.length} cleanup ${items.length === 1 ? 'entry' : 'entries'} on the headset.`
+          : 'No orphaned Android/data or Android/obb folders, or superseded versioned OBB files, were found.'
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to scan headset leftover data.'
@@ -873,12 +884,13 @@ class DeviceService {
       await this.runShellCommand(runtime.adbPath, normalizedSerial, `rm -rf "${target.absolutePath}"`)
       this.blockedLeftoverDeletes.delete(this.buildLeftoverDeleteBlockKey(normalizedSerial, target.absolutePath))
       const scan = await this.scanLeftoverData(normalizedSerial)
+      const deletedLabel = target.location === 'superseded-obb' ? 'superseded OBB' : `leftover ${target.location.toUpperCase()} data`
       return {
         runtime,
         serial: normalizedSerial,
         itemId: normalizedItemId,
         success: true,
-        message: `Deleted leftover ${target.location.toUpperCase()} data for ${target.packageId}.`,
+        message: `Deleted ${deletedLabel} for ${target.packageId}.`,
         details: null,
         scan
       }
@@ -897,15 +909,15 @@ class DeviceService {
           status: 'error',
           adbPath: runtime.adbPath,
           message: isPermissionBlocked
-            ? `Android blocked deletion of leftover data for ${target.packageId}.`
-            : `Unable to delete leftover data for ${target.packageId}.`
+            ? `Android blocked deletion of ${target.location === 'superseded-obb' ? 'a superseded OBB' : 'leftover data'} for ${target.packageId}.`
+            : `Unable to delete ${target.location === 'superseded-obb' ? 'the superseded OBB' : 'leftover data'} for ${target.packageId}.`
         },
         serial: normalizedSerial,
         itemId: normalizedItemId,
         success: false,
         message: isPermissionBlocked
-          ? `Android blocked deletion of leftover data for ${target.packageId}.`
-          : `Unable to delete leftover data for ${target.packageId}.`,
+          ? `Android blocked deletion of ${target.location === 'superseded-obb' ? 'a superseded OBB' : 'leftover data'} for ${target.packageId}.`
+          : `Unable to delete ${target.location === 'superseded-obb' ? 'the superseded OBB' : 'leftover data'} for ${target.packageId}.`,
         details: isPermissionBlocked
           ? `${details}\n\nThis leftover path is readable enough to appear in the scan, but Quest is denying delete access through standard ADB.`
           : details,
@@ -1956,10 +1968,154 @@ class DeviceService {
           absolutePath,
           sizeBytes: Number.isFinite(parsedKb) ? parsedKb * 1024 : null,
           deleteBlocked: false,
-          deleteBlockedReason: null
+          deleteBlockedReason: null,
+          details: null
         } satisfies DeviceLeftoverItem
       })
       .filter((item) => Boolean(item.packageId) && Boolean(item.absolutePath))
+  }
+
+  private async readSupersededVersionedObbFiles(
+    adbPath: string,
+    serial: string,
+    installedPackages: Set<string>
+  ): Promise<DeviceLeftoverItem[]> {
+    const shellScript =
+      'if [ -d "/sdcard/Android/obb" ]; then ' +
+      'for dir in /sdcard/Android/obb/*; do ' +
+      '[ -d "$dir" ] || continue; ' +
+      'pkg=${dir##*/}; ' +
+      'for file in "$dir"/*.obb; do ' +
+      '[ -f "$file" ] || continue; ' +
+      'name=${file##*/}; ' +
+      'case "$name" in ' +
+      'main.[0-9]*.$pkg.obb|patch.[0-9]*.$pkg.obb) ' +
+      'size=$(du -sk "$file" 2>/dev/null | cut -f1); ' +
+      'echo "$pkg|$file|$name|${size:-}";; ' +
+      'esac; ' +
+      'done; ' +
+      'done; fi'
+
+    const { stdout } = await execFileAsync(adbPath, ['-s', serial, 'shell', shellScript], {
+      maxBuffer: 10 * 1024 * 1024
+    })
+
+    const parsedFiles = stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [packageId, absolutePath, fileName, sizeInKb] = line.split('|')
+        const match = fileName.match(/^(main|patch)\.(\d+)\.(.+)\.obb$/i)
+        if (!packageId || !absolutePath || !fileName || !match?.[1] || !match[2]) {
+          return null
+        }
+        const parsedKb = sizeInKb ? Number.parseInt(sizeInKb, 10) : Number.NaN
+        return {
+          fileName,
+          absolutePath,
+          packageId,
+          kind: match[1].toLowerCase() === 'patch' ? 'patch' : 'main',
+          versionCode: Number.parseInt(match[2], 10),
+          sizeBytes: Number.isFinite(parsedKb) ? parsedKb * 1024 : null
+        } satisfies VersionedObbFile
+      })
+      .filter((item): item is VersionedObbFile => Boolean(item))
+
+    const filesByPackage = new Map<string, VersionedObbFile[]>()
+    for (const file of parsedFiles) {
+      const normalizedPackageId = file.packageId.trim().toLowerCase()
+      if (!installedPackages.has(normalizedPackageId)) {
+        continue
+      }
+      const existing = filesByPackage.get(normalizedPackageId) ?? []
+      existing.push(file)
+      filesByPackage.set(normalizedPackageId, existing)
+    }
+
+    const items: DeviceLeftoverItem[] = []
+    for (const [, files] of filesByPackage) {
+      const byKind = new Map<'main' | 'patch', VersionedObbFile[]>()
+      for (const file of files) {
+        const existing = byKind.get(file.kind) ?? []
+        existing.push(file)
+        byKind.set(file.kind, existing)
+      }
+
+      for (const [kind, kindFiles] of byKind) {
+        if (kindFiles.length < 2) {
+          continue
+        }
+        const sorted = [...kindFiles].sort((left, right) => right.versionCode - left.versionCode)
+        const current = sorted[0]
+        for (const stale of sorted.slice(1)) {
+          items.push({
+            id: `superseded-obb:${stale.packageId}:${stale.fileName}`,
+            packageId: stale.packageId,
+            location: 'superseded-obb',
+            absolutePath: stale.absolutePath,
+            sizeBytes: stale.sizeBytes,
+            deleteBlocked: false,
+            deleteBlockedReason: null,
+            details: `Superseded ${kind.toUpperCase()} OBB ${stale.fileName}. Current retained file: ${current.fileName}.`
+          })
+        }
+      }
+    }
+
+    return items.sort((left, right) => left.packageId.localeCompare(right.packageId, undefined, { sensitivity: 'base' }))
+  }
+
+  private async cleanupSupersededVersionedObbFiles(
+    adbPath: string,
+    serial: string,
+    packageName: string,
+    keepFileNames: string[],
+    action?: HeadsetActionContext | null
+  ): Promise<number> {
+    const normalizedPackageName = packageName.trim()
+    if (!normalizedPackageName || !keepFileNames.length) {
+      return 0
+    }
+
+    const keepByKind = new Map<'main' | 'patch', Set<string>>()
+    for (const fileName of keepFileNames) {
+      const match = fileName.match(/^(main|patch)\.(\d+)\..+\.obb$/i)
+      if (!match?.[1]) {
+        continue
+      }
+      const kind = match[1].toLowerCase() === 'patch' ? 'patch' : 'main'
+      const existing = keepByKind.get(kind) ?? new Set<string>()
+      existing.add(fileName)
+      keepByKind.set(kind, existing)
+    }
+
+    if (!keepByKind.size) {
+      return 0
+    }
+
+    const existingFiles = await this.readSupersededVersionedObbFiles(adbPath, serial, new Set([normalizedPackageName.toLowerCase()]))
+    const staleFiles = existingFiles.filter((item) => {
+      const fileName = basename(item.absolutePath)
+      const match = fileName.match(/^(main|patch)\.(\d+)\..+\.obb$/i)
+      if (!match?.[1]) {
+        return false
+      }
+      const kind = match[1].toLowerCase() === 'patch' ? 'patch' : 'main'
+      return keepByKind.has(kind) && !keepByKind.get(kind)?.has(fileName)
+    })
+
+    let deletedCount = 0
+    for (const staleFile of staleFiles) {
+      await this.logHeadsetActionStep(action, `Removing superseded OBB ${basename(staleFile.absolutePath)}.`, {
+        packageName: normalizedPackageName,
+        obbPath: staleFile.absolutePath
+      })
+      await this.runShellCommand(adbPath, serial, `rm -f "${staleFile.absolutePath}"`)
+      deletedCount += 1
+    }
+
+    return deletedCount
   }
 
   private buildLeftoverDeleteBlockKey(serial: string, absolutePath: string): string {
@@ -2078,6 +2234,7 @@ class DeviceService {
         obbCount: obbPaths.length
       })
       await this.runShellCommand(adbPath, serial, `mkdir -p "/sdcard/Android/obb/${packageName}"`)
+      const pushedObbFileNames: string[] = []
       for (const obbPath of obbPaths) {
         await this.logHeadsetActionStep(action, `Pushing OBB ${basename(obbPath)}.`, {
           obbPath,
@@ -2099,6 +2256,7 @@ class DeviceService {
               outputLines: output.split('\n').length
             })
           }
+          pushedObbFileNames.push(basename(obbPath))
         } catch (error) {
           const details = this.readErrorMessage(error)
           await this.failHeadsetAction(action, `OBB transfer failed for ${basename(obbPath)}.`, {
@@ -2113,6 +2271,21 @@ class DeviceService {
             packageName
           }
         }
+      }
+
+      const deletedSupersededObbCount = await this.cleanupSupersededVersionedObbFiles(
+        adbPath,
+        serial,
+        packageName,
+        pushedObbFileNames,
+        action
+      )
+      if (deletedSupersededObbCount > 0) {
+        await this.logHeadsetActionStep(
+          action,
+          `Removed ${deletedSupersededObbCount} superseded versioned OBB ${deletedSupersededObbCount === 1 ? 'file' : 'files'}.`,
+          { packageName, deletedSupersededObbCount }
+        )
       }
     }
 
