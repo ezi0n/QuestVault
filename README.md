@@ -12,6 +12,10 @@ This project is heavily inspired by the fantastic work done on [Rookie Sideloade
 
 ## Core Areas
 
+
+### vrSrc server authentication changes
+vrSrc is no longer working due to the recently introduced changes (no I won't apply) and will most likely be removed in a future build and replaced with another system that does not depend on their infrastructure at all.
+
 ### Apps & Games
 
 - Local library catalog with gallery and list layouts.
