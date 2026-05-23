@@ -1,26 +1,22 @@
-# QuestVault 0.8.2
+# QuestVault 0.9.15
 
 ## Highlights
-- Added headset reboot support from ADB Manager, plus a dedicated headset activity review dialog for inspecting recent installs, connects, uninstalls, and reboots.
-- Added retry support for failed install queue items so headset installs can be re-run without repeating the entire setup flow.
-- Refined installed-app refresh behavior so verification scans are labeled more clearly after installs complete.
-- Refreshed the Live queue, headset activity panel, and maintenance surfaces to better surface long-running work and failure details.
+- Apps & Games cards now show the real on-disk library size for local payloads.
+- Grid tiles now support direct `Install Now` and `Install Local Upgrade` actions from the status pill.
+- Local Library grouping keeps materially different payload families separate while collapsing normal version variants more reliably.
 
 ## Included Changes
-- Added a new `devices:reboot` IPC path, shared type support, and device-service handling for headset reboot operations.
-- Added headset action log support for reboot events and a fuller review experience in the Live rail.
-- Added live-queue retry handlers and a retry action for failed install cards.
-- Adjusted installed-app refresh timing and verification labeling so post-install inventory checks read more clearly.
+- Local Library sizing now prefers the indexed payload footprint instead of matched metadata size when rendering Apps & Games cards.
+- Grid view status pills for local items now launch installs and upgrades directly, while tile clicks still open the detail card.
+- Grouping now avoids merging special payload families such as `MR-Fix`, `Custom Tracks`, `Update Only`, `Patreon`, and `LSV`.
+- Duplicate grouping is more resilient when older local payloads contain noisy package-like artifact names.
+- Install progress and follow-up verification are surfaced more consistently in the queue.
 
 ## Fixes
-- Fixed headset activity logging so reboot actions are captured alongside the existing headset operations.
-- Fixed the Live rail so new failure activity can be reviewed without automatically forcing the log open when the UI is intentionally suppressed.
-- Fixed installed-app refreshes so verification passes wait for quiet queue state before running.
+- Fixed local library cards that showed a smaller matched metadata footprint instead of the actual on-disk payload size.
+- Fixed Apps & Games grouping so noisy asset filenames no longer split ordinary version variants into separate tiles.
+- Fixed direct grid install affordances so action pills can start installs without opening the detail card first.
 
 ## Validation
 - `pnpm typecheck`
 - `pnpm build`
-- unsigned macOS arm64, x64, and universal builds
-- unsigned Windows x64 and arm64 builds
-- unsigned Linux x64 and arm64 builds
-- v0.6.3-style release asset check for `0.8.2`

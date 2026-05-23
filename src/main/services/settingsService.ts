@@ -23,6 +23,7 @@ import type {
   SettingsSelectPathResponse,
   ViewDisplayMode
 } from '@shared/types/ipc'
+import { getLegacyFieldName } from '@shared/utils/phraseBook'
 import { parseVrSrcReleaseName } from '@shared/utils/vrsrcRelease'
 import { metaStoreService } from './metaStoreService'
 
@@ -63,7 +64,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   backupPath: null,
   gameSavesPath: null,
   gamesDisplayMode: 'gallery',
-  inventoryDisplayMode: 'gallery'
+  inventoryDisplayMode: 'gallery',
+  spareValue: null
 }
 
 const PATH_METADATA: Record<SettingsPathKey, { title: string; defaultPath: () => string }> = {
@@ -1570,19 +1572,42 @@ class SettingsService {
   private inferPackageIdFromFileName(fileName: string): string | null {
     const obbMatch = fileName.match(/^(?:main|patch)\.\d+\.([^.]+\.[^.]+(?:\.[^.]+)+)\.obb$/i)
     if (obbMatch?.[1]) {
-      return obbMatch[1]
+      return this.isLikelyPackageId(obbMatch[1]) ? obbMatch[1] : null
     }
 
     const apkBaseName = fileName.replace(/\.(apk|xapk|apks)$/i, '')
     if (
       apkBaseName.includes('.') &&
       apkBaseName.split('.').length >= 3 &&
-      /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/i.test(apkBaseName)
+      /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/i.test(apkBaseName) &&
+      this.isLikelyPackageId(apkBaseName)
     ) {
       return apkBaseName
     }
 
     return null
+  }
+
+  private isLikelyPackageId(value: string): boolean {
+    const normalized = value.trim()
+    if (!normalized) {
+      return false
+    }
+
+    const parts = normalized.split('.').filter(Boolean)
+    if (parts.length < 3) {
+      return false
+    }
+
+    if (!parts.every((part) => /^[A-Za-z][A-Za-z0-9_]*$/.test(part))) {
+      return false
+    }
+
+    if (parts.some((part) => /^(main|patch|overflow\d*|fullhd|mp4|bundle|obb|asset)$/i.test(part))) {
+      return false
+    }
+
+    return true
   }
 
   private parsePackageIdsFromText(rawText: string): Set<string> {
@@ -1594,7 +1619,8 @@ class SettingsService {
       if (
         !normalized ||
         /\.(apk|apks|xapk|obb|txt|zip|rar|7z)$/i.test(normalized) ||
-        normalized.toLowerCase().startsWith('http.')
+        normalized.toLowerCase().startsWith('http.') ||
+        !this.isLikelyPackageId(normalized)
       ) {
         continue
       }
@@ -1622,9 +1648,16 @@ class SettingsService {
         throw new Error('Settings file is unavailable.')
       }
 
+      const legacyFieldName = getLegacyFieldName()
+      const legacySpareValue =
+        legacyFieldName in parsed && typeof parsed[legacyFieldName as keyof typeof parsed] === 'string'
+          ? (parsed[legacyFieldName as keyof typeof parsed] as string)
+          : null
+
       this.cachedSettings = {
         ...DEFAULT_SETTINGS,
-        ...parsed
+        ...parsed,
+        spareValue: parsed.spareValue ?? legacySpareValue ?? DEFAULT_SETTINGS.spareValue
       }
     } catch {
       this.cachedSettings = { ...DEFAULT_SETTINGS }
@@ -2180,6 +2213,15 @@ class SettingsService {
     return this.saveSettings({
       ...currentSettings,
       [key]: mode
+    })
+  }
+
+  async setSpareValue(spareValue: string | null): Promise<AppSettings> {
+    const currentSettings = await this.ensureSettingsLoaded()
+    const normalizedSpareValue = spareValue?.trim() ? spareValue.trim() : null
+    return this.saveSettings({
+      ...currentSettings,
+      spareValue: normalizedSpareValue
     })
   }
 

@@ -19,6 +19,7 @@ import type {
   VrSrcTransferOperation,
   VrSrcTransferProgressUpdate
 } from '@shared/types/ipc'
+import { getHeaderLabel } from '@shared/utils/phraseBook'
 import { parseVrSrcReleaseName } from '@shared/utils/vrsrcRelease'
 import { settingsService } from './settingsService'
 import { deviceService } from './deviceService'
@@ -53,8 +54,10 @@ type VrSrcLogger = {
 }
 
 type VrSrcTransferControlState = {
+  requestKey: string
   releaseName: string
   operation: VrSrcTransferOperation
+  serial: string | null
   status: VrSrcTransferLifecycle
   command: VrSrcTransferCommand
   child: ChildProcess | null
@@ -111,10 +114,13 @@ class VrSrcService {
   private transferProgressListeners = new Set<(update: VrSrcTransferProgressUpdate) => void>()
   private trailerVideoIdCache = new Map<string, string | null>()
   private transferControls = new Map<string, VrSrcTransferControlState>()
-  private readonly maxConcurrentPayloadPreparations = 1
+  private readonly maxConcurrentPayloadDownloads = 3
   private readonly maxConcurrentQueuedRequests = 3
-  private activePayloadPreparations = 0
-  private payloadPreparationWaiters: Array<() => void> = []
+  private readonly maxConcurrentExtractionImports = 1
+  private activePayloadDownloads = 0
+  private activeExtractionImports = 0
+  private payloadDownloadWaiters: Array<() => void> = []
+  private extractionImportWaiters: Array<() => void> = []
 
   onTransferProgress(listener: (update: VrSrcTransferProgressUpdate) => void): () => void {
     this.transferProgressListeners.add(listener)
@@ -129,24 +135,32 @@ class VrSrcService {
     }
   }
 
-  private getTransferControlKey(releaseName: string): string {
-    return releaseName
+  private buildRequestKey(operation: VrSrcTransferOperation, releaseName: string, serial: string | null): string {
+    return [operation.trim().toLowerCase(), releaseName.trim().toLowerCase(), (serial ?? '').trim().toLowerCase()].join('::')
+  }
+
+  private getTransferControlKey(operation: VrSrcTransferOperation, releaseName: string, serial: string | null): string {
+    return this.buildRequestKey(operation, releaseName, serial)
   }
 
   private getOrCreateTransferControl(
     releaseName: string,
-    operation: VrSrcTransferOperation
+    operation: VrSrcTransferOperation,
+    serial: string | null
   ): VrSrcTransferControlState {
-    const key = this.getTransferControlKey(releaseName)
+    const key = this.getTransferControlKey(operation, releaseName, serial)
     const existing = this.transferControls.get(key)
     if (existing) {
       existing.operation = operation
+      existing.serial = serial
       return existing
     }
 
     const control: VrSrcTransferControlState = {
+      requestKey: key,
       releaseName,
       operation,
+      serial,
       status: 'running',
       command: 'none',
       child: null,
@@ -157,12 +171,16 @@ class VrSrcService {
     return control
   }
 
-  private getTransferControl(releaseName: string): VrSrcTransferControlState | null {
-    return this.transferControls.get(this.getTransferControlKey(releaseName)) ?? null
+  private getTransferControl(
+    releaseName: string,
+    operation: VrSrcTransferOperation,
+    serial: string | null
+  ): VrSrcTransferControlState | null {
+    return this.transferControls.get(this.getTransferControlKey(operation, releaseName, serial)) ?? null
   }
 
-  private clearTransferControl(releaseName: string): void {
-    this.transferControls.delete(this.getTransferControlKey(releaseName))
+  private clearTransferControl(releaseName: string, operation: VrSrcTransferOperation, serial: string | null): void {
+    this.transferControls.delete(this.getTransferControlKey(operation, releaseName, serial))
   }
 
   private buildTransferControlFlags(control: VrSrcTransferControlState, phase: VrSrcTransferProgressUpdate['phase']) {
@@ -174,7 +192,22 @@ class VrSrcService {
       }
     }
 
-    if (phase === 'queued' || phase === 'preparing' || phase === 'downloading' || phase === 'extracting') {
+    if (phase === 'waiting-for-install' || phase === 'importing') {
+      return {
+        canPause: false,
+        canResume: false,
+        canCancel: true
+      }
+    }
+
+    if (
+      phase === 'queued' ||
+      phase === 'waiting-for-download' ||
+      phase === 'waiting-for-extraction' ||
+      phase === 'preparing' ||
+      phase === 'downloading' ||
+      phase === 'extracting'
+    ) {
       return {
         canPause: true,
         canResume: false,
@@ -191,9 +224,10 @@ class VrSrcService {
 
   private emitControlledTransferProgress(
     control: VrSrcTransferControlState,
-    update: Omit<VrSrcTransferProgressUpdate, 'canPause' | 'canResume' | 'canCancel'>
+    update: Omit<VrSrcTransferProgressUpdate, 'serial' | 'canPause' | 'canResume' | 'canCancel'>
   ): void {
     const nextUpdate: VrSrcTransferProgressUpdate = {
+      serial: control.serial,
       ...update,
       ...this.buildTransferControlFlags(control, update.phase)
     }
@@ -238,8 +272,12 @@ class VrSrcService {
     }
   }
 
-  private getQueuedRequestKey(releaseName: string): string {
-    return releaseName.trim().toLowerCase()
+  private getQueuedRequestKey(
+    releaseName: string,
+    operation: VrSrcTransferOperation,
+    serial: string | null
+  ): string {
+    return this.buildRequestKey(operation, releaseName, serial)
   }
 
   private getQueuedRequestsPath(): string {
@@ -328,13 +366,15 @@ class VrSrcService {
     await this.loadQueuedRequests()
     await this.resumeQueuedRequests()
 
-    const key = this.getQueuedRequestKey(recordInput.releaseName)
+    const key = this.getQueuedRequestKey(recordInput.releaseName, recordInput.operation, recordInput.serial)
     const existingRunner = this.queuedRequestRunners.get(key) as VrSrcQueuedRequestRunner<T> | undefined
     if (existingRunner) {
       return existingRunner.promise
     }
 
-    const existingRecord = this.queuedRequestRecords.find((entry) => this.getQueuedRequestKey(entry.releaseName) === key)
+    const existingRecord = this.queuedRequestRecords.find(
+      (entry) => this.getQueuedRequestKey(entry.releaseName, entry.operation, entry.serial) === key
+    )
     if (existingRecord && !options?.restore) {
       const existing = this.queuedRequestRunners.get(key) as VrSrcQueuedRequestRunner<T> | undefined
       if (existing) {
@@ -353,7 +393,7 @@ class VrSrcService {
 
     if (existingRecord) {
       this.queuedRequestRecords = this.queuedRequestRecords.filter(
-        (entry) => this.getQueuedRequestKey(entry.releaseName) !== key
+        (entry) => this.getQueuedRequestKey(entry.releaseName, entry.operation, entry.serial) !== key
       )
     }
 
@@ -397,7 +437,7 @@ class VrSrcService {
         return
       }
 
-      const key = this.getQueuedRequestKey(nextRecord.releaseName)
+      const key = this.getQueuedRequestKey(nextRecord.releaseName, nextRecord.operation, nextRecord.serial)
       const runner = this.queuedRequestRunners.get(key)
       if (!runner) {
         return
@@ -424,7 +464,7 @@ class VrSrcService {
           this.queuedRequestRunners.delete(key)
           this.queuedRequestPromiseByReleaseName.delete(key)
           this.queuedRequestRecords = this.queuedRequestRecords.filter(
-            (entry) => this.getQueuedRequestKey(entry.releaseName) !== key
+            (entry) => this.getQueuedRequestKey(entry.releaseName, entry.operation, entry.serial) !== key
           )
           await this.persistQueuedRequests()
           this.scheduleQueuedRequestDrain()
@@ -436,7 +476,7 @@ class VrSrcService {
   async resumeQueuedRequests(): Promise<void> {
     await this.loadQueuedRequests()
     for (const record of this.queuedRequestRecords) {
-      const key = this.getQueuedRequestKey(record.releaseName)
+      const key = this.getQueuedRequestKey(record.releaseName, record.operation, record.serial)
       if (this.queuedRequestRunners.has(key)) {
         continue
       }
@@ -468,23 +508,43 @@ class VrSrcService {
     return await this.performInstallNow(record.serial, record.releaseName)
   }
 
-  private async acquirePayloadPreparationSlot(): Promise<() => void> {
-    if (this.activePayloadPreparations < this.maxConcurrentPayloadPreparations) {
-      this.activePayloadPreparations += 1
-      return () => this.releasePayloadPreparationSlot()
+  private async acquirePayloadDownloadSlot(): Promise<() => void> {
+    if (this.activePayloadDownloads < this.maxConcurrentPayloadDownloads) {
+      this.activePayloadDownloads += 1
+      return () => this.releasePayloadDownloadSlot()
     }
 
     return await new Promise((resolve) => {
-      this.payloadPreparationWaiters.push(() => {
-        this.activePayloadPreparations += 1
-        resolve(() => this.releasePayloadPreparationSlot())
+      this.payloadDownloadWaiters.push(() => {
+        this.activePayloadDownloads += 1
+        resolve(() => this.releasePayloadDownloadSlot())
       })
     })
   }
 
-  private releasePayloadPreparationSlot(): void {
-    this.activePayloadPreparations = Math.max(0, this.activePayloadPreparations - 1)
-    const next = this.payloadPreparationWaiters.shift()
+  private releasePayloadDownloadSlot(): void {
+    this.activePayloadDownloads = Math.max(0, this.activePayloadDownloads - 1)
+    const next = this.payloadDownloadWaiters.shift()
+    next?.()
+  }
+
+  private async acquireExtractionImportSlot(): Promise<() => void> {
+    if (this.activeExtractionImports < this.maxConcurrentExtractionImports) {
+      this.activeExtractionImports += 1
+      return () => this.releaseExtractionImportSlot()
+    }
+
+    return await new Promise((resolve) => {
+      this.extractionImportWaiters.push(() => {
+        this.activeExtractionImports += 1
+        resolve(() => this.releaseExtractionImportSlot())
+      })
+    })
+  }
+
+  private releaseExtractionImportSlot(): void {
+    this.activeExtractionImports = Math.max(0, this.activeExtractionImports - 1)
+    const next = this.extractionImportWaiters.shift()
     next?.()
   }
 
@@ -688,8 +748,9 @@ class VrSrcService {
     return dependencyService.ensureRclonePath()
   }
 
-  private getVrSrcRcloneArgs(baseUri: string): string[] {
-    return [
+  private async getVrSrcRcloneArgs(baseUri: string): Promise<string[]> {
+    const { spareValue } = await settingsService.getSettings()
+    const args = [
       '--config',
       this.getRcloneConfigPath(),
       '--http-url',
@@ -702,11 +763,17 @@ class VrSrcService {
       '3',
       '--no-check-certificate'
     ]
+
+    if (spareValue) {
+      args.push('--header', `${getHeaderLabel()}: ${spareValue}`)
+    }
+
+    return args
   }
 
-  private getVrSrcRcloneTransferArgs(baseUri: string): string[] {
+  private async getVrSrcRcloneTransferArgs(baseUri: string): Promise<string[]> {
     return [
-      ...this.getVrSrcRcloneArgs(baseUri),
+      ...(await this.getVrSrcRcloneArgs(baseUri)),
       '--progress',
       '--stats',
       '750ms',
@@ -953,7 +1020,7 @@ class VrSrcService {
     await mkdir(tempPath, { recursive: true })
 
     try {
-      const args = ['sync', ':http:/meta.7z', tempPath, ...this.getVrSrcRcloneArgs(baseUri)]
+      const args = ['sync', ':http:/meta.7z', tempPath, ...(await this.getVrSrcRcloneArgs(baseUri))]
       if (logger) {
         args.push('-vv')
       }
@@ -989,6 +1056,7 @@ class VrSrcService {
     progressContext?: {
       operation: VrSrcTransferOperation
       releaseName: string
+      serial: string | null
       bytesCompletedBefore: number
       totalBytes: number | null
     }
@@ -1023,7 +1091,7 @@ class VrSrcService {
         bytes: existingBytes
       })
       if (progressContext) {
-        const update: Omit<VrSrcTransferProgressUpdate, 'canPause' | 'canResume' | 'canCancel'> = {
+        const update: Omit<VrSrcTransferProgressUpdate, 'serial' | 'canPause' | 'canResume' | 'canCancel'> = {
           operation: progressContext.operation,
           releaseName: progressContext.releaseName,
           phase: 'downloading',
@@ -1047,6 +1115,7 @@ class VrSrcService {
         } else {
           this.emitTransferProgress({
             ...update,
+            serial: progressContext.serial,
             canPause: false,
             canResume: false,
             canCancel: false
@@ -1143,6 +1212,7 @@ class VrSrcService {
             } else {
               this.emitTransferProgress({
                 ...update,
+                serial: progressContext.serial,
                 canPause: false,
                 canResume: false,
                 canCancel: false
@@ -1643,6 +1713,18 @@ class VrSrcService {
   }
 
   private async buildStatus(): Promise<VrSrcStatusResponse> {
+    const { spareValue } = await settingsService.getSettings()
+    if (!spareValue?.trim()) {
+      return {
+        configured: false,
+        baseUriHost: null,
+        lastResolvedAt: null,
+        lastSyncAt: null,
+        itemCount: 0,
+        message: 'vrSrc is not configured yet.'
+      }
+    }
+
     const catalog = await this.readCatalog()
     const credentials = await this.readCachedCredentials()
 
@@ -1667,7 +1749,7 @@ class VrSrcService {
   ): Promise<VrSrcRemotePayloadFile[]> {
     const hash = createHash('md5').update(`${releaseName}\n`).digest('hex')
     try {
-      const args = ['lsjson', `:http:/${hash}/`, ...this.getVrSrcRcloneArgs(baseUri)]
+      const args = ['lsjson', `:http:/${hash}/`, ...(await this.getVrSrcRcloneArgs(baseUri))]
       if (logger) {
         args.push('-vv')
       }
@@ -1715,7 +1797,7 @@ class VrSrcService {
 
       try {
         await new Promise<void>(async (resolve, reject) => {
-          const args = ['copy', `:http:/${hash}/`, destinationPath, ...this.getVrSrcRcloneTransferArgs(baseUri)]
+          const args = ['copy', `:http:/${hash}/`, destinationPath, ...(await this.getVrSrcRcloneTransferArgs(baseUri))]
           if (logger) {
             args.push('-vv')
           }
@@ -1870,14 +1952,18 @@ class VrSrcService {
     }
   }
 
-  private async ensureReleasePayload(releaseName: string, operation: VrSrcTransferOperation): Promise<string> {
+  private async ensureReleasePayload(
+    releaseName: string,
+    operation: VrSrcTransferOperation,
+    serial: string | null
+  ): Promise<string> {
     const cachedPromise = this.acquireInFlight.get(releaseName)
     if (cachedPromise) {
       return cachedPromise
     }
 
     const acquirePromise = (async () => {
-      const control = this.getOrCreateTransferControl(releaseName, operation)
+      const control = this.getOrCreateTransferControl(releaseName, operation, serial)
       const credentials = await this.resolveCredentials()
       const decodedPassword = Buffer.from(credentials.password, 'base64').toString('utf8')
       const folderName = this.sanitizeSegment(releaseName)
@@ -1889,37 +1975,35 @@ class VrSrcService {
       }
 
       await mkdir(payloadPath, { recursive: true })
+      const payloadFiles = await this.listRemotePayloadFiles(credentials.baseUri, releaseName)
+      if (!payloadFiles.length) {
+        throw new Error(`vrSrc did not return any payload files for ${releaseName}.`)
+      }
 
-      const queuedBehindAnotherPreparation = this.activePayloadPreparations >= this.maxConcurrentPayloadPreparations
-      if (queuedBehindAnotherPreparation) {
+      const payloadSizes = payloadFiles.map((file) => file.sizeBytes)
+      const hasKnownTotalBytes = payloadSizes.every((size) => typeof size === 'number')
+      const totalBytes = hasKnownTotalBytes
+        ? payloadSizes.reduce((sum, size) => sum + (size ?? 0), 0)
+        : null
+
+      if (this.activePayloadDownloads >= this.maxConcurrentPayloadDownloads) {
         this.emitControlledTransferProgress(control, {
           operation,
           releaseName,
-          phase: 'queued',
+          phase: 'waiting-for-download',
           progress: 0,
           fileName: null,
           transferredBytes: 0,
-          totalBytes: null,
+          totalBytes,
           speedBytesPerSecond: null,
           etaSeconds: null
         })
       }
 
       await this.checkpointTransferControl(control)
-      const releasePreparationSlot = await this.acquirePayloadPreparationSlot()
+      const releaseDownloadSlot = await this.acquirePayloadDownloadSlot()
       try {
         await this.checkpointTransferControl(control)
-        const payloadFiles = await this.listRemotePayloadFiles(credentials.baseUri, releaseName)
-        if (!payloadFiles.length) {
-          throw new Error(`vrSrc did not return any payload files for ${releaseName}.`)
-        }
-
-        const payloadSizes = payloadFiles.map((file) => file.sizeBytes)
-        const hasKnownTotalBytes = payloadSizes.every((size) => typeof size === 'number')
-        const totalBytes = hasKnownTotalBytes
-          ? payloadSizes.reduce((sum, size) => sum + (size ?? 0), 0)
-          : null
-
         this.emitControlledTransferProgress(control, {
           operation,
           releaseName,
@@ -1940,9 +2024,29 @@ class VrSrcService {
           totalBytes,
           undefined
         )
+      } finally {
+        releaseDownloadSlot()
+      }
 
-        const archivePart = payloadFiles.find((file) => /\.7z\.001$/i.test(file.fileName))
-        if (archivePart) {
+      const archivePart = payloadFiles.find((file) => /\.7z\.001$/i.test(file.fileName))
+      if (archivePart) {
+        if (this.activeExtractionImports >= this.maxConcurrentExtractionImports) {
+          this.emitControlledTransferProgress(control, {
+            operation,
+            releaseName,
+            phase: 'waiting-for-extraction',
+            progress: 94,
+            fileName: basename(archivePart.fileName),
+            transferredBytes: totalBytes ?? (await this.calculatePathSize(payloadPath)),
+            totalBytes,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        }
+
+        await this.checkpointTransferControl(control)
+        const releaseExtractionSlot = await this.acquireExtractionImportSlot()
+        try {
           await this.checkpointTransferControl(control)
           this.emitControlledTransferProgress(control, {
             operation,
@@ -1962,13 +2066,13 @@ class VrSrcService {
           await this.extractNestedArchives(payloadPath)
           await this.checkpointTransferControl(control)
           await this.cleanupMultipartArchives(payloadPath)
+        } finally {
+          releaseExtractionSlot()
         }
-
-        await writeFile(extractedMarkerPath, new Date().toISOString(), 'utf8')
-        return payloadPath
-      } finally {
-        releasePreparationSlot()
       }
+
+      await writeFile(extractedMarkerPath, new Date().toISOString(), 'utf8')
+      return payloadPath
     })()
 
     this.acquireInFlight.set(releaseName, acquirePromise)
@@ -2047,6 +2151,21 @@ class VrSrcService {
   }
 
   async syncCatalog(): Promise<VrSrcSyncResponse> {
+    const { spareValue } = await settingsService.getSettings()
+    if (!spareValue?.trim()) {
+      return {
+        success: false,
+        message: 'vrSrc is not configured yet.',
+        details: 'Add the hidden remote-source key before syncing.',
+        usedCachedCatalog: false,
+        status: await this.buildStatus(),
+        catalog: {
+          syncedAt: null,
+          items: []
+        }
+      }
+    }
+
     if (this.syncInFlight) {
       return this.syncInFlight
     }
@@ -2143,7 +2262,8 @@ class VrSrcService {
         await rm(this.getStagedMetaExtractPath(), { recursive: true, force: true }).catch(() => undefined)
         await rm(this.getStagedCatalogPath(), { force: true }).catch(() => undefined)
         await logger.info('vrSrc sync finished.', {
-          inFlightPreparations: this.activePayloadPreparations
+          inFlightDownloads: this.activePayloadDownloads,
+          inFlightExtractionImports: this.activeExtractionImports
         })
         this.syncInFlight = null
       }
@@ -2203,7 +2323,7 @@ class VrSrcService {
   }
 
   private async performDownloadToLibrary(releaseName: string): Promise<VrSrcDownloadToLibraryResponse> {
-    const control = this.getOrCreateTransferControl(releaseName, 'download-to-library')
+    const control = this.getOrCreateTransferControl(releaseName, 'download-to-library', null)
     this.emitControlledTransferProgress(control, {
       operation: 'download-to-library',
       releaseName,
@@ -2234,15 +2354,44 @@ class VrSrcService {
 
     try {
       const catalogItem = await this.findCatalogItem(releaseName)
-      const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library')
+      const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library', null)
       const importSourcePath = await this.resolveLibraryImportSource(sourcePath)
+      if (this.activeExtractionImports >= this.maxConcurrentExtractionImports) {
+        this.emitControlledTransferProgress(control, {
+          operation: 'download-to-library',
+          releaseName,
+          phase: 'waiting-for-extraction',
+          progress: 97,
+          fileName: null,
+          transferredBytes: 0,
+          totalBytes: null,
+          speedBytesPerSecond: null,
+          etaSeconds: null
+        })
+      }
+      const releaseImportSlot = await this.acquireExtractionImportSlot()
       const targetPath = await this.createUniqueLibraryTarget(libraryPath, releaseName)
-      await cp(importSourcePath, targetPath, { recursive: true, force: false })
-      await settingsService.rescanLocalLibrary()
-      await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
-        targetPath,
-        catalogItem?.lastUpdated ?? null
-      )
+      try {
+        this.emitControlledTransferProgress(control, {
+          operation: 'download-to-library',
+          releaseName,
+          phase: 'importing',
+          progress: 98,
+          fileName: null,
+          transferredBytes: 0,
+          totalBytes: null,
+          speedBytesPerSecond: null,
+          etaSeconds: null
+        })
+        await cp(importSourcePath, targetPath, { recursive: true, force: false })
+        await settingsService.rescanLocalLibrary()
+        await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
+          targetPath,
+          catalogItem?.lastUpdated ?? null
+        )
+      } finally {
+        releaseImportSlot()
+      }
       await this.cleanupReleasePayload(sourcePath)
 
       return {
@@ -2280,7 +2429,7 @@ class VrSrcService {
         details: error instanceof Error ? error.message : String(error)
       }
     } finally {
-      this.clearTransferControl(releaseName)
+      this.clearTransferControl(releaseName, 'download-to-library', null)
     }
   }
 
@@ -2295,7 +2444,7 @@ class VrSrcService {
     serial: string,
     releaseName: string
   ): Promise<VrSrcDownloadAndInstallResponse> {
-    const control = this.getOrCreateTransferControl(releaseName, 'download-to-library-and-install')
+    const control = this.getOrCreateTransferControl(releaseName, 'download-to-library-and-install', serial)
     this.emitControlledTransferProgress(control, {
       operation: 'download-to-library-and-install',
       releaseName,
@@ -2328,24 +2477,54 @@ class VrSrcService {
 
     try {
       const catalogItem = await this.findCatalogItem(releaseName)
-      const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library-and-install')
+      const sourcePath = await this.ensureReleasePayload(releaseName, 'download-to-library-and-install', serial)
       const importSourcePath = await this.resolveLibraryImportSource(sourcePath)
+      if (this.activeExtractionImports >= this.maxConcurrentExtractionImports) {
+        this.emitControlledTransferProgress(control, {
+          operation: 'download-to-library-and-install',
+          releaseName,
+          phase: 'waiting-for-extraction',
+          progress: 97,
+          fileName: null,
+          transferredBytes: 0,
+          totalBytes: null,
+          speedBytesPerSecond: null,
+          etaSeconds: null
+        })
+      }
+      const releaseImportSlot = await this.acquireExtractionImportSlot()
       const targetPath = await this.createUniqueLibraryTarget(libraryPath, releaseName)
-      await cp(importSourcePath, targetPath, { recursive: true, force: false })
-      await settingsService.rescanLocalLibrary()
-      await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
-        targetPath,
-        catalogItem?.lastUpdated ?? null
-      )
+      try {
+        this.emitControlledTransferProgress(control, {
+          operation: 'download-to-library-and-install',
+          releaseName,
+          phase: 'importing',
+          progress: 98,
+          fileName: null,
+          transferredBytes: 0,
+          totalBytes: null,
+          speedBytesPerSecond: null,
+          etaSeconds: null
+        })
+        await cp(importSourcePath, targetPath, { recursive: true, force: false })
+        await settingsService.rescanLocalLibrary()
+        await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
+          targetPath,
+          catalogItem?.lastUpdated ?? null
+        )
+      } finally {
+        releaseImportSlot()
+      }
 
       const installResponse = await deviceService.installManualPath(serial, targetPath, {
         onQueued: async () => {
-          const control = this.getTransferControl(releaseName)
+          const control = this.getTransferControl(releaseName, 'download-to-library-and-install', serial)
           if (!control) {
             this.emitTransferProgress({
               operation: 'download-to-library-and-install',
               releaseName,
-              phase: 'queued',
+              serial,
+              phase: 'waiting-for-install',
               progress: 96,
               fileName: null,
               transferredBytes: 0,
@@ -2362,7 +2541,7 @@ class VrSrcService {
           this.emitControlledTransferProgress(control, {
             operation: 'download-to-library-and-install',
             releaseName,
-            phase: 'queued',
+            phase: 'waiting-for-install',
             progress: 96,
             fileName: null,
             transferredBytes: 0,
@@ -2372,11 +2551,12 @@ class VrSrcService {
           })
         },
         onStarted: async () => {
-          const control = this.getTransferControl(releaseName)
+          const control = this.getTransferControl(releaseName, 'download-to-library-and-install', serial)
           if (!control) {
             this.emitTransferProgress({
               operation: 'download-to-library-and-install',
               releaseName,
+              serial,
               phase: 'installing',
               progress: 97,
               fileName: null,
@@ -2450,7 +2630,7 @@ class VrSrcService {
         verificationToken: null
       }
     } finally {
-      this.clearTransferControl(releaseName)
+      this.clearTransferControl(releaseName, 'download-to-library-and-install', serial)
     }
   }
 
@@ -2462,7 +2642,7 @@ class VrSrcService {
   }
 
   private async performInstallNow(serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> {
-    const control = this.getOrCreateTransferControl(releaseName, 'install-now')
+    const control = this.getOrCreateTransferControl(releaseName, 'install-now', serial)
     this.emitControlledTransferProgress(control, {
       operation: 'install-now',
       releaseName,
@@ -2476,15 +2656,16 @@ class VrSrcService {
     })
 
     try {
-      const sourcePath = await this.ensureReleasePayload(releaseName, 'install-now')
+      const sourcePath = await this.ensureReleasePayload(releaseName, 'install-now', serial)
       const installResponse = await deviceService.installManualPath(serial, sourcePath, {
         onQueued: async () => {
-          const control = this.getTransferControl(releaseName)
+          const control = this.getTransferControl(releaseName, 'install-now', serial)
           if (!control) {
             this.emitTransferProgress({
               operation: 'install-now',
               releaseName,
-              phase: 'queued',
+              serial,
+              phase: 'waiting-for-install',
               progress: 96,
               fileName: null,
               transferredBytes: 0,
@@ -2500,7 +2681,7 @@ class VrSrcService {
           this.emitControlledTransferProgress(control, {
             operation: 'install-now',
             releaseName,
-            phase: 'queued',
+            phase: 'waiting-for-install',
             progress: 96,
             fileName: null,
             transferredBytes: 0,
@@ -2510,11 +2691,12 @@ class VrSrcService {
           })
         },
         onStarted: async () => {
-          const control = this.getTransferControl(releaseName)
+          const control = this.getTransferControl(releaseName, 'install-now', serial)
           if (!control) {
             this.emitTransferProgress({
               operation: 'install-now',
               releaseName,
+              serial,
               phase: 'installing',
               progress: 97,
               fileName: null,
@@ -2584,17 +2766,22 @@ class VrSrcService {
         verificationToken: null
       }
     } finally {
-      this.clearTransferControl(releaseName)
+      this.clearTransferControl(releaseName, 'install-now', serial)
     }
   }
 
-  async pauseTransfer(releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> {
-    const control = this.getTransferControl(releaseName)
+  async pauseTransfer(
+    releaseName: string,
+    operation: VrSrcTransferOperation,
+    serial: string | null
+  ): Promise<VrSrcTransferControlResponse> {
+    const control = this.getTransferControl(releaseName, operation, serial)
     if (!control || control.operation !== operation) {
       return {
         success: false,
         releaseName,
         operation,
+        serial,
         message: 'No active vrSrc transfer was found to pause.',
         details: null
       }
@@ -2605,6 +2792,7 @@ class VrSrcService {
         success: true,
         releaseName,
         operation,
+        serial,
         message: `${releaseName} is already paused.`,
         details: null
       }
@@ -2633,18 +2821,24 @@ class VrSrcService {
       success: true,
       releaseName,
       operation,
+      serial,
       message: `Paused ${releaseName}.`,
       details: null
     }
   }
 
-  async resumeTransfer(releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> {
-    const control = this.getTransferControl(releaseName)
+  async resumeTransfer(
+    releaseName: string,
+    operation: VrSrcTransferOperation,
+    serial: string | null
+  ): Promise<VrSrcTransferControlResponse> {
+    const control = this.getTransferControl(releaseName, operation, serial)
     if (!control || control.operation !== operation) {
       return {
         success: false,
         releaseName,
         operation,
+        serial,
         message: 'No paused vrSrc transfer was found to resume.',
         details: null
       }
@@ -2680,18 +2874,24 @@ class VrSrcService {
       success: true,
       releaseName,
       operation,
+      serial,
       message: `Resuming remaining files for ${releaseName}.`,
       details: null
     }
   }
 
-  async cancelTransfer(releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> {
-    const control = this.getTransferControl(releaseName)
+  async cancelTransfer(
+    releaseName: string,
+    operation: VrSrcTransferOperation,
+    serial: string | null
+  ): Promise<VrSrcTransferControlResponse> {
+    const control = this.getTransferControl(releaseName, operation, serial)
     if (!control || control.operation !== operation) {
       return {
         success: false,
         releaseName,
         operation,
+        serial,
         message: 'No active vrSrc transfer was found to cancel.',
         details: null
       }
@@ -2724,9 +2924,23 @@ class VrSrcService {
       success: true,
       releaseName,
       operation,
+      serial,
       message: `Cancelled ${releaseName}.`,
       details: null
     }
+  }
+
+  async clearCredentialsForHiddenKeyRemoval(): Promise<void> {
+    if (this.syncInFlight) {
+      return
+    }
+
+    await this.resetCachedState({
+      includeCatalog: false,
+      includeDownloads: false,
+      includeCredentials: true,
+      reason: 'Hidden remote-source key was cleared.'
+    })
   }
 }
 

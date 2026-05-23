@@ -1,6 +1,6 @@
 {
   "name": "questvault",
-  "version": "0.9.13",
+  "version": "0.9.15",
   "description": "QuestVault desktop manager for Quest library, backup, install, and save-state workflows",
   "main": "./out/main/index.js",
   "scripts": {
@@ -47,8 +47,7 @@
       "icon": "build/icons/icon.icns",
       "category": "public.app-category.utilities",
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ]
     },
     "win": {

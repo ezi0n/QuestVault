@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { getHiddenEntryTitle, getPromptText } from '@shared/utils/phraseBook'
 import { getFallbackArtworkUri, type FallbackArtworkVariant } from '../fallbackArtwork'
 import metaQuestIcon from '../assets/device-icons/meta-quest.png'
 import metaQuest2Icon from '../assets/device-icons/meta-quest-2.png'
@@ -120,9 +121,9 @@ interface WireframeShellProps {
   onHideHeadsetActionLog: () => void
   onOpenHeadsetActivityReview: () => void
   onCloseHeadsetActivityReview: () => void
-  onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
-  onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
-  onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
+  onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
+  onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
   onRetryQueueItem: (itemId: string) => Promise<void>
   settings: AppSettings | null
   settingsBusy: boolean
@@ -211,6 +212,7 @@ interface WireframeShellProps {
   onDownloadVrSrcToLibrary: (releaseName: string) => Promise<void>
   onDownloadVrSrcToLibraryAndInstall: (releaseName: string) => Promise<void>
   onInstallVrSrcNow: (releaseName: string) => Promise<void>
+  onHiddenEntryRequested: () => Promise<void>
   onRefreshSaveBackups: () => Promise<void>
   onScanSavePackages: () => Promise<void>
   onScanSavePackage: (packageId: string, appName: string | null) => Promise<void>
@@ -792,7 +794,35 @@ function getLibraryGameVersionLines(row: LibraryGameRow): string[] {
   return lines
 }
 
+function getLibraryGameVariantKey(row: LibraryGameRow): string {
+  const sourceText = [row.title, row.relativePath, row.release].filter(Boolean).join(' ').toLowerCase()
+  const variantFlags: string[] = []
+
+  if (/\bmr[\s-]?fix\b/.test(sourceText)) {
+    variantFlags.push('mr-fix')
+  }
+
+  if (/\bcustom tracks?\b/.test(sourceText)) {
+    variantFlags.push('custom-tracks')
+  }
+
+  if (/\bupdate only\b/.test(sourceText)) {
+    variantFlags.push('update-only')
+  }
+
+  if (/\bpatreon\b/.test(sourceText)) {
+    variantFlags.push('patreon')
+  }
+
+  if (/\blsv\b/.test(sourceText)) {
+    variantFlags.push('lsv')
+  }
+
+  return variantFlags.length ? variantFlags.sort().join('|') : 'standard'
+}
+
 function getLibraryGameDedupeKey(row: LibraryGameRow): string {
+  const variantKey = getLibraryGameVariantKey(row)
   const normalizedPackageIds = Array.from(
     new Set(
       row.packageIds
@@ -802,13 +832,13 @@ function getLibraryGameDedupeKey(row: LibraryGameRow): string {
   ).sort()
 
   if (normalizedPackageIds.length) {
-    return `package:${normalizedPackageIds.join('|')}`
+    return `package:${normalizedPackageIds.join('|')}|variant:${variantKey}`
   }
 
   const manualStoreId = row.manualStoreId?.trim()
 
   if (manualStoreId) {
-    return `manual:${manualStoreId.toLowerCase()}`
+    return `manual:${manualStoreId.toLowerCase()}|variant:${variantKey}`
   }
 
   const normalizedRelease = normalizeLibraryGameIdentity(row.release)
@@ -816,22 +846,22 @@ function getLibraryGameDedupeKey(row: LibraryGameRow): string {
   const normalizedPublisher = normalizeLibraryGameIdentity(row.note)
 
   if (normalizedRelease) {
-    return `release:${normalizedRelease}|publisher:${normalizedPublisher}`
+    return `release:${normalizedRelease}|publisher:${normalizedPublisher}|variant:${variantKey}`
   }
 
   if (normalizedTitle) {
-    return `title:${normalizedTitle}|publisher:${normalizedPublisher}`
+    return `title:${normalizedTitle}|publisher:${normalizedPublisher}|variant:${variantKey}`
   }
 
   if (row.metaStoreMatch?.storeItemId) {
-    return `store:${row.metaStoreMatch.storeItemId}`
+    return `store:${row.metaStoreMatch.storeItemId}|variant:${variantKey}`
   }
 
   if (row.kind === 'folder') {
-    return `folder:${row.source}:${normalizeLibraryGameIdentity(row.relativePath)}`
+    return `folder:${row.source}:${normalizeLibraryGameIdentity(row.relativePath)}|variant:${variantKey}`
   }
 
-  return `package:${row.packageIds[0]?.toLowerCase() ?? row.id}`
+  return `package:${row.packageIds[0]?.toLowerCase() ?? row.id}|variant:${variantKey}`
 }
 
 function compareLibraryGameRowsForDisplay(left: LibraryGameRow, right: LibraryGameRow): number {
@@ -1639,9 +1669,9 @@ function QueueRail(props: {
   onOpenVrSrcQueue: () => void
   onHideHeadsetActionLog: () => void
   onOpenHeadsetActivityReview: () => void
-  onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
-  onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
-  onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<void>
+  onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
+  onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
+  onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
   onRetryQueueItem: (itemId: string) => Promise<void>
 }) {
   const {
@@ -1730,6 +1760,18 @@ function QueueRail(props: {
       return 'downloading'
     }
 
+    if (phase === 'waiting-for-download') {
+      return 'waiting for download'
+    }
+
+    if (phase === 'waiting-for-extraction') {
+      return 'waiting for extraction'
+    }
+
+    if (phase === 'waiting-for-install') {
+      return 'waiting for install'
+    }
+
     if (phase === 'paused') {
       return 'paused'
     }
@@ -1740,6 +1782,10 @@ function QueueRail(props: {
 
     if (phase === 'extracting') {
       return 'extracting'
+    }
+
+    if (phase === 'importing') {
+      return 'importing'
     }
 
     if (phase === 'uninstalling') {
@@ -1974,7 +2020,12 @@ function QueueRail(props: {
                   {item.transferControl.canPause ? (
                     <button
                       className="queue-card-action"
-                      onClick={() => void onPauseVrSrcTransfer(item.transferControl!.releaseName, item.transferControl!.operation)}
+                      onClick={() =>
+                        void onPauseVrSrcTransfer(
+                          item.transferControl!.releaseName,
+                          item.transferControl!.operation,
+                          item.transferControl!.serial
+                        )}
                       type="button"
                     >
                       Pause
@@ -1983,7 +2034,12 @@ function QueueRail(props: {
                   {item.transferControl.canResume ? (
                     <button
                       className="queue-card-action"
-                      onClick={() => void onResumeVrSrcTransfer(item.transferControl!.releaseName, item.transferControl!.operation)}
+                      onClick={() =>
+                        void onResumeVrSrcTransfer(
+                          item.transferControl!.releaseName,
+                          item.transferControl!.operation,
+                          item.transferControl!.serial
+                        )}
                       type="button"
                     >
                       Resume Remaining Files
@@ -1992,7 +2048,12 @@ function QueueRail(props: {
                   {item.transferControl.canCancel ? (
                     <button
                       className="queue-card-action queue-card-action-danger"
-                      onClick={() => void onCancelVrSrcTransfer(item.transferControl!.releaseName, item.transferControl!.operation)}
+                      onClick={() =>
+                        void onCancelVrSrcTransfer(
+                          item.transferControl!.releaseName,
+                          item.transferControl!.operation,
+                          item.transferControl!.serial
+                        )}
                       type="button"
                     >
                       Cancel
@@ -2100,6 +2161,7 @@ function GamesView(props: {
   onDownloadVrSrcToLibrary: (releaseName: string) => Promise<void>
   onDownloadVrSrcToLibraryAndInstall: (releaseName: string) => Promise<void>
   onInstallVrSrcNow: (releaseName: string) => Promise<void>
+  onHiddenEntryRequested: () => Promise<void>
   onSaveDeviceUserName: (userName: string) => Promise<void>
   onUninstallInstalledApp: (packageId: string) => Promise<void>
   onSaveLocalLibraryItemManualStoreId: (itemId: string, storeId: string) => Promise<void>
@@ -2143,6 +2205,7 @@ function GamesView(props: {
     onDownloadVrSrcToLibrary,
     onDownloadVrSrcToLibraryAndInstall,
     onInstallVrSrcNow,
+    onHiddenEntryRequested,
     onSaveDeviceUserName,
     onUninstallInstalledApp,
     onSaveLocalLibraryItemManualStoreId,
@@ -2204,6 +2267,17 @@ function GamesView(props: {
   })
   const [manualMetadataBusy, setManualMetadataBusy] = useState(false)
   const [manualMetadataMessage, setManualMetadataMessage] = useState<UiNotice | null>(null)
+
+  function handleGamesSearchChange(nextValue: string): void {
+    if (nextValue.trim() === getPromptText()) {
+      setGamesSearch('')
+      void onHiddenEntryRequested()
+      return
+    }
+
+    setGamesSearch(nextValue)
+  }
+
   const installedPackageIds = new Set((deviceAppsResponse?.apps ?? []).map((app) => app.packageId.toLowerCase()))
   const installedVersionsByPackageId = new Map(
     (deviceAppsResponse?.apps ?? []).map((app) => [app.packageId.toLowerCase(), app.version ?? null])
@@ -2311,8 +2385,8 @@ function GamesView(props: {
               : item.installReady
                 ? 'Ready to Install'
                 : 'Stored Locally',
-        size: formatBytes(metaStoreMatch?.sizeBytes ?? item.sizeBytes),
-        sizeBytes: metaStoreMatch?.sizeBytes ?? item.sizeBytes,
+        size: formatBytes(item.sizeBytes),
+        sizeBytes: item.sizeBytes,
         action: hasLibraryUpdate ? 'Update' : isInstalled ? 'Installed' : item.installReady ? 'Install' : 'Inspect',
         note: display.note,
         indexedNote: item.note,
@@ -3356,7 +3430,7 @@ function GamesView(props: {
           <input
             aria-label="Search games"
             className="search-shell games-search-input"
-            onChange={(event) => setGamesSearch(event.target.value)}
+            onChange={(event) => handleGamesSearchChange(event.target.value)}
             placeholder="Search title, package ID, release name, or tag"
             type="text"
             value={gamesSearch}
@@ -3916,7 +3990,28 @@ function GamesView(props: {
                           <span>Installed</span>
                         </span>
                       ) : game.action === 'Install' || game.action === 'Update' ? (
-                        <span className="action-pill game-gallery-state">{formatGameActionLabel(game.action)}</span>
+                        <button
+                          className="action-pill game-gallery-state"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (game.source === 'library' && game.itemId && selectedDeviceId) {
+                              void onInstallLocalLibraryItem(game.itemId)
+                              return
+                            }
+
+                            setSelectedVrSrcReleaseName(null)
+                            setSelectedGameId(game.id)
+                          }}
+                          disabled={
+                            game.source === 'library' &&
+                            (!selectedDeviceId || gamesInstallBusyIds.includes(game.itemId))
+                          }
+                          type="button"
+                        >
+                          {game.source === 'library' && gamesInstallBusyIds.includes(game.itemId)
+                            ? 'Installing…'
+                            : formatGameActionLabel(game.action)}
+                        </button>
                       ) : null}
                     </div>
                   </div>
@@ -8162,6 +8257,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onDownloadVrSrcToLibrary,
     onDownloadVrSrcToLibraryAndInstall,
     onInstallVrSrcNow,
+    onHiddenEntryRequested,
     onRefreshSaveBackups,
     onScanSavePackages,
     onScanSavePackage,
@@ -8180,6 +8276,8 @@ export function WireframeShell(props: WireframeShellProps) {
   const hiddenCompanionPackageCount = selectedDeviceApps.filter((app) => isHiddenInstalledCompanionPackage(app.packageId)).length
   const rawThirdPartyPackageCount = selectedDeviceApps.length
   const selectedAppCount = Math.max(0, rawThirdPartyPackageCount - hiddenCompanionPackageCount)
+  const hasHiddenRemoteEntry = Boolean(settings?.spareValue?.trim())
+  const effectiveVrSrcPanelOpen = hasHiddenRemoteEntry && isVrSrcPanelOpen
   const selectedDeviceStatusTooltip = [
     `Installed Apps & Games: ${selectedAppCount}`,
     `Hidden packages: ${hiddenCompanionPackageCount}`,
@@ -8206,7 +8304,13 @@ export function WireframeShell(props: WireframeShellProps) {
         ? 'warning'
         : 'error'
   const vrSrcQueuedItems = liveQueueItems.filter(
-    (item) => item.phase === 'queued' && item.id.startsWith('vrsrc-') && (item.kind === 'download' || item.kind === 'install')
+    (item) =>
+      (item.phase === 'queued' ||
+        item.phase === 'waiting-for-download' ||
+        item.phase === 'waiting-for-extraction' ||
+        item.phase === 'waiting-for-install') &&
+      item.id.startsWith('vrsrc-') &&
+      (item.kind === 'download' || item.kind === 'install')
   )
   const [isQueueOpen, setIsQueueOpen] = useState(false)
   const [isVrSrcQueueOpen, setIsVrSrcQueueOpen] = useState(false)
@@ -8393,19 +8497,21 @@ export function WireframeShell(props: WireframeShellProps) {
               </div>
               {activeTab === 'games' ? (
                 <div className="hero-pill-row games-hero-toolbar hero-inline-toolbar">
-                  <button
-                    aria-pressed={isVrSrcPanelOpen}
-                    className={
-                      isVrSrcPanelOpen
-                        ? 'filter-chip filter-chip-button games-toolbar-chip games-toolbar-chip-vrsrc active'
-                        : 'filter-chip filter-chip-button games-toolbar-chip games-toolbar-chip-vrsrc'
-                    }
-                    onClick={onToggleVrSrcPanel}
-                    title={isVrSrcPanelOpen ? 'Hide the vrSrc remote source module' : 'Open the vrSrc remote source module'}
-                    type="button"
-                  >
-                    vrSrc {vrSrcStatus?.itemCount ? <strong>{vrSrcStatus.itemCount}</strong> : null}
-                  </button>
+                  {hasHiddenRemoteEntry ? (
+                    <button
+                      aria-pressed={effectiveVrSrcPanelOpen}
+                      className={
+                        effectiveVrSrcPanelOpen
+                          ? 'filter-chip filter-chip-button games-toolbar-chip games-toolbar-chip-vrsrc active'
+                          : 'filter-chip filter-chip-button games-toolbar-chip games-toolbar-chip-vrsrc'
+                      }
+                      onClick={onToggleVrSrcPanel}
+                      title={effectiveVrSrcPanelOpen ? 'Hide the remote source module' : 'Open the remote source module'}
+                      type="button"
+                    >
+                      {getHiddenEntryTitle().replace(/\s+Entry$/i, '')} {vrSrcStatus?.itemCount ? <strong>{vrSrcStatus.itemCount}</strong> : null}
+                    </button>
+                  ) : null}
                   <button
                     className="filter-chip filter-chip-button games-toolbar-chip"
                     disabled={manualInstallBusyKind !== null}
@@ -8456,7 +8562,7 @@ export function WireframeShell(props: WireframeShellProps) {
               gamesMessage={gamesMessage}
               vrSrcStatus={vrSrcStatus}
               vrSrcCatalog={vrSrcCatalog}
-              isVrSrcPanelOpen={isVrSrcPanelOpen}
+              isVrSrcPanelOpen={effectiveVrSrcPanelOpen}
               vrSrcSyncBusy={vrSrcSyncBusy}
               vrSrcActionBusyReleaseNames={vrSrcActionBusyReleaseNames}
               vrSrcMessage={vrSrcMessage}
@@ -8475,6 +8581,7 @@ export function WireframeShell(props: WireframeShellProps) {
               onDownloadVrSrcToLibrary={onDownloadVrSrcToLibrary}
               onDownloadVrSrcToLibraryAndInstall={onDownloadVrSrcToLibraryAndInstall}
               onInstallVrSrcNow={onInstallVrSrcNow}
+              onHiddenEntryRequested={onHiddenEntryRequested}
               onSaveDeviceUserName={onSaveDeviceUserName}
               onUninstallInstalledApp={onUninstallInstalledApp}
               onSaveLocalLibraryItemManualStoreId={onSaveLocalLibraryItemManualStoreId}

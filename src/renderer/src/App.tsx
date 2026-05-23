@@ -31,6 +31,16 @@ import type {
   InstalledAppScanChangeEntry,
   ViewDisplayMode
 } from '@shared/types/ipc'
+import {
+  getHiddenEntryAriaLabel,
+  getHiddenEntryClearedMessage,
+  getHiddenEntryCopy,
+  getHiddenEntryEyebrow,
+  getHiddenEntryFieldLabel,
+  getHiddenEntryPlaceholder,
+  getHiddenEntrySavedMessage,
+  getHiddenEntryTitle
+} from '@shared/utils/phraseBook'
 import { WireframeShell } from './components/WireframeShell'
 
 type RefreshMode = 'initial' | 'manual' | 'poll'
@@ -45,6 +55,11 @@ interface UiNotice {
 
 interface SignatureMismatchDialogState {
   packageName: string
+}
+
+interface HiddenEntryDialogState {
+  value: string
+  saving: boolean
 }
 
 function buildDeviceSnapshot(response: DeviceListResponse | null): Map<string, { label: string; state: string }> {
@@ -95,6 +110,10 @@ function isObsoleteDeviceBanner(message: string | null | undefined): boolean {
 
 function areCorePathsConfigured(settings: AppSettings | null | undefined): boolean {
   return Boolean(settings?.localLibraryPath && settings?.backupPath && settings?.gameSavesPath)
+}
+
+function hasHiddenRemoteKey(settings: AppSettings | null | undefined): boolean {
+  return Boolean(settings?.spareValue?.trim())
 }
 
 function deriveDeviceStatusTransport(response: DeviceListResponse | null): DeviceStatusTransport {
@@ -266,8 +285,8 @@ function buildInstalledAppChangeDetails(change: InstalledAppScanDelta | null): s
   return parts.join(' ')
 }
 
-function buildVrSrcQueueId(operation: VrSrcTransferOperation, releaseName: string): string {
-  return `vrsrc-${operation}-${releaseName}`
+function buildVrSrcQueueId(operation: VrSrcTransferOperation, releaseName: string, serial: string | null = null): string {
+  return `vrsrc-${operation}-${releaseName}-${serial ?? 'none'}`
 }
 
 function buildDependencyQueueId(dependencyId: DependencyBootstrapProgressUpdate['dependencyId']): string {
@@ -417,10 +436,16 @@ function isSignatureMismatchFailure(response: {
 function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   const parts: string[] = []
 
-  if (update.phase === 'queued') {
-    return update.operation === 'install-now' || update.operation === 'download-to-library-and-install'
-      ? 'Queued behind another headset install...'
-      : 'Queued behind other vrSrc downloads...'
+  if (update.phase === 'queued' || update.phase === 'waiting-for-download') {
+    return 'Waiting for a vrSrc download lane...'
+  }
+
+  if (update.phase === 'waiting-for-extraction') {
+    return 'Download complete. Waiting for the extraction and library import lane...'
+  }
+
+  if (update.phase === 'waiting-for-install') {
+    return 'Payload ready. Waiting for the current install and verification cycle to finish...'
   }
 
   if (update.phase === 'paused') {
@@ -437,6 +462,10 @@ function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
 
   if (update.phase === 'installing') {
     return 'Queued payload is now installing on the headset...'
+  }
+
+  if (update.phase === 'importing') {
+    return 'Moving the payload into the Local Library...'
   }
 
   if (update.totalBytes) {
@@ -549,6 +578,7 @@ function App() {
   const [hasLoadedVrSrc, setHasLoadedVrSrc] = useState(false)
   const [signatureMismatchDialog, setSignatureMismatchDialog] = useState<SignatureMismatchDialogState | null>(null)
   const [signatureMismatchAcknowledged, setSignatureMismatchAcknowledged] = useState(false)
+  const [hiddenEntryDialog, setHiddenEntryDialog] = useState<HiddenEntryDialogState | null>(null)
   const [saveGamesBusy, setSaveGamesBusy] = useState(false)
   const [saveGamesBatchBusy, setSaveGamesBatchBusy] = useState(false)
   const [saveGamesActionBusyPackageId, setSaveGamesActionBusyPackageId] = useState<string | null>(null)
@@ -858,6 +888,34 @@ function App() {
     return resolveQueueArtworkFromSummary(findIndexedItemSummary(source, itemId))
   }
 
+  async function promptForHiddenEntry(): Promise<void> {
+    setHiddenEntryDialog({
+      value: settings?.spareValue ?? '',
+      saving: false
+    })
+  }
+
+  function closeHiddenEntryDialog(): void {
+    setHiddenEntryDialog(null)
+  }
+
+  async function submitHiddenEntry(value: string): Promise<void> {
+    const normalizedValue = value.trim()
+    setHiddenEntryDialog((current) => (current ? { ...current, value, saving: true } : current))
+
+    try {
+      const nextSettings = await window.api.settings.setSpareValue(normalizedValue)
+      setSettings(nextSettings)
+      setSettingsMessage(
+        nextSettings.spareValue ? getHiddenEntrySavedMessage() : getHiddenEntryClearedMessage()
+      )
+      setHiddenEntryDialog(null)
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? error.message : 'Unable to update the hidden entry.')
+      setHiddenEntryDialog((current) => (current ? { ...current, saving: false } : current))
+    }
+  }
+
   function formatSettingsPathLabel(key: SettingsPathKey): string {
     if (key === 'localLibraryPath') {
       return 'Local Library'
@@ -1064,8 +1122,27 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
   useEffect(() => {
     void loadSettings()
-    void loadVrSrc()
   }, [])
+
+  useEffect(() => {
+    if (!settings) {
+      return
+    }
+
+    if (!hasHiddenRemoteKey(settings)) {
+      vrSrcInitialSyncAttemptedRef.current = true
+      vrSrcStartupBootstrapCompletedRef.current = true
+      vrSrcStartupBootstrapPromiseRef.current = null
+      setVrSrcStatus(null)
+      setVrSrcCatalog(null)
+      setVrSrcMessage(null)
+      setVrSrcSyncBusy(false)
+      setHasLoadedVrSrc(true)
+      return
+    }
+
+    void loadVrSrc()
+  }, [settings])
 
   useEffect(() => {
     const unsubscribe = window.api.dependencies.onBootstrapProgress((update) => {
@@ -1158,6 +1235,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   useEffect(() => {
     if (
       !hasCompletedStartupUpdateCheck ||
+      !hasHiddenRemoteKey(settings) ||
       vrSrcSyncBusy ||
       vrSrcInitialSyncAttemptedRef.current ||
       !vrSrcStatus ||
@@ -1172,7 +1250,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
     vrSrcInitialSyncAttemptedRef.current = true
     void syncVrSrcCatalog({ openPanelOnSuccess: false })
-  }, [hasCompletedStartupUpdateCheck, vrSrcCatalog, vrSrcStatus, vrSrcSyncBusy])
+  }, [hasCompletedStartupUpdateCheck, settings, vrSrcCatalog, vrSrcStatus, vrSrcSyncBusy])
 
   useEffect(() => {
     metaStoreMatchesByItemIdRef.current = metaStoreMatchesByItemId
@@ -1641,6 +1719,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }
 
   async function loadVrSrc() {
+    if (!hasHiddenRemoteKey(settings)) {
+      setVrSrcStatus(null)
+      setVrSrcCatalog(null)
+      setHasLoadedVrSrc(true)
+      return
+    }
+
     try {
       const [status, catalog] = await Promise.all([
         window.api.vrsrc.getStatus(),
@@ -1662,6 +1747,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   async function ensureVrSrcCatalogReadyForFirstHeadsetRefresh(): Promise<void> {
     if (
       vrSrcStartupBootstrapCompletedRef.current ||
+      !hasHiddenRemoteKey(settings) ||
       !hasLoadedVrSrc ||
       (vrSrcCatalog?.items.length ?? 0) > 0
     ) {
@@ -1689,6 +1775,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }
 
   async function syncVrSrcCatalog(options?: { openPanelOnSuccess?: boolean }) {
+    if (!hasHiddenRemoteKey(settings)) {
+      setVrSrcStatus(null)
+      setVrSrcCatalog(null)
+      setVrSrcMessage(null)
+      return
+    }
+
     setVrSrcSyncBusy(true)
     setVrSrcMessage(null)
     const queueId = enqueueLiveQueueItem({
@@ -1735,6 +1828,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   async function queueVrSrcTransferAction(options: {
     releaseName: string
     operation: VrSrcTransferOperation
+    serial: string | null
     title: string
     subtitle: string
     execute: () => Promise<{
@@ -1770,9 +1864,22 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       return
     }
 
-    const queueId = buildVrSrcQueueId(options.operation, options.releaseName)
+    const queueId = buildVrSrcQueueId(options.operation, options.releaseName, options.serial)
     vrSrcActionBusyReleaseNamesRef.current = [...vrSrcActionBusyReleaseNamesRef.current, options.releaseName]
     setVrSrcActionBusyReleaseNames((current) => [...current, options.releaseName])
+    enqueueLiveQueueItem({
+      id: queueId,
+      title: options.title,
+      subtitle: options.subtitle,
+      kind: describeVrSrcQueueKind(options.operation),
+      phase: options.keepSuccessVisibleUntilRefresh ? 'waiting-for-install' : 'waiting-for-download',
+      progress: options.keepSuccessVisibleUntilRefresh ? 8 : 4,
+      details: options.keepSuccessVisibleUntilRefresh
+        ? 'Waiting for the current install and verification cycle to finish before starting...'
+        : 'Queued and waiting for a vrSrc download lane...',
+      artworkUrl: null,
+      transferControl: null
+    })
 
     const runTransferAction = async () => {
       let response = await options.execute()
@@ -1864,7 +1971,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           },
           onStarted: () => {
             const existingQueueItem = liveQueueItems.find((item) => item.id === queueId)
-            if (!existingQueueItem || existingQueueItem.phase === 'queued') {
+            if (
+              !existingQueueItem ||
+              existingQueueItem.phase === 'queued' ||
+              existingQueueItem.phase === 'waiting-for-install'
+            ) {
               updateLiveQueueItem(queueId, {
                 phase: 'installing',
                 progress: 18,
@@ -1938,6 +2049,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     await queueVrSrcTransferAction({
       releaseName,
       operation: 'download-to-library',
+      serial: null,
       title: releaseName,
       subtitle: 'vrSrc to Local Library',
       execute: () => window.api.vrsrc.downloadToLibrary(releaseName),
@@ -1956,12 +2068,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
 
     setVrSrcMessage(null)
-    registerLiveQueueRetryHandler(buildVrSrcQueueId('install-now', releaseName), () =>
+    registerLiveQueueRetryHandler(buildVrSrcQueueId('install-now', releaseName, targetDeviceId), () =>
       installVrSrcNow(releaseName, targetDeviceId)
     )
     await queueVrSrcTransferAction({
       releaseName,
       operation: 'install-now',
+      serial: targetDeviceId,
       title: releaseName,
       subtitle: 'vrSrc Install Now',
       execute: () => window.api.vrsrc.installNow(targetDeviceId, releaseName),
@@ -1979,7 +2092,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           void refreshMetaStoreMatches(libraryIndex, backupIndex)
           await refreshInstalledApps(targetDeviceId, {
             reason: 'verification',
-            queueId: buildVrSrcQueueId('install-now', releaseName),
+            queueId: buildVrSrcQueueId('install-now', releaseName, targetDeviceId),
             awaitMetadataCompletion: true
           })
         } finally {
@@ -2004,12 +2117,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
 
     setVrSrcMessage(null)
-    registerLiveQueueRetryHandler(buildVrSrcQueueId('download-to-library-and-install', releaseName), () =>
+    registerLiveQueueRetryHandler(buildVrSrcQueueId('download-to-library-and-install', releaseName, targetDeviceId), () =>
       downloadVrSrcToLibraryAndInstall(releaseName, targetDeviceId)
     )
     await queueVrSrcTransferAction({
       releaseName,
       operation: 'download-to-library-and-install',
+      serial: targetDeviceId,
       title: releaseName,
       subtitle: 'vrSrc Download & Install',
       execute: () => window.api.vrsrc.downloadToLibraryAndInstall(targetDeviceId, releaseName),
@@ -2026,7 +2140,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           setBackupStorageIndex(backupIndex)
           await refreshInstalledApps(targetDeviceId, {
             reason: 'verification',
-            queueId: buildVrSrcQueueId('download-to-library-and-install', releaseName),
+            queueId: buildVrSrcQueueId('download-to-library-and-install', releaseName, targetDeviceId),
             awaitMetadataCompletion: true
           })
         } finally {
@@ -2074,8 +2188,20 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
 
   useEffect(() => {
     const unsubscribe = window.api.vrsrc.onTransferProgress((update) => {
-      const queueId = buildVrSrcQueueId(update.operation, update.releaseName)
+      const queueId = buildVrSrcQueueId(update.operation, update.releaseName, update.serial)
       const mappedPhase: LiveQueueItem['phase'] = (() => {
+        if (update.phase === 'waiting-for-download') {
+          return 'waiting-for-download'
+        }
+
+        if (update.phase === 'waiting-for-extraction') {
+          return 'waiting-for-extraction'
+        }
+
+        if (update.phase === 'waiting-for-install') {
+          return 'waiting-for-install'
+        }
+
         if (update.phase === 'queued') {
           return 'queued'
         }
@@ -2092,6 +2218,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           return 'extracting'
         }
 
+        if (update.phase === 'importing') {
+          return 'importing'
+        }
+
         if (update.phase === 'installing') {
           return 'installing'
         }
@@ -2105,6 +2235,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
               kind: 'vrsrc' as const,
               operation: update.operation,
               releaseName: update.releaseName,
+              serial: update.serial,
               canPause: update.canPause,
               canResume: update.canResume,
               canCancel: update.canCancel
@@ -2151,16 +2282,16 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
   }, [])
 
-  async function pauseVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation) {
-    await window.api.vrsrc.pauseTransfer(releaseName, operation)
+  async function pauseVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation, serial: string | null = null) {
+    await window.api.vrsrc.pauseTransfer(releaseName, operation, serial)
   }
 
-  async function resumeVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation) {
-    await window.api.vrsrc.resumeTransfer(releaseName, operation)
+  async function resumeVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation, serial: string | null = null) {
+    await window.api.vrsrc.resumeTransfer(releaseName, operation, serial)
   }
 
-  async function cancelVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation) {
-    await window.api.vrsrc.cancelTransfer(releaseName, operation)
+  async function cancelVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation, serial: string | null = null) {
+    await window.api.vrsrc.cancelTransfer(releaseName, operation, serial)
   }
 
   async function saveDisplayMode(key: SettingsDisplayModeKey, mode: ViewDisplayMode) {
@@ -4579,6 +4710,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onDownloadVrSrcToLibrary={downloadVrSrcToLibrary}
       onDownloadVrSrcToLibraryAndInstall={downloadVrSrcToLibraryAndInstall}
       onInstallVrSrcNow={installVrSrcNow}
+      onHiddenEntryRequested={promptForHiddenEntry}
       onRefreshSaveBackups={refreshSaveBackups}
       onScanSavePackages={async () => {
         await scanSavePackages(true)
@@ -4660,6 +4792,71 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
                 type="button"
               >
                 Uninstall and Retry
+              </button>
+            </div>
+          </section>
+        </>
+      ) : null}
+      {hiddenEntryDialog ? (
+        <>
+          <div className="library-scan-backdrop" />
+          <section
+            aria-label={getHiddenEntryAriaLabel()}
+            aria-modal="true"
+            className="library-support-dialog hidden-entry-dialog surface-panel"
+            role="dialog"
+          >
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">{getHiddenEntryEyebrow()}</p>
+                <h2>{getHiddenEntryTitle()}</h2>
+                <p className="section-copy compact">{getHiddenEntryCopy()}</p>
+              </div>
+              <button className="close-pill" disabled={hiddenEntryDialog.saving} onClick={closeHiddenEntryDialog} type="button">
+                Close
+              </button>
+            </div>
+
+            <label className="hidden-entry-field">
+              <span>{getHiddenEntryFieldLabel()}</span>
+              <input
+                autoFocus
+                className="search-shell hidden-entry-input"
+                onChange={(event) =>
+                  setHiddenEntryDialog((current) =>
+                    current
+                      ? {
+                          ...current,
+                          value: event.target.value
+                        }
+                      : current
+                  )
+                }
+                placeholder={getHiddenEntryPlaceholder()}
+                type="text"
+                value={hiddenEntryDialog.value}
+              />
+            </label>
+
+            <div className="hidden-entry-actions">
+              <button className="close-pill" disabled={hiddenEntryDialog.saving} onClick={closeHiddenEntryDialog} type="button">
+                Cancel
+              </button>
+              <button
+                className="close-pill"
+                disabled={hiddenEntryDialog.saving}
+                onClick={() => void submitHiddenEntry('')}
+                type="button"
+              >
+                Clear
+              </button>
+              <button
+                className="action-pill"
+                disabled={hiddenEntryDialog.saving}
+                onClick={() => void submitHiddenEntry(hiddenEntryDialog.value)}
+                type="button"
+              >
+                {hiddenEntryDialog.saving ? 'Saving…' : 'Save'}
               </button>
             </div>
           </section>

@@ -4,11 +4,11 @@
 
 # QuestVault
 
-QuestVault is a desktop Quest content manager for local library indexing, headset inventory, save backup workflows, ADB operations, and vrSrc-assisted remote catalog downloads.
+QuestVault is a desktop Quest content manager for local library indexing, headset inventory, save backup workflows, ADB operations.
 
 ## Inspiration
 
-This project is heavily inspired by the fantastic work done on [Rookie Sideloader](https://github.com/nerdunit/androidsideloader), ApprenticeVR, and ApprenticeVR vrSrc Edition.
+This project is heavily inspired by the fantastic work done on [Rookie Sideloader](https://github.com/nerdunit/androidsideloader), ApprenticeVR, and ApprenticeVR.
 
 ## Core Areas
 
@@ -28,12 +28,11 @@ vrSrc is no longer working due to the recently introduced changes (no I won't ap
 - One-click metadata refresh for indexed titles.
 - Detail drawer with artwork, description, category chips, versions, package ID, store ID, folder name, and install actions.
 - Resilient artwork fallback rendering so broken image links fall back to generated cover art instead of empty panels.
-- Local, vrSrc, and save-management drawers now hand long-running actions off to the Live Queue more consistently so progress and blocked outcomes surface in one place.
-- Detail drawers across Local Library, vrSrc, Installed Inventory, and Game Saves are now more aligned, with shared rating strips, trailer embeds, richer metadata facts, and clearer section separation.
+- Local, and save-management drawers now hand long-running actions off to the Live Queue more consistently so progress and blocked outcomes surface in one place.
+- Detail drawers across Local Library, Installed Inventory, and Game Saves are now more aligned, with shared rating strips, trailer embeds, richer metadata facts, and clearer section separation.
 - Selected toolbar and filter pills now use the same warm highlighted surround treatment as the active left-rail navigation item.
-- Local Library and vrSrc summary pills now use clearer wording and filtering behavior: Local Library shows `Library`, while vrSrc `Updates` displays the count and leaves update filtering to the global filter row.
+- Local Library summary pills now use clearer wording and filtering behavior.
 - The Local Library `New` summary pill now filters to recent local additions instead of only displaying the count.
-- vrSrc drawer wrapping is now more resilient for long package names, trailer headers, note content, and manual patch strings, so problem entries no longer blow the drawer out sideways.
 - Search now preserves age markers such as `(18+)`, so mature-title markers can be filtered explicitly instead of being reduced to plain numbers.
 
 ### Installed Inventory
@@ -80,14 +79,10 @@ vrSrc is no longer working due to the recently introduced changes (no I won't ap
 - Installed-app refreshes are now coalesced after install and uninstall bursts so Live stays readable during multi-step device operations.
 - Installed-app metadata refresh now begins from the persisted installed index, trims removed packages, and backfills only missing matches in the background.
 - Watcher-driven updates when indexed folders change on disk.
-- Windows vrSrc sync now prefers IPv4 for remote source requests to avoid Cloudflare 403 failures seen on some IPv6 paths.
-- vrSrc sync and payload transfers now use a managed `rclone` transport while Telegram credential resolution stays on `curl`, with remote source requests pinned to the `rclone/v1.72.1` user agent.
-- Older managed or system `rclone` binaries are now version-checked and automatically refreshed when they are below the working minimum used for vrSrc sync.
 - Save drawer package IDs now wrap cleanly instead of forcing sideways scroll on long package names.
-- vrSrc-style `v<code>+<name>` release names are now parsed consistently during vrSrc sync and local indexing, which improves version fallback accuracy for vrSrc-style payload folders.
-- vrSrc sync now excludes `0 MB` source rows from catalog counts, browsing results, and download actions.
 - Folder installs now prefer the indexed package ID for OBB destinations, so payloads with asset-style `.obb` filenames can still transfer correctly after APK install.
 - APK install and OBB transfer failures now capture richer ADB output in the headset action log.
+- remote download requirement bundles retained for a potential reactivation.
 
 - [QuestVault Screenshots](screenshots/)
 

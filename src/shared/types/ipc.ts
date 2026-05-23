@@ -417,10 +417,14 @@ export interface ManualGameMetadataOverride {
 export type LiveQueueKind = 'install' | 'backup' | 'uninstall' | 'scan' | 'cleanup' | 'restore' | 'download' | 'update' | 'reboot'
 export type LiveQueuePhase =
   | 'queued'
+  | 'waiting-for-download'
+  | 'waiting-for-extraction'
+  | 'waiting-for-install'
   | 'paused'
   | 'cancelled'
   | 'downloading'
   | 'extracting'
+  | 'importing'
   | 'installing'
   | 'verifying'
   | 'backing-up'
@@ -452,6 +456,7 @@ export interface LiveQueueTransferControl {
   kind: 'vrsrc'
   operation: VrSrcTransferOperation
   releaseName: string
+  serial: string | null
   canPause: boolean
   canResume: boolean
   canCancel: boolean
@@ -479,6 +484,7 @@ export interface AppSettings {
   gameSavesPath: string | null
   gamesDisplayMode: ViewDisplayMode
   inventoryDisplayMode: ViewDisplayMode
+  spareValue: string | null
 }
 
 export interface VrSrcStatusResponse {
@@ -572,11 +578,23 @@ export interface VrSrcDownloadAndInstallResponse {
 }
 
 export type VrSrcTransferOperation = 'download-to-library' | 'download-to-library-and-install' | 'install-now'
-export type VrSrcTransferPhase = 'queued' | 'paused' | 'cancelled' | 'preparing' | 'downloading' | 'extracting' | 'installing'
+export type VrSrcTransferPhase =
+  | 'queued'
+  | 'waiting-for-download'
+  | 'waiting-for-extraction'
+  | 'waiting-for-install'
+  | 'paused'
+  | 'cancelled'
+  | 'preparing'
+  | 'downloading'
+  | 'extracting'
+  | 'importing'
+  | 'installing'
 
 export interface VrSrcTransferProgressUpdate {
   operation: VrSrcTransferOperation
   releaseName: string
+  serial: string | null
   phase: VrSrcTransferPhase
   progress: number
   fileName: string | null
@@ -593,6 +611,7 @@ export interface VrSrcTransferControlResponse {
   success: boolean
   releaseName: string
   operation: VrSrcTransferOperation
+  serial: string | null
   message: string
   details: string | null
 }

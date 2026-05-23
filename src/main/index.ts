@@ -415,14 +415,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('vrsrc:install-now', async (_event, serial: string, releaseName: string) =>
     vrSrcService.installNow(serial, releaseName)
   )
-  ipcMain.handle('vrsrc:pause-transfer', async (_event, releaseName: string, operation: string) =>
-    vrSrcService.pauseTransfer(releaseName, operation as 'download-to-library' | 'install-now')
+  ipcMain.handle('vrsrc:pause-transfer', async (_event, releaseName: string, operation: string, serial: string | null) =>
+    vrSrcService.pauseTransfer(releaseName, operation as 'download-to-library' | 'install-now', serial)
   )
-  ipcMain.handle('vrsrc:resume-transfer', async (_event, releaseName: string, operation: string) =>
-    vrSrcService.resumeTransfer(releaseName, operation as 'download-to-library' | 'install-now')
+  ipcMain.handle('vrsrc:resume-transfer', async (_event, releaseName: string, operation: string, serial: string | null) =>
+    vrSrcService.resumeTransfer(releaseName, operation as 'download-to-library' | 'install-now', serial)
   )
-  ipcMain.handle('vrsrc:cancel-transfer', async (_event, releaseName: string, operation: string) =>
-    vrSrcService.cancelTransfer(releaseName, operation as 'download-to-library' | 'install-now')
+  ipcMain.handle('vrsrc:cancel-transfer', async (_event, releaseName: string, operation: string, serial: string | null) =>
+    vrSrcService.cancelTransfer(releaseName, operation as 'download-to-library' | 'install-now', serial)
   )
   ipcMain.handle('devices:install-local-library-item', async (_event, serial: string, itemId: string) => {
     const item = await settingsService.getIndexedLocalLibraryItem(itemId)
@@ -459,6 +459,13 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle('settings:clear-path', async (_event, key) => settingsService.clearPath(key))
   ipcMain.handle('settings:set-display-mode', async (_event, key, mode) => settingsService.setDisplayMode(key, mode))
+  ipcMain.handle('settings:set-spare-value', async (_event, spareValue: string | null) => {
+    const nextSettings = await settingsService.setSpareValue(spareValue)
+    if (!nextSettings.spareValue) {
+      await vrSrcService.clearCredentialsForHiddenKeyRemoval()
+    }
+    return nextSettings
+  })
   ipcMain.handle('settings:rescan-local-library', async () => settingsService.rescanLocalLibrary())
   ipcMain.handle('settings:rescan-backup-storage', async () => settingsService.rescanBackupStorage())
   ipcMain.handle('settings:move-backup-storage-item-to-library', async (_event, itemId: string) =>

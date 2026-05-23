@@ -56,7 +56,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.9.12',
+  version: '0.9.14',
   ping: (): string => 'pong',
   app: {
     isPackaged: !process.env.ELECTRON_RENDERER_URL,
@@ -162,12 +162,21 @@ const api = {
       ipcRenderer.invoke('vrsrc:download-to-library-and-install', serial, releaseName),
     installNow: (serial: string, releaseName: string): Promise<VrSrcInstallNowResponse> =>
       ipcRenderer.invoke('vrsrc:install-now', serial, releaseName),
-    pauseTransfer: (releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> =>
-      ipcRenderer.invoke('vrsrc:pause-transfer', releaseName, operation),
-    resumeTransfer: (releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> =>
-      ipcRenderer.invoke('vrsrc:resume-transfer', releaseName, operation),
-    cancelTransfer: (releaseName: string, operation: VrSrcTransferOperation): Promise<VrSrcTransferControlResponse> =>
-      ipcRenderer.invoke('vrsrc:cancel-transfer', releaseName, operation),
+    pauseTransfer: (
+      releaseName: string,
+      operation: VrSrcTransferOperation,
+      serial: string | null = null
+    ): Promise<VrSrcTransferControlResponse> => ipcRenderer.invoke('vrsrc:pause-transfer', releaseName, operation, serial),
+    resumeTransfer: (
+      releaseName: string,
+      operation: VrSrcTransferOperation,
+      serial: string | null = null
+    ): Promise<VrSrcTransferControlResponse> => ipcRenderer.invoke('vrsrc:resume-transfer', releaseName, operation, serial),
+    cancelTransfer: (
+      releaseName: string,
+      operation: VrSrcTransferOperation,
+      serial: string | null = null
+    ): Promise<VrSrcTransferControlResponse> => ipcRenderer.invoke('vrsrc:cancel-transfer', releaseName, operation, serial),
     onTransferProgress: (callback: (update: VrSrcTransferProgressUpdate) => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent, update: VrSrcTransferProgressUpdate) => {
         callback(update)
@@ -194,6 +203,7 @@ const api = {
     clearPath: (key: SettingsPathKey): Promise<AppSettings> => ipcRenderer.invoke('settings:clear-path', key),
     setDisplayMode: (key: SettingsDisplayModeKey, mode: ViewDisplayMode): Promise<AppSettings> =>
       ipcRenderer.invoke('settings:set-display-mode', key, mode),
+    setSpareValue: (spareValue: string | null): Promise<AppSettings> => ipcRenderer.invoke('settings:set-spare-value', spareValue),
     rescanLocalLibrary: (): Promise<LocalLibraryScanResponse> => ipcRenderer.invoke('settings:rescan-local-library'),
     rescanBackupStorage: (): Promise<LocalLibraryScanResponse> => ipcRenderer.invoke('settings:rescan-backup-storage'),
     moveBackupStorageItemToLibrary: (itemId: string): Promise<BackupStorageMoveItemResponse> =>

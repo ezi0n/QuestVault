@@ -126,9 +126,21 @@ interface ElectronApi {
     downloadToLibrary: (releaseName: string) => Promise<VrSrcDownloadToLibraryResponse>
     downloadToLibraryAndInstall: (serial: string, releaseName: string) => Promise<VrSrcDownloadAndInstallResponse>
     installNow: (serial: string, releaseName: string) => Promise<VrSrcInstallNowResponse>
-    pauseTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
-    resumeTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
-    cancelTransfer: (releaseName: string, operation: VrSrcTransferOperation) => Promise<VrSrcTransferControlResponse>
+    pauseTransfer: (
+      releaseName: string,
+      operation: VrSrcTransferOperation,
+      serial?: string | null
+    ) => Promise<VrSrcTransferControlResponse>
+    resumeTransfer: (
+      releaseName: string,
+      operation: VrSrcTransferOperation,
+      serial?: string | null
+    ) => Promise<VrSrcTransferControlResponse>
+    cancelTransfer: (
+      releaseName: string,
+      operation: VrSrcTransferOperation,
+      serial?: string | null
+    ) => Promise<VrSrcTransferControlResponse>
     onTransferProgress: (callback: (update: VrSrcTransferProgressUpdate) => void) => () => void
   }
   settings: {
@@ -145,6 +157,7 @@ interface ElectronApi {
     ) => Promise<IndexedItemArtworkExtractionResponse>
     clearPath: (key: SettingsPathKey) => Promise<AppSettings>
     setDisplayMode: (key: SettingsDisplayModeKey, mode: ViewDisplayMode) => Promise<AppSettings>
+    setSpareValue: (spareValue: string | null) => Promise<AppSettings>
     rescanLocalLibrary: () => Promise<LocalLibraryScanResponse>
     rescanBackupStorage: () => Promise<LocalLibraryScanResponse>
     moveBackupStorageItemToLibrary: (itemId: string) => Promise<BackupStorageMoveItemResponse>

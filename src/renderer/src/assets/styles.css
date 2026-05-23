@@ -3180,6 +3180,35 @@ input {
   width: min(760px, calc(100vw - 48px));
 }
 
+.hidden-entry-dialog {
+  width: min(640px, calc(100vw - 48px));
+}
+
+.hidden-entry-field {
+  display: grid;
+  gap: 10px;
+}
+
+.hidden-entry-field span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hidden-entry-input {
+  width: 100%;
+  min-height: 48px;
+}
+
+.hidden-entry-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .signature-mismatch-dialog strong {
   color: var(--ink);
 }
