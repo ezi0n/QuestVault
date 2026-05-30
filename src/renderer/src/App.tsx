@@ -445,7 +445,9 @@ function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   }
 
   if (update.phase === 'waiting-for-install') {
-    return 'Payload ready. Waiting for the current install and verification cycle to finish...'
+    return update.operation === 'install-now'
+      ? 'Download finished. Waiting for the headset install lane to free up...'
+      : 'Library copy is ready. Waiting for the headset install lane to free up...'
   }
 
   if (update.phase === 'paused') {
@@ -461,14 +463,44 @@ function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   }
 
   if (update.phase === 'installing') {
-    return 'Queued payload is now installing on the headset...'
+    return update.operation === 'install-now'
+      ? 'Installing from temporary vrSrc staging on the headset...'
+      : 'Installing the newly copied Local Library payload on the headset...'
   }
 
   if (update.phase === 'importing') {
+    if (update.progress >= 96) {
+      return update.operation === 'download-to-library-and-install'
+        ? 'Files copied to the Local Library. Refreshing the library index before install...'
+        : 'Files copied to the Local Library. Refreshing the library index...'
+    }
+
+    if (update.totalBytes) {
+      const importingParts = [`Moving into the Local Library: ${Math.max(1, Math.min(99, update.progress))}%`]
+
+      if (update.fileName?.trim()) {
+        importingParts.push(`Current file: ${update.fileName.trim()}`)
+      }
+
+      return importingParts.join(' • ')
+    }
+
+    if (update.fileName?.trim()) {
+      return `Moving the payload into the Local Library... Current file: ${update.fileName.trim()}`
+    }
+
     return 'Moving the payload into the Local Library...'
   }
 
-  if (update.totalBytes) {
+  if (update.operation === 'install-now' && update.phase === 'downloading') {
+    if (update.totalBytes) {
+      parts.push(
+        `Temporary download for direct install: ${formatTransferBytes(update.transferredBytes)} of ${formatTransferBytes(update.totalBytes)}`
+      )
+    } else {
+      parts.push(`${formatTransferBytes(update.transferredBytes)} downloaded for direct install`)
+    }
+  } else if (update.totalBytes) {
     parts.push(`${formatTransferBytes(update.transferredBytes)} of ${formatTransferBytes(update.totalBytes)}`)
   } else {
     parts.push(`${formatTransferBytes(update.transferredBytes)} downloaded`)
@@ -750,7 +782,7 @@ function App() {
       return 'vrSrc Download & Install'
     }
 
-    return 'vrSrc Install Now'
+    return 'vrSrc Direct Install'
   }
 
   function describeVrSrcQueueKind(operation: VrSrcTransferOperation): LiveQueueItem['kind'] {
@@ -1878,7 +1910,15 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         ? 'Waiting for the current install and verification cycle to finish before starting...'
         : 'Queued and waiting for a vrSrc download lane...',
       artworkUrl: null,
-      transferControl: null
+      transferControl: {
+        kind: 'vrsrc',
+        operation: options.operation,
+        releaseName: options.releaseName,
+        serial: options.serial,
+        canPause: true,
+        canResume: false,
+        canCancel: true
+      }
     })
 
     const runTransferAction = async () => {
@@ -1966,7 +2006,15 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
               phase: 'queued',
               progress: 8,
               details: 'Waiting for the current install and verification cycle to finish before starting...',
-              transferControl: null
+              transferControl: {
+                kind: 'vrsrc',
+                operation: options.operation,
+                releaseName: options.releaseName,
+                serial: options.serial,
+                canPause: true,
+                canResume: false,
+                canCancel: true
+              }
             })
           },
           onStarted: () => {
@@ -2283,15 +2331,58 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
   }, [])
 
   async function pauseVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation, serial: string | null = null) {
-    await window.api.vrsrc.pauseTransfer(releaseName, operation, serial)
+    const response = await window.api.vrsrc.pauseTransfer(releaseName, operation, serial)
+    if (response.success) {
+      updateLiveQueueItem(buildVrSrcQueueId(operation, releaseName, serial), {
+        phase: 'paused',
+        details: response.message,
+        transferControl: {
+          kind: 'vrsrc',
+          operation,
+          releaseName,
+          serial,
+          canPause: false,
+          canResume: true,
+          canCancel: true
+        }
+      })
+    }
   }
 
   async function resumeVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation, serial: string | null = null) {
-    await window.api.vrsrc.resumeTransfer(releaseName, operation, serial)
+    const response = await window.api.vrsrc.resumeTransfer(releaseName, operation, serial)
+    if (response.success) {
+      updateLiveQueueItem(buildVrSrcQueueId(operation, releaseName, serial), {
+        phase: operation === 'download-to-library-and-install' || operation === 'install-now' ? 'queued' : 'waiting-for-download',
+        details:
+          operation === 'download-to-library-and-install' || operation === 'install-now'
+            ? 'Waiting for the current install and verification cycle to finish before starting...'
+            : 'Queued and waiting for a vrSrc download lane...',
+        transferControl: {
+          kind: 'vrsrc',
+          operation,
+          releaseName,
+          serial,
+          canPause: true,
+          canResume: false,
+          canCancel: true
+        }
+      })
+    }
   }
 
   async function cancelVrSrcTransfer(releaseName: string, operation: VrSrcTransferOperation, serial: string | null = null) {
-    await window.api.vrsrc.cancelTransfer(releaseName, operation, serial)
+    const response = await window.api.vrsrc.cancelTransfer(releaseName, operation, serial)
+    if (response.success) {
+      const queueId = buildVrSrcQueueId(operation, releaseName, serial)
+      updateLiveQueueItem(queueId, {
+        phase: 'cancelled',
+        progress: 100,
+        details: response.message,
+        transferControl: null
+      })
+      scheduleVrSrcQueueRemoval(queueId, 1500)
+    }
   }
 
   async function saveDisplayMode(key: SettingsDisplayModeKey, mode: ViewDisplayMode) {

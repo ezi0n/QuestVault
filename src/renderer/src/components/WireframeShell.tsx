@@ -1660,13 +1660,13 @@ function NoticeBanner(props: { notice: UiNotice; className?: string }) {
 
 function QueueRail(props: {
   items: LiveQueueItem[]
-  vrSrcQueuedItems: LiveQueueItem[]
+  queuedItems: LiveQueueItem[]
   headsetActionLog: HeadsetActionLogResponse | null
   headsetActionLogBusy: boolean
   isHeadsetActionLogVisible: boolean
   isOpen: boolean
   onClose: () => void
-  onOpenVrSrcQueue: () => void
+  onOpenQueue: () => void
   onHideHeadsetActionLog: () => void
   onOpenHeadsetActivityReview: () => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
@@ -1676,13 +1676,13 @@ function QueueRail(props: {
 }) {
   const {
     items,
-    vrSrcQueuedItems,
+    queuedItems,
     headsetActionLog,
     headsetActionLogBusy,
     isHeadsetActionLogVisible,
     isOpen,
     onClose,
-    onOpenVrSrcQueue,
+    onOpenQueue,
     onHideHeadsetActionLog,
     onOpenHeadsetActivityReview,
     onPauseVrSrcTransfer,
@@ -1863,6 +1863,10 @@ function QueueRail(props: {
     return item.progress
   }
 
+  function shouldShowQueueProgress(item: LiveQueueItem): boolean {
+    return item.phase !== 'queued' && item.phase !== 'waiting-for-download' && item.phase !== 'waiting-for-extraction'
+  }
+
   function formatActionTime(timestamp: string): string {
     const parsed = Date.parse(timestamp)
     return Number.isNaN(parsed) ? timestamp : new Date(parsed).toLocaleString()
@@ -1899,8 +1903,8 @@ function QueueRail(props: {
           <h2>Active Operations</h2>
         </div>
         <div className="queue-drawer-controls">
-          <button className="close-pill" onClick={onOpenVrSrcQueue} type="button">
-            Queue {vrSrcQueuedItems.length}
+          <button className="close-pill" onClick={onOpenQueue} type="button">
+            Queue {queuedItems.length}
           </button>
           <button className="close-pill" onClick={onClose} type="button">
             Close
@@ -2061,6 +2065,12 @@ function QueueRail(props: {
                   ) : null}
                 </div>
               ) : null}
+              {shouldShowQueueProgress(item) ? (
+                <div className="queue-progress-meta">
+                  <span>Progress</span>
+                  <strong>{getQueueProgress(item)}%</strong>
+                </div>
+              ) : null}
               <div className="progress-track">
                 <div className="progress-fill" style={{ width: `${getQueueProgress(item)}%` }} />
               </div>
@@ -2077,12 +2087,15 @@ function QueueRail(props: {
   )
 }
 
-function VrSrcQueueDialog(props: {
+function QueueDialog(props: {
   isOpen: boolean
   items: LiveQueueItem[]
   onClose: () => void
+  onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
+  onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
+  onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
 }) {
-  const { isOpen, items, onClose } = props
+  const { isOpen, items, onClose, onPauseVrSrcTransfer, onResumeVrSrcTransfer, onCancelVrSrcTransfer } = props
 
   if (!isOpen) {
     return null
@@ -2091,13 +2104,13 @@ function VrSrcQueueDialog(props: {
   return (
     <>
       <div className="library-scan-backdrop" onClick={onClose} />
-      <section className="library-support-dialog surface-panel" role="dialog" aria-modal="true" aria-label="vrSrc queue">
+      <section className="library-support-dialog surface-panel" role="dialog" aria-modal="true" aria-label="operation queue">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Remote Source</p>
-            <h2>Queued vrSrc Transfers</h2>
+            <p className="eyebrow">Operations</p>
+            <h2>Queued Actions</h2>
             <p className="section-copy compact settings-section-copy-nowrap">
-              Waiting items will start automatically as soon as one of the three active download lanes frees up.
+              Waiting items stay here until a live action actually starts.
             </p>
           </div>
           <button className="close-pill" onClick={onClose} type="button">
@@ -2111,13 +2124,59 @@ function VrSrcQueueDialog(props: {
                 <strong>{item.title}</strong>
                 <code>{item.subtitle}</code>
                 <p>{item.details}</p>
+                {item.transferControl?.kind === 'vrsrc' ? (
+                  <div className="queue-card-actions">
+                    {item.transferControl.canPause ? (
+                      <button
+                        className="queue-card-action"
+                        onClick={() =>
+                          void onPauseVrSrcTransfer(
+                            item.transferControl!.releaseName,
+                            item.transferControl!.operation,
+                            item.transferControl!.serial
+                          )}
+                        type="button"
+                      >
+                        Pause
+                      </button>
+                    ) : null}
+                    {item.transferControl.canResume ? (
+                      <button
+                        className="queue-card-action"
+                        onClick={() =>
+                          void onResumeVrSrcTransfer(
+                            item.transferControl!.releaseName,
+                            item.transferControl!.operation,
+                            item.transferControl!.serial
+                          )}
+                        type="button"
+                      >
+                        Resume
+                      </button>
+                    ) : null}
+                    {item.transferControl.canCancel ? (
+                      <button
+                        className="queue-card-action queue-card-action-danger"
+                        onClick={() =>
+                          void onCancelVrSrcTransfer(
+                            item.transferControl!.releaseName,
+                            item.transferControl!.operation,
+                            item.transferControl!.serial
+                          )}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
         ) : (
           <div className="empty-state settings-maintenance-history-dialog-empty">
-            <strong>No vrSrc transfers are waiting right now.</strong>
-            <p>Up to three vrSrc downloads can run at once, and anything beyond that appears here until a slot opens.</p>
+            <strong>No queued actions are waiting right now.</strong>
+            <p>Anything waiting on an open lane or active step will appear here until it becomes live work.</p>
           </div>
         )}
       </section>
@@ -3690,7 +3749,7 @@ function GamesView(props: {
                       } as CSSProperties
                     }
                   >
-                    {filteredVrSrcEntries.map(({ item, isUpdate, isInstalled, isInLibrary, statusLabel, statusClassName, displayRemoteVersion }) => (
+                    {filteredVrSrcEntries.map(({ item, isUpdate, isInstalled, isInLibrary, actionBusy, statusLabel, statusClassName, displayRemoteVersion }) => (
                       <article
                         className={
                           selectedVrSrcReleaseName === item.releaseName
@@ -3730,26 +3789,43 @@ function GamesView(props: {
                               <span className="game-gallery-size">{item.sizeLabel}</span>
                               <span className="vrsrc-gallery-version-chip">{displayRemoteVersion}</span>
                             </div>
-                            <span
-                              className={
-                                isUpdate
-                                  ? `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-update`
-                                  : isInstalled
+                            {isUpdate ? (
+                              <button
+                                className={`${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-update`}
+                                disabled={actionBusy || !selectedDeviceId}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onDownloadVrSrcToLibraryAndInstall(item.releaseName)
+                                }}
+                                title={
+                                  selectedDeviceId
+                                    ? 'Download this vrSrc update into the Local Library, then install it to the selected headset'
+                                    : 'Select a headset first to download and install this vrSrc update'
+                                }
+                                type="button"
+                              >
+                                {actionBusy ? 'Working…' : statusLabel}
+                              </button>
+                            ) : (
+                              <span
+                                className={
+                                  isInstalled
                                     ? 'status-pill status-ready game-action-indicator game-gallery-state'
                                     : isInLibrary
                                       ? `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-library`
                                       : `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-new`
-                              }
-                            >
-                              {isInstalled ? (
-                                <>
-                                  <span aria-hidden="true" className="game-action-indicator-check" />
-                                  <span>{statusLabel}</span>
-                                </>
-                              ) : (
-                                statusLabel
-                              )}
-                            </span>
+                                }
+                              >
+                                {isInstalled ? (
+                                  <>
+                                    <span aria-hidden="true" className="game-action-indicator-check" />
+                                    <span>{statusLabel}</span>
+                                  </>
+                                ) : (
+                                  statusLabel
+                                )}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </article>
@@ -8295,6 +8371,20 @@ export function WireframeShell(props: WireframeShellProps) {
     selectedDevice !== null &&
     selectedDevice.storageFreeBytes !== null &&
     railStorageUsagePercent !== null
+  const queuedLiveQueueItems = liveQueueItems.filter(
+    (item) =>
+      item.phase === 'queued' ||
+      item.phase === 'waiting-for-download' ||
+      item.phase === 'waiting-for-extraction' ||
+      item.phase === 'waiting-for-install'
+  )
+  const activeLiveQueueItems = liveQueueItems.filter(
+    (item) =>
+      item.phase !== 'queued' &&
+      item.phase !== 'waiting-for-download' &&
+      item.phase !== 'waiting-for-extraction' &&
+      item.phase !== 'waiting-for-install'
+  )
   const dependencyReadyCount = dependencyStatus?.statuses.filter((status) => status.status === 'ready').length ?? 0
   const dependencyStatusCount = dependencyStatus?.statuses.length ?? 0
   const dependencyIndicatorTone =
@@ -8303,17 +8393,8 @@ export function WireframeShell(props: WireframeShellProps) {
       : dependencyReadyCount > 0
         ? 'warning'
         : 'error'
-  const vrSrcQueuedItems = liveQueueItems.filter(
-    (item) =>
-      (item.phase === 'queued' ||
-        item.phase === 'waiting-for-download' ||
-        item.phase === 'waiting-for-extraction' ||
-        item.phase === 'waiting-for-install') &&
-      item.id.startsWith('vrsrc-') &&
-      (item.kind === 'download' || item.kind === 'install')
-  )
   const [isQueueOpen, setIsQueueOpen] = useState(false)
-  const [isVrSrcQueueOpen, setIsVrSrcQueueOpen] = useState(false)
+  const [isActionQueueOpen, setIsActionQueueOpen] = useState(false)
   const [isManagedDependenciesOpen, setIsManagedDependenciesOpen] = useState(false)
   const [isLibraryDiagnosticsOpen, setIsLibraryDiagnosticsOpen] = useState(false)
   const [isOrphanedDataOpen, setIsOrphanedDataOpen] = useState(false)
@@ -8700,13 +8781,13 @@ export function WireframeShell(props: WireframeShellProps) {
       />
       <QueueRail
         isOpen={isQueueOpen}
-        items={liveQueueItems}
-        vrSrcQueuedItems={vrSrcQueuedItems}
+        items={activeLiveQueueItems}
+        queuedItems={queuedLiveQueueItems}
         headsetActionLog={headsetActionLog}
         headsetActionLogBusy={headsetActionLogBusy}
         isHeadsetActionLogVisible={isHeadsetActionLogVisible}
         onClose={() => setIsQueueOpen(false)}
-        onOpenVrSrcQueue={() => setIsVrSrcQueueOpen(true)}
+        onOpenQueue={() => setIsActionQueueOpen(true)}
         onHideHeadsetActionLog={onHideHeadsetActionLog}
         onOpenHeadsetActivityReview={onOpenHeadsetActivityReview}
         onPauseVrSrcTransfer={onPauseVrSrcTransfer}
@@ -8728,10 +8809,13 @@ export function WireframeShell(props: WireframeShellProps) {
         onClose={() => setIsManagedDependenciesOpen(false)}
         dependencyStatus={dependencyStatus}
       />
-      <VrSrcQueueDialog
-        isOpen={isVrSrcQueueOpen}
-        items={vrSrcQueuedItems}
-        onClose={() => setIsVrSrcQueueOpen(false)}
+      <QueueDialog
+        isOpen={isActionQueueOpen}
+        items={queuedLiveQueueItems}
+        onClose={() => setIsActionQueueOpen(false)}
+        onPauseVrSrcTransfer={onPauseVrSrcTransfer}
+        onResumeVrSrcTransfer={onResumeVrSrcTransfer}
+        onCancelVrSrcTransfer={onCancelVrSrcTransfer}
       />
       <OrphanedDataDialog
         isOpen={isOrphanedDataOpen}

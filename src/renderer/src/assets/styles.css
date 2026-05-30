@@ -4157,9 +4157,27 @@ input {
   border-style: dashed;
 }
 
+.queue-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  color: var(--copy-muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.queue-progress-meta strong {
+  color: var(--copy);
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+}
+
 .progress-track {
   height: 10px;
-  margin-top: 12px;
+  margin-top: 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   overflow: hidden;

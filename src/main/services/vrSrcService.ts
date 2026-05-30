@@ -1,9 +1,11 @@
 import { app } from 'electron'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { appendFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, extname, join } from 'node:path'
+import { basename, dirname, extname, join, relative } from 'node:path'
 import { execFile as execFileCallback, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
+import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import type {
   VrSrcCatalogItem,
@@ -65,10 +67,14 @@ type VrSrcTransferControlState = {
   lastUpdate: VrSrcTransferProgressUpdate | null
 }
 
-type VrSrcQueuedRequestState = 'queued' | 'running'
+type VrSrcQueuedRequestState = 'queued' | 'paused' | 'running'
 
 function isVrSrcInstallQueuedOperation(operation: VrSrcTransferOperation): boolean {
-  return operation === 'install-now' || operation === 'download-to-library-and-install'
+  return (
+    operation === 'download-to-library' ||
+    operation === 'install-now' ||
+    operation === 'download-to-library-and-install'
+  )
 }
 
 type VrSrcQueuedRequestRecord = {
@@ -177,6 +183,17 @@ class VrSrcService {
     serial: string | null
   ): VrSrcTransferControlState | null {
     return this.transferControls.get(this.getTransferControlKey(operation, releaseName, serial)) ?? null
+  }
+
+  private getQueuedRequestRecord(
+    releaseName: string,
+    operation: VrSrcTransferOperation,
+    serial: string | null
+  ): VrSrcQueuedRequestRecord | null {
+    const key = this.getQueuedRequestKey(releaseName, operation, serial)
+    return this.queuedRequestRecords.find(
+      (entry) => this.getQueuedRequestKey(entry.releaseName, entry.operation, entry.serial) === key
+    ) ?? null
   }
 
   private clearTransferControl(releaseName: string, operation: VrSrcTransferOperation, serial: string | null): void {
@@ -390,6 +407,8 @@ class VrSrcService {
       requestedAt: existingRecord?.requestedAt ?? new Date().toISOString(),
       state: 'queued'
     }
+
+    this.getOrCreateTransferControl(record.releaseName, record.operation, record.serial)
 
     if (existingRecord) {
       this.queuedRequestRecords = this.queuedRequestRecords.filter(
@@ -970,6 +989,133 @@ class VrSrcService {
     }
 
     return totalBytes
+  }
+
+  private async buildCopyPlan(
+    sourcePath: string,
+    targetPath: string
+  ): Promise<{
+    totalBytes: number
+    files: Array<{ sourcePath: string; targetPath: string; label: string; sizeBytes: number }>
+  }> {
+    const sourceStats = await stat(sourcePath)
+
+    if (sourceStats.isFile()) {
+      return {
+        totalBytes: sourceStats.size,
+        files: [
+          {
+            sourcePath,
+            targetPath,
+            label: basename(sourcePath),
+            sizeBytes: sourceStats.size
+          }
+        ]
+      }
+    }
+
+    const files: Array<{ sourcePath: string; targetPath: string; label: string; sizeBytes: number }> = []
+    let totalBytes = 0
+
+    const visit = async (currentSourcePath: string, currentTargetPath: string): Promise<void> => {
+      const entries = await readdir(currentSourcePath, { withFileTypes: true })
+      await mkdir(currentTargetPath, { recursive: true })
+
+      for (const entry of entries) {
+        const nextSourcePath = join(currentSourcePath, entry.name)
+        const nextTargetPath = join(currentTargetPath, entry.name)
+
+        if (entry.isDirectory()) {
+          await visit(nextSourcePath, nextTargetPath)
+          continue
+        }
+
+        if (!entry.isFile()) {
+          continue
+        }
+
+        const entryStats = await stat(nextSourcePath)
+        const label = relative(sourcePath, nextSourcePath) || entry.name
+        totalBytes += entryStats.size
+        files.push({
+          sourcePath: nextSourcePath,
+          targetPath: nextTargetPath,
+          label,
+          sizeBytes: entryStats.size
+        })
+      }
+    }
+
+    await visit(sourcePath, targetPath)
+
+    return { totalBytes, files }
+  }
+
+  private async copyPathWithProgress(
+    sourcePath: string,
+    targetPath: string,
+    onProgress: (update: { transferredBytes: number; totalBytes: number; fileName: string | null; progress: number }) => void
+  ): Promise<void> {
+    const plan = await this.buildCopyPlan(sourcePath, targetPath)
+    let transferredBytes = 0
+    let lastReportedAt = 0
+
+    const reportProgress = (fileName: string | null) => {
+      const now = Date.now()
+      if (now - lastReportedAt < 80 && transferredBytes < plan.totalBytes) {
+        return
+      }
+
+      lastReportedAt = now
+      onProgress({
+        transferredBytes,
+        totalBytes: plan.totalBytes,
+        fileName,
+        progress: plan.totalBytes > 0 ? Math.max(1, Math.min(95, Math.round((transferredBytes / plan.totalBytes) * 95))) : 95
+      })
+    }
+
+    if (!plan.files.length) {
+      await mkdir(targetPath, { recursive: true })
+      onProgress({
+        transferredBytes: 0,
+        totalBytes: 0,
+        fileName: null,
+        progress: 95
+      })
+      return
+    }
+
+    for (const file of plan.files) {
+      await mkdir(dirname(file.targetPath), { recursive: true })
+      let copiedForFile = 0
+
+      await pipeline(
+        createReadStream(file.sourcePath),
+        async function* (source) {
+          for await (const chunk of source) {
+            const chunkSize = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk))
+            copiedForFile += chunkSize
+            transferredBytes += chunkSize
+            reportProgress(file.label)
+            yield chunk
+          }
+        },
+        createWriteStream(file.targetPath, { flags: 'wx' })
+      )
+
+      if (copiedForFile < file.sizeBytes) {
+        transferredBytes += file.sizeBytes - copiedForFile
+      }
+      reportProgress(file.label)
+    }
+
+    onProgress({
+      transferredBytes: plan.totalBytes,
+      totalBytes: plan.totalBytes,
+      fileName: plan.files.at(-1)?.label ?? null,
+      progress: 95
+    })
   }
 
   private async hashFile(path: string): Promise<string | null> {
@@ -2376,14 +2522,37 @@ class VrSrcService {
           operation: 'download-to-library',
           releaseName,
           phase: 'importing',
-          progress: 98,
+          progress: 1,
           fileName: null,
           transferredBytes: 0,
           totalBytes: null,
           speedBytesPerSecond: null,
           etaSeconds: null
         })
-        await cp(importSourcePath, targetPath, { recursive: true, force: false })
+        await this.copyPathWithProgress(importSourcePath, targetPath, ({ transferredBytes, totalBytes, fileName, progress }) => {
+          this.emitControlledTransferProgress(control, {
+            operation: 'download-to-library',
+            releaseName,
+            phase: 'importing',
+            progress,
+            fileName,
+            transferredBytes,
+            totalBytes,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        })
+        this.emitControlledTransferProgress(control, {
+          operation: 'download-to-library',
+          releaseName,
+          phase: 'importing',
+          progress: 96,
+          fileName: null,
+          transferredBytes: 0,
+          totalBytes: null,
+          speedBytesPerSecond: null,
+          etaSeconds: null
+        })
         await settingsService.rescanLocalLibrary()
         await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
           targetPath,
@@ -2499,14 +2668,37 @@ class VrSrcService {
           operation: 'download-to-library-and-install',
           releaseName,
           phase: 'importing',
-          progress: 98,
+          progress: 1,
           fileName: null,
           transferredBytes: 0,
           totalBytes: null,
           speedBytesPerSecond: null,
           etaSeconds: null
         })
-        await cp(importSourcePath, targetPath, { recursive: true, force: false })
+        await this.copyPathWithProgress(importSourcePath, targetPath, ({ transferredBytes, totalBytes, fileName, progress }) => {
+          this.emitControlledTransferProgress(control, {
+            operation: 'download-to-library-and-install',
+            releaseName,
+            phase: 'importing',
+            progress,
+            fileName,
+            transferredBytes,
+            totalBytes,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        })
+        this.emitControlledTransferProgress(control, {
+          operation: 'download-to-library-and-install',
+          releaseName,
+          phase: 'importing',
+          progress: 96,
+          fileName: null,
+          transferredBytes: 0,
+          totalBytes: null,
+          speedBytesPerSecond: null,
+          etaSeconds: null
+        })
         await settingsService.rescanLocalLibrary()
         await settingsService.setLocalLibraryItemSourceLastUpdatedByAbsolutePath(
           targetPath,
@@ -2525,39 +2717,6 @@ class VrSrcService {
               releaseName,
               serial,
               phase: 'waiting-for-install',
-              progress: 96,
-              fileName: null,
-              transferredBytes: 0,
-              totalBytes: null,
-              speedBytesPerSecond: null,
-              etaSeconds: null,
-              canPause: false,
-              canResume: false,
-              canCancel: false
-            })
-            return
-          }
-
-          this.emitControlledTransferProgress(control, {
-            operation: 'download-to-library-and-install',
-            releaseName,
-            phase: 'waiting-for-install',
-            progress: 96,
-            fileName: null,
-            transferredBytes: 0,
-            totalBytes: null,
-            speedBytesPerSecond: null,
-            etaSeconds: null
-          })
-        },
-        onStarted: async () => {
-          const control = this.getTransferControl(releaseName, 'download-to-library-and-install', serial)
-          if (!control) {
-            this.emitTransferProgress({
-              operation: 'download-to-library-and-install',
-              releaseName,
-              serial,
-              phase: 'installing',
               progress: 97,
               fileName: null,
               transferredBytes: 0,
@@ -2574,8 +2733,41 @@ class VrSrcService {
           this.emitControlledTransferProgress(control, {
             operation: 'download-to-library-and-install',
             releaseName,
-            phase: 'installing',
+            phase: 'waiting-for-install',
             progress: 97,
+            fileName: null,
+            transferredBytes: 0,
+            totalBytes: null,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        },
+        onStarted: async () => {
+          const control = this.getTransferControl(releaseName, 'download-to-library-and-install', serial)
+          if (!control) {
+            this.emitTransferProgress({
+              operation: 'download-to-library-and-install',
+              releaseName,
+              serial,
+              phase: 'installing',
+              progress: 98,
+              fileName: null,
+              transferredBytes: 0,
+              totalBytes: null,
+              speedBytesPerSecond: null,
+              etaSeconds: null,
+              canPause: false,
+              canResume: false,
+              canCancel: false
+            })
+            return
+          }
+
+          this.emitControlledTransferProgress(control, {
+            operation: 'download-to-library-and-install',
+            releaseName,
+            phase: 'installing',
+            progress: 98,
             fileName: null,
             transferredBytes: 0,
             totalBytes: null,
@@ -2666,38 +2858,6 @@ class VrSrcService {
               releaseName,
               serial,
               phase: 'waiting-for-install',
-              progress: 96,
-              fileName: null,
-              transferredBytes: 0,
-              totalBytes: null,
-              speedBytesPerSecond: null,
-              etaSeconds: null,
-              canPause: false,
-              canResume: false,
-              canCancel: false
-            })
-            return
-          }
-          this.emitControlledTransferProgress(control, {
-            operation: 'install-now',
-            releaseName,
-            phase: 'waiting-for-install',
-            progress: 96,
-            fileName: null,
-            transferredBytes: 0,
-            totalBytes: null,
-            speedBytesPerSecond: null,
-            etaSeconds: null
-          })
-        },
-        onStarted: async () => {
-          const control = this.getTransferControl(releaseName, 'install-now', serial)
-          if (!control) {
-            this.emitTransferProgress({
-              operation: 'install-now',
-              releaseName,
-              serial,
-              phase: 'installing',
               progress: 97,
               fileName: null,
               transferredBytes: 0,
@@ -2713,8 +2873,40 @@ class VrSrcService {
           this.emitControlledTransferProgress(control, {
             operation: 'install-now',
             releaseName,
-            phase: 'installing',
+            phase: 'waiting-for-install',
             progress: 97,
+            fileName: null,
+            transferredBytes: 0,
+            totalBytes: null,
+            speedBytesPerSecond: null,
+            etaSeconds: null
+          })
+        },
+        onStarted: async () => {
+          const control = this.getTransferControl(releaseName, 'install-now', serial)
+          if (!control) {
+            this.emitTransferProgress({
+              operation: 'install-now',
+              releaseName,
+              serial,
+              phase: 'installing',
+              progress: 98,
+              fileName: null,
+              transferredBytes: 0,
+              totalBytes: null,
+              speedBytesPerSecond: null,
+              etaSeconds: null,
+              canPause: false,
+              canResume: false,
+              canCancel: false
+            })
+            return
+          }
+          this.emitControlledTransferProgress(control, {
+            operation: 'install-now',
+            releaseName,
+            phase: 'installing',
+            progress: 98,
             fileName: null,
             transferredBytes: 0,
             totalBytes: null,
@@ -2776,6 +2968,7 @@ class VrSrcService {
     serial: string | null
   ): Promise<VrSrcTransferControlResponse> {
     const control = this.getTransferControl(releaseName, operation, serial)
+    const queuedRecord = this.getQueuedRequestRecord(releaseName, operation, serial)
     if (!control || control.operation !== operation) {
       return {
         success: false,
@@ -2783,6 +2976,32 @@ class VrSrcService {
         operation,
         serial,
         message: 'No active vrSrc transfer was found to pause.',
+        details: null
+      }
+    }
+
+    if (control.child === null && queuedRecord && queuedRecord.state !== 'running') {
+      queuedRecord.state = 'paused'
+      control.status = 'paused'
+      control.command = 'pause'
+      await this.persistQueuedRequests()
+      this.emitControlledTransferProgress(control, {
+        operation,
+        releaseName,
+        phase: 'paused',
+        progress: control.lastUpdate?.progress ?? 0,
+        fileName: control.lastUpdate?.fileName ?? null,
+        transferredBytes: control.lastUpdate?.transferredBytes ?? 0,
+        totalBytes: control.lastUpdate?.totalBytes ?? null,
+        speedBytesPerSecond: null,
+        etaSeconds: null
+      })
+      return {
+        success: true,
+        releaseName,
+        operation,
+        serial,
+        message: `Paused ${releaseName}.`,
         details: null
       }
     }
@@ -2833,6 +3052,7 @@ class VrSrcService {
     serial: string | null
   ): Promise<VrSrcTransferControlResponse> {
     const control = this.getTransferControl(releaseName, operation, serial)
+    const queuedRecord = this.getQueuedRequestRecord(releaseName, operation, serial)
     if (!control || control.operation !== operation) {
       return {
         success: false,
@@ -2842,6 +3062,14 @@ class VrSrcService {
         message: 'No paused vrSrc transfer was found to resume.',
         details: null
       }
+    }
+
+    if (control.child === null && queuedRecord && queuedRecord.state === 'paused') {
+      queuedRecord.state = 'queued'
+      control.status = 'running'
+      control.command = 'none'
+      await this.persistQueuedRequests()
+      this.scheduleQueuedRequestDrain()
     }
 
     control.status = 'running'
@@ -2886,6 +3114,7 @@ class VrSrcService {
     serial: string | null
   ): Promise<VrSrcTransferControlResponse> {
     const control = this.getTransferControl(releaseName, operation, serial)
+    const queuedRecord = this.getQueuedRequestRecord(releaseName, operation, serial)
     if (!control || control.operation !== operation) {
       return {
         success: false,
@@ -2893,6 +3122,25 @@ class VrSrcService {
         operation,
         serial,
         message: 'No active vrSrc transfer was found to cancel.',
+        details: null
+      }
+    }
+
+    if (control.child === null && queuedRecord && queuedRecord.state !== 'running') {
+      const key = this.getQueuedRequestKey(releaseName, operation, serial)
+      this.queuedRequestRecords = this.queuedRequestRecords.filter(
+        (entry) => this.getQueuedRequestKey(entry.releaseName, entry.operation, entry.serial) !== key
+      )
+      this.queuedRequestRunners.delete(key)
+      this.queuedRequestPromiseByReleaseName.delete(key)
+      this.clearTransferControl(releaseName, operation, serial)
+      await this.persistQueuedRequests()
+      return {
+        success: true,
+        releaseName,
+        operation,
+        serial,
+        message: `Cancelled ${releaseName}.`,
         details: null
       }
     }
