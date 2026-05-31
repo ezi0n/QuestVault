@@ -62,6 +62,12 @@ interface HiddenEntryDialogState {
   saving: boolean
 }
 
+class QueuedInstallCancelledError extends Error {
+  constructor() {
+    super('Queued install cancelled before start.')
+  }
+}
+
 function buildDeviceSnapshot(response: DeviceListResponse | null): Map<string, { label: string; state: string }> {
   return new Map((response?.devices ?? []).map((device) => [device.id, { label: device.label, state: device.state }]))
 }
@@ -419,6 +425,32 @@ function compareVersionValues(left: string | null | undefined, right: string | n
   return 0
 }
 
+function isVersionCodeLike(value: string | null | undefined): boolean {
+  const normalized = (value ?? '').trim()
+  return normalized.length > 0 && /^\d+$/.test(normalized)
+}
+
+function compareInstalledLibraryVersion(
+  libraryVersion: string | null | undefined,
+  libraryVersionCode: string | null | undefined,
+  installedVersion: string | null | undefined,
+  installedVersionCode: string | null | undefined
+): number {
+  if (libraryVersion && installedVersion && !isVersionCodeLike(libraryVersion) && !isVersionCodeLike(installedVersion)) {
+    return compareVersionValues(libraryVersion, installedVersion)
+  }
+
+  if (libraryVersionCode && installedVersionCode) {
+    return compareVersionValues(libraryVersionCode, installedVersionCode)
+  }
+
+  if (libraryVersion && installedVersion && isVersionCodeLike(libraryVersion) === isVersionCodeLike(installedVersion)) {
+    return compareVersionValues(libraryVersion, installedVersion)
+  }
+
+  return 0
+}
+
 function isSignatureMismatchFailure(response: {
   success: boolean
   cancelled?: boolean
@@ -523,8 +555,97 @@ function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   return parts.join(' • ')
 }
 
+function describeQueuedVrSrcStart(operation: VrSrcTransferOperation, serial: string | null): string {
+  const deviceLabel = serial?.trim() ? ` on ${serial.trim()}` : ''
+
+  if (operation === 'download-to-library') {
+    return 'Queued for the next library download lane.'
+  }
+
+  if (operation === 'download-to-library-and-install') {
+    return `Queued to copy into the Local Library, then install${deviceLabel} when the current headset cycle clears.`
+  }
+
+  return `Queued for direct headset install${deviceLabel} when the current cycle clears.`
+}
+
 function isCacheRecoveryMessage(message: string | null | undefined): boolean {
   return message?.startsWith('Recovered a corrupted ') ?? false
+}
+
+const LIVE_QUEUE_STORAGE_KEY = 'questvault.liveQueueItems'
+const LIVE_QUEUE_STALE_CHECK_INTERVAL_MS = 15_000
+const LIVE_QUEUE_STALE_OPERATION_THRESHOLD_MS = 120_000
+const LIVE_QUEUE_STALE_SCAN_THRESHOLD_MS = 90_000
+const LIVE_QUEUE_STALE_DETAILS = 'This operation stopped reporting progress. Retry it if needed.'
+
+function isRecoverableLiveQueuePhase(phase: LiveQueueItem['phase']): boolean {
+  return (
+    phase === 'queued' ||
+    phase === 'waiting-for-download' ||
+    phase === 'waiting-for-extraction' ||
+    phase === 'waiting-for-install' ||
+    phase === 'downloading' ||
+    phase === 'extracting' ||
+    phase === 'installing' ||
+    phase === 'paused' ||
+    phase === 'uninstalling' ||
+    phase === 'verifying' ||
+    phase === 'scanning' ||
+    phase === 'cleaning-up' ||
+    phase === 'backing-up' ||
+    phase === 'restoring' ||
+    phase === 'rebooting'
+  )
+}
+
+function recoverPersistedLiveQueueItems(items: LiveQueueItem[]): LiveQueueItem[] {
+  const recoveredAt = new Date().toISOString()
+
+  return items.map((item) =>
+    isRecoverableLiveQueuePhase(item.phase)
+      ? {
+          ...item,
+          phase: 'failed' as const,
+          progress: 100,
+          details: 'QuestVault closed before this operation finished. Retry it if needed.',
+          transferControl: null,
+          updatedAt: recoveredAt
+        }
+      : item
+  )
+}
+
+function isLiveQueueItemTerminal(phase: LiveQueueItem['phase']): boolean {
+  return phase === 'completed' || phase === 'failed' || phase === 'cancelled'
+}
+
+function isLiveQueueItemStale(item: LiveQueueItem, now: number): boolean {
+  if (isLiveQueueItemTerminal(item.phase)) {
+    return false
+  }
+
+  if (
+    item.phase === 'queued' ||
+    item.phase === 'waiting-for-download' ||
+    item.phase === 'waiting-for-extraction' ||
+    item.phase === 'waiting-for-install' ||
+    item.phase === 'paused'
+  ) {
+    return false
+  }
+
+  const updatedAt = new Date(item.updatedAt).getTime()
+  if (Number.isNaN(updatedAt)) {
+    return true
+  }
+
+  const staleThresholdMs =
+    item.phase === 'verifying' || item.phase === 'scanning'
+      ? LIVE_QUEUE_STALE_SCAN_THRESHOLD_MS
+      : LIVE_QUEUE_STALE_OPERATION_THRESHOLD_MS
+
+  return now - updatedAt >= staleThresholdMs
 }
 
 function buildSummaryFromDetails(details: MetaStoreGameDetails): MetaStoreGameSummary {
@@ -648,9 +769,11 @@ function App() {
   const pendingInstalledAppsRefreshSerialRef = useRef<string | null>(null)
   const pendingInstalledAppsRefreshReasonRef = useRef<InstalledAppsRefreshReason>('normal')
   const pendingInstalledAppsRefreshQueueIdRef = useRef<string | null>(null)
+  const cancelledQueuedInstallIdsRef = useRef(new Set<string>())
   const installOperationQueueRef = useRef<Promise<void>>(Promise.resolve())
   const installOperationQueueDepthRef = useRef(0)
   const latestSeenFailedHeadsetActionLogRef = useRef<string | null>(null)
+  const hasHydratedLiveQueueRef = useRef(false)
   const subtitle =
     activeTab === 'manager'
       ? 'ADB device operations, live devices and ADB runtime visibility'
@@ -703,6 +826,87 @@ function App() {
       setSignatureMismatchAcknowledged(false)
     })
   }
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || hasHydratedLiveQueueRef.current) {
+      return
+    }
+
+    hasHydratedLiveQueueRef.current = true
+
+    try {
+      const rawValue = window.localStorage.getItem(LIVE_QUEUE_STORAGE_KEY)
+      if (!rawValue) {
+        return
+      }
+
+      const parsedValue = JSON.parse(rawValue)
+      if (!Array.isArray(parsedValue)) {
+        return
+      }
+
+      const recoveredItems = recoverPersistedLiveQueueItems(
+        parsedValue.filter((item): item is LiveQueueItem => Boolean(item && typeof item.id === 'string' && typeof item.phase === 'string'))
+      ).slice(0, 12)
+
+      if (recoveredItems.length > 0) {
+        setLiveQueueItems(recoveredItems)
+      }
+    } catch {
+      window.localStorage.removeItem(LIVE_QUEUE_STORAGE_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !hasHydratedLiveQueueRef.current) {
+      return
+    }
+
+    try {
+      window.localStorage.setItem(LIVE_QUEUE_STORAGE_KEY, JSON.stringify(liveQueueItems))
+    } catch {
+      // Ignore persistence failures and keep the in-memory queue usable.
+    }
+  }, [liveQueueItems])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const now = Date.now()
+      const activeVrSrcReleaseNames = new Set(vrSrcActionBusyReleaseNamesRef.current)
+
+      setLiveQueueItems((current) =>
+        current.map((item) => {
+          if (!isLiveQueueItemStale(item, now)) {
+            return item
+          }
+
+          const isVrSrcTransfer =
+            item.transferControl?.kind === 'vrsrc' ||
+            item.subtitle === 'vrSrc to Local Library' ||
+            item.subtitle === 'vrSrc Download & Install' ||
+            item.subtitle === 'vrSrc Install Now'
+          const isStillBusy = isVrSrcTransfer && activeVrSrcReleaseNames.has(item.title)
+
+          if (isStillBusy) {
+            return item
+          }
+
+          return {
+            ...item,
+            phase: 'failed',
+            progress: 100,
+            details: LIVE_QUEUE_STALE_DETAILS,
+            transferControl: null,
+            updatedAt: new Date(now).toISOString()
+          }
+        })
+      )
+    }, LIVE_QUEUE_STALE_CHECK_INTERVAL_MS)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [])
 
   function enqueueLiveQueueItem(
     input: Omit<LiveQueueItem, 'updatedAt' | 'transferControl'> & {
@@ -865,7 +1069,18 @@ function App() {
     installOperationQueueDepthRef.current += 1
 
     const run = installOperationQueueRef.current.then(async () => {
+      if (cancelledQueuedInstallIdsRef.current.has(queueId)) {
+        cancelledQueuedInstallIdsRef.current.delete(queueId)
+        throw new QueuedInstallCancelledError()
+      }
+
       options?.onStarted?.()
+
+      if (cancelledQueuedInstallIdsRef.current.has(queueId)) {
+        cancelledQueuedInstallIdsRef.current.delete(queueId)
+        throw new QueuedInstallCancelledError()
+      }
+
       return task()
     })
 
@@ -877,6 +1092,17 @@ function App() {
       })
 
     return run
+  }
+
+  function cancelQueuedInstall(queueId: string): void {
+    cancelledQueuedInstallIdsRef.current.add(queueId)
+    updateLiveQueueItem(queueId, {
+      phase: 'cancelled',
+      progress: 100,
+      details: 'Cancelled before the install queue started this action.',
+      transferControl: null
+    })
+    scheduleVrSrcQueueRemoval(queueId, 1500)
   }
 
   function beginInstalledAppsMutation(serial: string) {
@@ -1906,9 +2132,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       kind: describeVrSrcQueueKind(options.operation),
       phase: options.keepSuccessVisibleUntilRefresh ? 'waiting-for-install' : 'waiting-for-download',
       progress: options.keepSuccessVisibleUntilRefresh ? 8 : 4,
-      details: options.keepSuccessVisibleUntilRefresh
-        ? 'Waiting for the current install and verification cycle to finish before starting...'
-        : 'Queued and waiting for a vrSrc download lane...',
+      details: describeQueuedVrSrcStart(options.operation, options.serial),
       artworkUrl: null,
       transferControl: {
         kind: 'vrsrc',
@@ -2005,7 +2229,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             updateLiveQueueItem(queueId, {
               phase: 'queued',
               progress: 8,
-              details: 'Waiting for the current install and verification cycle to finish before starting...',
+              details: describeQueuedVrSrcStart(options.operation, options.serial),
               transferControl: {
                 kind: 'vrsrc',
                 operation: options.operation,
@@ -2025,10 +2249,18 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
               existingQueueItem.phase === 'waiting-for-install'
             ) {
               updateLiveQueueItem(queueId, {
-                phase: 'installing',
+                phase: 'waiting-for-install',
                 progress: 18,
                 details: 'Preparing this install now that the previous install cycle is complete...',
-                transferControl: null
+                transferControl: {
+                  kind: 'vrsrc',
+                  operation: options.operation,
+                  releaseName: options.releaseName,
+                  serial: options.serial,
+                  canPause: true,
+                  canResume: false,
+                  canCancel: true
+                }
               })
             }
           }
@@ -2354,10 +2586,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     if (response.success) {
       updateLiveQueueItem(buildVrSrcQueueId(operation, releaseName, serial), {
         phase: operation === 'download-to-library-and-install' || operation === 'install-now' ? 'queued' : 'waiting-for-download',
-        details:
-          operation === 'download-to-library-and-install' || operation === 'install-now'
-            ? 'Waiting for the current install and verification cycle to finish before starting...'
-            : 'Queued and waiting for a vrSrc download lane...',
+        details: describeQueuedVrSrcStart(operation, serial),
         transferControl: {
           kind: 'vrsrc',
           operation,
@@ -3905,11 +4134,21 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       installedAppsSnapshot?.serial === targetDeviceId
         ? new Map((installedAppsSnapshot.apps ?? []).map((app) => [app.packageId.toLowerCase(), app.version ?? null]))
         : null
+    const installedVersionCodesByPackageId =
+      installedAppsSnapshot?.serial === targetDeviceId
+        ? new Map((installedAppsSnapshot.apps ?? []).map((app) => [app.packageId.toLowerCase(), app.versionCode ?? null]))
+        : null
 
     const installedVersion =
       indexedItem && installedVersionsByPackageId
         ? indexedItem.packageIds
             .map((packageId) => installedVersionsByPackageId.get(packageId.toLowerCase()) ?? null)
+            .find((value): value is string => Boolean(value)) ?? null
+        : null
+    const installedVersionCode =
+      indexedItem && installedVersionCodesByPackageId
+        ? indexedItem.packageIds
+            .map((packageId) => installedVersionCodesByPackageId.get(packageId.toLowerCase()) ?? null)
             .find((value): value is string => Boolean(value)) ?? null
         : null
     const hasInstalledMatch =
@@ -3919,7 +4158,12 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     const hasLocalUpgrade =
       indexedItem &&
       hasInstalledMatch &&
-      compareVersionValues(indexedItem.libraryVersion ?? indexedItem.libraryVersionCode, installedVersion) > 0
+      compareInstalledLibraryVersion(
+        indexedItem.libraryVersion,
+        indexedItem.libraryVersionCode,
+        installedVersion,
+        installedVersionCode
+      ) > 0
 
     if (indexedItem && hasInstalledMatch && !hasLocalUpgrade) {
       enqueueLiveQueueItem({
@@ -4046,6 +4290,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         }
       )
     } catch (error) {
+      if (error instanceof QueuedInstallCancelledError) {
+        setGamesMessage(null)
+        return
+      }
+
       const message = error instanceof Error ? error.message : 'Unable to install the selected local payload.'
       updateLiveQueueItem(queueId, {
         phase: 'failed',
@@ -4183,6 +4432,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
         }
       )
     } catch (error) {
+      if (error instanceof QueuedInstallCancelledError) {
+        setGamesMessage(null)
+        return
+      }
+
       const message =
         error instanceof Error ? error.message : 'Unable to complete the manual install.'
       if (queueId) {
@@ -4710,6 +4964,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onHideHeadsetActionLog={() => setIsHeadsetActionLogVisible(false)}
       onOpenHeadsetActivityReview={() => setIsHeadsetActivityReviewOpen(true)}
       onCloseHeadsetActivityReview={() => setIsHeadsetActivityReviewOpen(false)}
+      onCancelQueuedInstall={cancelQueuedInstall}
       onPauseVrSrcTransfer={pauseVrSrcTransfer}
       onResumeVrSrcTransfer={resumeVrSrcTransfer}
       onCancelVrSrcTransfer={cancelVrSrcTransfer}

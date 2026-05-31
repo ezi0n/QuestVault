@@ -1930,6 +1930,7 @@ class DeviceService {
         label: catalogNameMap.get(row.packageId) ?? null,
         inferredLabel: this.inferLabel(row.packageId),
         version: row.version ?? row.versionCode,
+        versionCode: row.versionCode ?? null,
         totalFootprintBytes: packageSizes.get(row.packageId) ?? null
       }))
       .sort((left, right) => (left.label ?? left.inferredLabel).localeCompare(right.label ?? right.inferredLabel))

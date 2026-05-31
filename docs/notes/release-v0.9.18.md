@@ -2,7 +2,6 @@
 
 ## Highlights
 - Getting the current state fully polished before new directional changes.
-- Live Operations now separates queued work from truly active work more clearly.
 - Queue and live operation handling is clearer and more resilient.
 - Library and installed inventory browsing now feels more consistent across views.
 - Ratings and sort controls are more visible and easier to use in gallery workflows.
@@ -24,3 +23,6 @@
 ## Validation
 - `pnpm typecheck`
 - `pnpm build`
+- unsigned macOS arm64, x64, and universal builds
+- unsigned Windows x64 and arm64 builds
+- unsigned Linux x64 and arm64 builds

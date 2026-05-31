@@ -121,6 +121,7 @@ interface WireframeShellProps {
   onHideHeadsetActionLog: () => void
   onOpenHeadsetActivityReview: () => void
   onCloseHeadsetActivityReview: () => void
+  onCancelQueuedInstall: (itemId: string) => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
   onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
   onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
@@ -269,9 +270,15 @@ const gameFilters = [
 
 type GamesFilterId = (typeof gameFilters)[number]['id']
 type GamesFilterState = GamesFilterId | 'new'
-type GamesSortKey = 'title' | 'date' | 'added' | 'size'
+type GamesSortKey = 'title' | 'added' | 'rating' | 'size'
 type GamesSortDirection = 'asc' | 'desc'
 type GamesDisplayMode = ViewDisplayMode
+type VrSrcSortKey = 'title' | 'added' | 'rating'
+type VrSrcSortDirection = 'asc' | 'desc'
+type SortModeOption = {
+  key: 'title' | 'added' | 'rating'
+  direction: 'asc' | 'desc'
+}
 
 type LibraryGameRow = {
   id: string
@@ -302,6 +309,7 @@ type LibraryGameRow = {
   manualMetadata: ManualGameMetadataOverride | null
   isInstalled: boolean
   hasLibraryUpdate: boolean
+  hasRemoteLibraryUpdate: boolean
   filterTags: GamesFilterState[]
   heroImageUri: string | null
   thumbnailUri: string | null
@@ -558,11 +566,58 @@ function formatGameActionLabel(action: string): string {
     return 'Install Now'
   }
 
-  if (action === 'Update') {
-    return 'Install Local Upgrade'
+  if (action === 'Update' || action === 'Upgrade') {
+    return action
   }
 
   return action
+}
+
+function formatVersionWithCode(version: string | null | undefined, versionCode: string | null | undefined): string {
+  const formattedVersion = formatVersionLabel(version) ?? null
+  const normalizedVersionCode = (versionCode ?? '').trim()
+
+  if (formattedVersion && normalizedVersionCode) {
+    const versionIdentity = normalizeVersionIdentity(version)
+    const versionCodeIdentity = normalizeVersionIdentity(versionCode)
+    return versionIdentity === versionCodeIdentity ? formattedVersion : `${formattedVersion} (${normalizedVersionCode})`
+  }
+
+  if (formattedVersion) {
+    return formattedVersion
+  }
+
+  if (normalizedVersionCode) {
+    return `Code ${normalizedVersionCode}`
+  }
+
+  return 'Unavailable'
+}
+
+function getLibraryGameActionTitle(game: LibraryGameRow, hasSelectedDevice: boolean): string | undefined {
+  if (game.action === 'Update') {
+    return 'Download the newest matching vrSrc version into the Local Library only'
+  }
+
+  if (game.action === 'Upgrade') {
+    if (game.hasRemoteLibraryUpdate) {
+      return hasSelectedDevice
+        ? 'Update the Local Library with the newest matching vrSrc version, then upgrade the selected headset install'
+        : 'Select a headset first to update the Local Library and apply the upgrade on the headset'
+    }
+
+    return hasSelectedDevice
+      ? 'Install the newer Local Library version to the selected headset'
+      : 'Select a headset first to install the newer Local Library version on the headset'
+  }
+
+  if (game.action === 'Install') {
+    return hasSelectedDevice
+      ? 'Install this Local Library payload to the selected headset'
+      : 'Select a headset first to install this Local Library payload'
+  }
+
+  return undefined
 }
 
 function normalizeVersionIdentity(value: string | null | undefined): string {
@@ -618,6 +673,32 @@ function compareVersionValues(left: string | null | undefined, right: string | n
     if (leftText !== rightText) {
       return leftText.localeCompare(rightText, undefined, { sensitivity: 'base' })
     }
+  }
+
+  return 0
+}
+
+function isVersionCodeLike(value: string | null | undefined): boolean {
+  const normalized = (value ?? '').trim()
+  return normalized.length > 0 && /^\d+$/.test(normalized)
+}
+
+function compareInstalledLibraryVersion(
+  libraryVersion: string | null | undefined,
+  libraryVersionCode: string | null | undefined,
+  installedVersion: string | null | undefined,
+  installedVersionCode: string | null | undefined
+): number {
+  if (libraryVersion && installedVersion && !isVersionCodeLike(libraryVersion) && !isVersionCodeLike(installedVersion)) {
+    return compareVersionValues(libraryVersion, installedVersion)
+  }
+
+  if (libraryVersionCode && installedVersionCode) {
+    return compareVersionValues(libraryVersionCode, installedVersionCode)
+  }
+
+  if (libraryVersion && installedVersion && isVersionCodeLike(libraryVersion) === isVersionCodeLike(installedVersion)) {
+    return compareVersionValues(libraryVersion, installedVersion)
   }
 
   return 0
@@ -794,31 +875,80 @@ function getLibraryGameVersionLines(row: LibraryGameRow): string[] {
   return lines
 }
 
-function getLibraryGameVariantKey(row: LibraryGameRow): string {
-  const sourceText = [row.title, row.relativePath, row.release].filter(Boolean).join(' ').toLowerCase()
+function getLibraryGameVariantFlagsFromText(text: string): string[] {
+  const normalizedText = text.toLowerCase()
   const variantFlags: string[] = []
 
-  if (/\bmr[\s-]?fix\b/.test(sourceText)) {
+  if (/\bmr[\s-]?fix\b/.test(normalizedText)) {
     variantFlags.push('mr-fix')
   }
 
-  if (/\bcustom tracks?\b/.test(sourceText)) {
+  if (/\bcustom tracks?\b/.test(normalizedText)) {
     variantFlags.push('custom-tracks')
   }
 
-  if (/\bupdate only\b/.test(sourceText)) {
+  if (/\bupdate only\b/.test(normalizedText)) {
     variantFlags.push('update-only')
   }
 
-  if (/\bpatreon\b/.test(sourceText)) {
+  if (/\bpatreon\b/.test(normalizedText)) {
     variantFlags.push('patreon')
   }
 
-  if (/\blsv\b/.test(sourceText)) {
+  if (/\blsv\b/.test(normalizedText)) {
     variantFlags.push('lsv')
   }
 
+  if (/\bmods?\b/.test(normalizedText)) {
+    variantFlags.push('modded')
+  }
+
+  if (/\bu11\b.*\bmods\b|\bmods\b.*\bu11\b/.test(normalizedText)) {
+    variantFlags.push('u11-mods')
+  }
+
+  if (/\bscripting\b/.test(normalizedText)) {
+    variantFlags.push('scripting')
+  }
+
+  return variantFlags.sort()
+}
+
+function getLibraryGameVariantKeyFromFields(title: string | null | undefined, relativePath: string | null | undefined, release: string | null | undefined): string {
+  const sourceText = [title, relativePath, release].filter(Boolean).join(' ').toLowerCase()
+  const variantFlags = getLibraryGameVariantFlagsFromText(sourceText)
+
   return variantFlags.length ? variantFlags.sort().join('|') : 'standard'
+}
+
+function getLibraryGameVariantKey(row: LibraryGameRow): string {
+  return getLibraryGameVariantKeyFromFields(row.title, row.relativePath, row.release)
+}
+
+function areLibraryVariantKeysCompatible(leftVariantKey: string, rightVariantKey: string): boolean {
+  if (leftVariantKey === rightVariantKey) {
+    return true
+  }
+
+  const leftFlags = new Set(leftVariantKey === 'standard' ? [] : leftVariantKey.split('|'))
+  const rightFlags = new Set(rightVariantKey === 'standard' ? [] : rightVariantKey.split('|'))
+  const leftHasBranchVariant = leftFlags.has('u11-mods') || leftFlags.has('scripting') || leftFlags.has('modded')
+  const rightHasBranchVariant = rightFlags.has('u11-mods') || rightFlags.has('scripting') || rightFlags.has('modded')
+
+  if (leftHasBranchVariant || rightHasBranchVariant) {
+    return false
+  }
+
+  const normalizedLeft = new Set(leftFlags)
+  const normalizedRight = new Set(rightFlags)
+  normalizedLeft.delete('update-only')
+  normalizedRight.delete('update-only')
+
+  if (normalizedLeft.size !== normalizedRight.size) {
+    return false
+  }
+
+  return Array.from(normalizedLeft).every((flag) => normalizedRight.has(flag))
 }
 
 function getLibraryGameDedupeKey(row: LibraryGameRow): string {
@@ -868,6 +998,11 @@ function compareLibraryGameRowsForDisplay(left: LibraryGameRow, right: LibraryGa
   const versionComparison = compareVersionValues(right.primaryVersionValue, left.primaryVersionValue)
   if (versionComparison !== 0) {
     return versionComparison
+  }
+
+  const versionCodeComparison = compareVersionValues(right.libraryVersionCode, left.libraryVersionCode)
+  if (versionCodeComparison !== 0) {
+    return versionCodeComparison
   }
 
   const scoreComparison = scoreLibraryGameRow(right) - scoreLibraryGameRow(left)
@@ -962,6 +1097,24 @@ function selectLatestLibraryGameRows(rows: LibraryGameRow[]): LibraryGameRow[] {
   }
 
   return Array.from(grouped.values()).map((siblings) => [...siblings].sort(compareLibraryGameRowsForDisplay)[0])
+}
+
+function resolveDisplayedLibraryGameRow(rows: LibraryGameRow[], gameId: string | null): LibraryGameRow | null {
+  if (!gameId) {
+    return null
+  }
+
+  const directMatch = rows.find((row) => row.id === gameId) ?? null
+  if (!directMatch) {
+    return null
+  }
+
+  const siblings = rows.filter((row) => row.duplicateGroupKey === directMatch.duplicateGroupKey)
+  if (!siblings.length) {
+    return directMatch
+  }
+
+  return [...siblings].sort(compareLibraryGameRowsForDisplay)[0] ?? directMatch
 }
 
 function buildGameMetaMatchKey(source: LibraryGameRow['source'], itemId: string): string {
@@ -1115,6 +1268,132 @@ function getRatingFillPercentage(value: number | null | undefined): number {
 
   const roundedToHalfStar = Math.round(Math.max(0, Math.min(5, Number(value))) * 2) / 2
   return (roundedToHalfStar / 5) * 100
+}
+
+function getVrSrcPopularityFillPercentage(
+  value: number | null | undefined,
+  minimum: number,
+  maximum: number
+): number {
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) {
+    return 0
+  }
+
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum <= minimum) {
+    return 100
+  }
+
+  const normalized = (Number(value) - minimum) / (maximum - minimum)
+  const starValue = Math.max(0, Math.min(5, normalized * 5))
+  const roundedToHalfStar = Math.round(starValue * 2) / 2
+  return (roundedToHalfStar / 5) * 100
+}
+
+function formatVrSrcPopularityLabel(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) {
+    return null
+  }
+
+  return `${Number(value).toFixed(1)} popularity`
+}
+
+function describeTitleSortDirection(direction: GamesSortDirection | VrSrcSortDirection): string {
+  return direction === 'asc' ? 'A-Z' : 'Z-A'
+}
+
+function describeAddedSortDirection(direction: GamesSortDirection | VrSrcSortDirection): string {
+  return direction === 'desc' ? 'Newest' : 'Oldest'
+}
+
+function describeRatingSortDirection(direction: GamesSortDirection | VrSrcSortDirection): string {
+  return direction === 'desc' ? 'High-Low' : 'Low-High'
+}
+
+const SORT_MODE_SEQUENCE: SortModeOption[] = [
+  { key: 'title', direction: 'asc' },
+  { key: 'title', direction: 'desc' },
+  { key: 'added', direction: 'desc' },
+  { key: 'added', direction: 'asc' },
+  { key: 'rating', direction: 'desc' },
+  { key: 'rating', direction: 'asc' }
+]
+
+function getSortModeLabel(key: SortModeOption['key'], direction: SortModeOption['direction']): string {
+  if (key === 'title') {
+    return direction === 'asc' ? 'Title ↓AZ' : 'Title ↑AZ'
+  }
+
+  if (key === 'added') {
+    return direction === 'desc' ? 'Added ≡↓' : 'Added ≡↑'
+  }
+
+  return direction === 'desc' ? 'Rating ★↓' : 'Rating ★↑'
+}
+
+function getNextSortMode(
+  key: SortModeOption['key'],
+  direction: SortModeOption['direction']
+): SortModeOption {
+  const currentIndex = SORT_MODE_SEQUENCE.findIndex((entry) => entry.key === key && entry.direction === direction)
+  return SORT_MODE_SEQUENCE[(currentIndex + 1 + SORT_MODE_SEQUENCE.length) % SORT_MODE_SEQUENCE.length]
+}
+
+function getSortModeValue(key: SortModeOption['key'], direction: SortModeOption['direction']): string {
+  return `${key}:${direction}`
+}
+
+function parseSortModeValue(value: string): SortModeOption | null {
+  const [key, direction] = value.split(':')
+  if ((key === 'title' || key === 'added' || key === 'rating') && (direction === 'asc' || direction === 'desc')) {
+    return { key, direction }
+  }
+
+  return null
+}
+
+type InventorySortKey = 'title' | 'size' | 'rating'
+type InventorySortDirection = 'asc' | 'desc'
+
+type InventorySortModeOption = {
+  key: InventorySortKey
+  direction: InventorySortDirection
+}
+
+const INVENTORY_SORT_MODE_SEQUENCE: InventorySortModeOption[] = [
+  { key: 'title', direction: 'asc' },
+  { key: 'title', direction: 'desc' },
+  { key: 'size', direction: 'desc' },
+  { key: 'size', direction: 'asc' },
+  { key: 'rating', direction: 'desc' },
+  { key: 'rating', direction: 'asc' }
+]
+
+function getInventorySortModeLabel(key: InventorySortKey, direction: InventorySortDirection): string {
+  if (key === 'title') {
+    return direction === 'asc' ? 'Title ↓AZ' : 'Title ↑AZ'
+  }
+
+  if (key === 'size') {
+    return direction === 'desc' ? 'Size ↓' : 'Size ↑'
+  }
+
+  return direction === 'desc' ? 'Rating ★↓' : 'Rating ★↑'
+}
+
+function getInventorySortModeValue(key: InventorySortKey, direction: InventorySortDirection): string {
+  return `${key}:${direction}`
+}
+
+function parseInventorySortModeValue(value: string): InventorySortModeOption | null {
+  const [key, direction] = value.split(':')
+  if (
+    (key === 'title' || key === 'size' || key === 'rating') &&
+    (direction === 'asc' || direction === 'desc')
+  ) {
+    return { key, direction }
+  }
+
+  return null
 }
 
 interface RichTextSegment {
@@ -2091,11 +2370,76 @@ function QueueDialog(props: {
   isOpen: boolean
   items: LiveQueueItem[]
   onClose: () => void
+  onCancelQueuedInstall: (itemId: string) => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
   onResumeVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
   onCancelVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
 }) {
-  const { isOpen, items, onClose, onPauseVrSrcTransfer, onResumeVrSrcTransfer, onCancelVrSrcTransfer } = props
+  const { isOpen, items, onClose, onCancelQueuedInstall, onPauseVrSrcTransfer, onResumeVrSrcTransfer, onCancelVrSrcTransfer } = props
+
+  function formatQueuedActionKind(item: LiveQueueItem): string {
+    if (item.transferControl?.kind === 'vrsrc') {
+      if (item.transferControl.operation === 'download-to-library') {
+        return 'Library Update'
+      }
+
+      if (item.transferControl.operation === 'download-to-library-and-install') {
+        return 'Library Update + Install'
+      }
+
+      return 'Direct Install'
+    }
+
+    if (item.kind === 'install') {
+      return 'Install'
+    }
+
+    if (item.kind === 'download') {
+      return 'Download'
+    }
+
+    if (item.kind === 'backup') {
+      return 'Backup'
+    }
+
+    if (item.kind === 'cleanup') {
+      return 'Cleanup'
+    }
+
+    if (item.kind === 'restore') {
+      return 'Restore'
+    }
+
+    if (item.kind === 'reboot') {
+      return 'Reboot'
+    }
+
+    if (item.kind === 'scan') {
+      return 'Scan'
+    }
+
+    if (item.kind === 'update') {
+      return 'Update'
+    }
+
+    return 'Action'
+  }
+
+  function formatQueuedActionScope(item: LiveQueueItem): string {
+    if (item.transferControl?.kind === 'vrsrc') {
+      if (item.transferControl.operation === 'download-to-library') {
+        return 'Library only'
+      }
+
+      if (item.transferControl.operation === 'download-to-library-and-install') {
+        return item.transferControl.serial?.trim() ? `Library + ${item.transferControl.serial.trim()}` : 'Library + headset'
+      }
+
+      return item.transferControl.serial?.trim() ? `Headset ${item.transferControl.serial.trim()}` : 'Headset install'
+    }
+
+    return item.kind === 'install' ? 'Headset install' : item.kind === 'download' ? 'Library only' : 'Queued action'
+  }
 
   if (!isOpen) {
     return null
@@ -2110,7 +2454,7 @@ function QueueDialog(props: {
             <p className="eyebrow">Operations</p>
             <h2>Queued Actions</h2>
             <p className="section-copy compact settings-section-copy-nowrap">
-              Waiting items stay here until a live action actually starts.
+              Waiting items stay here in queue order until a live action actually starts.
             </p>
           </div>
           <button className="close-pill" onClick={onClose} type="button">
@@ -2119,13 +2463,19 @@ function QueueDialog(props: {
         </div>
         {items.length ? (
           <div className="settings-maintenance-history-dialog-list">
-            {items.map((item) => (
+            {items.map((item, index) => (
               <article className="settings-maintenance-history-dialog-entry" key={item.id}>
+                <div className="queued-action-meta-row">
+                  <span className="queue-kind-pill queue-kind-pill-warm">{formatQueuedActionKind(item)}</span>
+                  <span className="queued-action-order">{index === 0 ? 'Next up' : `Queue ${index + 1}`}</span>
+                </div>
                 <strong>{item.title}</strong>
-                <code>{item.subtitle}</code>
-                <p>{item.details}</p>
+                <div className="queued-action-context-row">
+                  {item.subtitle ? <code>{item.subtitle}</code> : null}
+                  <span className="queued-action-context-pill">{formatQueuedActionScope(item)}</span>
+                </div>
                 {item.transferControl?.kind === 'vrsrc' ? (
-                  <div className="queue-card-actions">
+                  <div className="queue-card-actions queued-action-controls">
                     {item.transferControl.canPause ? (
                       <button
                         className="queue-card-action"
@@ -2169,7 +2519,14 @@ function QueueDialog(props: {
                       </button>
                     ) : null}
                   </div>
+                ) : item.kind === 'install' && item.phase === 'queued' ? (
+                  <div className="queue-card-actions queued-action-controls">
+                    <button className="queue-card-action queue-card-action-danger" onClick={() => onCancelQueuedInstall(item.id)} type="button">
+                      Cancel
+                    </button>
+                  </div>
                 ) : null}
+                <p>{item.details}</p>
               </article>
             ))}
           </div>
@@ -2281,7 +2638,8 @@ function GamesView(props: {
   const [gamesFilter, setGamesFilter] = useState<GamesFilterState>('all')
   const [gamesSearch, setGamesSearch] = useState('')
   const [vrSrcFilter, setVrSrcFilter] = useState<'all' | 'new'>('all')
-  const [vrSrcSortMode, setVrSrcSortMode] = useState<'title' | 'latest'>('title')
+  const [vrSrcSortKey, setVrSrcSortKey] = useState<VrSrcSortKey>('title')
+  const [vrSrcSortDirection, setVrSrcSortDirection] = useState<VrSrcSortDirection>('asc')
   const [gamesUserNameEditing, setGamesUserNameEditing] = useState(false)
   const [gamesUserNameDraft, setGamesUserNameDraft] = useState('')
   const [galleryScalePercent, setGalleryScalePercent] = useState(100)
@@ -2341,6 +2699,9 @@ function GamesView(props: {
   const installedVersionsByPackageId = new Map(
     (deviceAppsResponse?.apps ?? []).map((app) => [app.packageId.toLowerCase(), app.version ?? null])
   )
+  const installedVersionCodesByPackageId = new Map(
+    (deviceAppsResponse?.apps ?? []).map((app) => [app.packageId.toLowerCase(), app.versionCode ?? null])
+  )
   const vrSrcLastUpdatedByPackageId = (vrSrcCatalog?.items ?? []).reduce((timestamps, item) => {
     const packageId = item.packageName.trim().toLowerCase()
     if (!packageId) {
@@ -2367,6 +2728,21 @@ function GamesView(props: {
 
     return notes
   }, new Map<string, string>())
+  const vrSrcItemsByPackageId = (vrSrcCatalog?.items ?? []).reduce((itemsByPackage, item) => {
+    const packageId = item.packageName.trim().toLowerCase()
+    if (!packageId) {
+      return itemsByPackage
+    }
+
+    const current = itemsByPackage.get(packageId)
+    if (current) {
+      current.push(item)
+    } else {
+      itemsByPackage.set(packageId, [item])
+    }
+
+    return itemsByPackage
+  }, new Map<string, VrSrcCatalogResponse['items']>())
   const libraryGameRows = collapseLibraryGameRows(
     (localLibraryIndex?.items ?? [])
     .filter((item) => item.availability === 'present')
@@ -2385,6 +2761,10 @@ function GamesView(props: {
           packageIds
             .map((packageId) => installedVersionsByPackageId.get(packageId.toLowerCase()) ?? null)
             .find((value): value is string => Boolean(value)) ?? null
+        const installedVersionCode =
+          packageIds
+            .map((packageId) => installedVersionCodesByPackageId.get(packageId.toLowerCase()) ?? null)
+            .find((value): value is string => Boolean(value)) ?? null
         const inferredVrSrcLastUpdatedAt =
           packageIds
             .map((packageId) => vrSrcLastUpdatedByPackageId.get(packageId.toLowerCase()) ?? null)
@@ -2393,10 +2773,49 @@ function GamesView(props: {
         const storeVersion = display.version
         const libraryVersion = item.libraryVersion
         const primaryVersionValue = libraryVersion ?? storeVersion
-      const hasLibraryUpdate =
-        isInstalled &&
-        item.installReady &&
-        compareVersionValues(libraryVersion, installedVersion) > 0
+        const localVariantKey = getLibraryGameVariantKeyFromFields(display.title, item.relativePath, display.release)
+        const compatibleRemoteItems = packageIds.flatMap((packageId) =>
+          (vrSrcItemsByPackageId.get(packageId.toLowerCase()) ?? []).filter((remoteItem) =>
+            areLibraryVariantKeysCompatible(
+              localVariantKey,
+              getLibraryGameVariantFlagsFromText([remoteItem.name, remoteItem.releaseName].join(' ')).join('|') || 'standard'
+            )
+          )
+        )
+        const highestRemoteVersionCode =
+          compatibleRemoteItems
+            .map((remoteItem) => remoteItem.versionCode?.trim() ?? null)
+            .filter((value): value is string => Boolean(value))
+            .sort((left, right) => compareVersionValues(right, left))[0] ?? null
+        const compatibleLocalHighestVersionCode =
+          (localLibraryIndex?.items ?? [])
+            .filter((libraryItem) =>
+              libraryItem.availability === 'present' &&
+              libraryItem.packageIds.some((packageId) => packageIds.some((candidatePackageId) => candidatePackageId.toLowerCase() === packageId.toLowerCase())) &&
+              areLibraryVariantKeysCompatible(
+                localVariantKey,
+                getLibraryGameVariantKeyFromFields(libraryItem.name, libraryItem.relativePath, libraryItem.name)
+              )
+            )
+            .map((libraryItem) => libraryItem.libraryVersionCode ?? null)
+            .filter((value): value is string => Boolean(value))
+            .sort((left, right) => compareVersionValues(right, left))[0] ?? null
+        const hasRemoteLibraryUpdate = Boolean(
+          item.installReady &&
+          highestRemoteVersionCode &&
+          compareVersionValues(highestRemoteVersionCode, compatibleLocalHighestVersionCode ?? item.libraryVersionCode ?? libraryVersion) > 0
+        )
+        const hasHeadsetUpgrade = Boolean(
+          isInstalled &&
+          item.installReady &&
+          compareInstalledLibraryVersion(
+            libraryVersion,
+            item.libraryVersionCode,
+            installedVersion,
+            installedVersionCode
+          ) > 0
+        )
+        const hasLibraryUpdate = hasRemoteLibraryUpdate || hasHeadsetUpgrade
       const filterTags: GamesFilterState[] = ['all']
       const isNewLocalLibraryItem = isWithinLastDays(item.modifiedAt, 7)
 
@@ -2404,7 +2823,7 @@ function GamesView(props: {
         filterTags.push('installed')
       }
 
-      if (hasLibraryUpdate) {
+      if (hasRemoteLibraryUpdate) {
         filterTags.push('updates')
       }
 
@@ -2435,8 +2854,12 @@ function GamesView(props: {
         libraryVersion,
         libraryVersionCode: item.libraryVersionCode,
         installedVersion,
-        status: hasLibraryUpdate
-          ? 'Update Available'
+        status: hasRemoteLibraryUpdate
+          ? isInstalled
+            ? 'Upgrade Available'
+            : 'Update Available'
+          : hasHeadsetUpgrade
+            ? 'Upgrade Available'
           : isInstalled
             ? 'Installed'
             : item.kind === 'archive'
@@ -2446,12 +2869,25 @@ function GamesView(props: {
                 : 'Stored Locally',
         size: formatBytes(item.sizeBytes),
         sizeBytes: item.sizeBytes,
-        action: hasLibraryUpdate ? 'Update' : isInstalled ? 'Installed' : item.installReady ? 'Install' : 'Inspect',
+        action:
+          hasRemoteLibraryUpdate
+            ? (isInstalled ? 'Upgrade' : 'Update')
+            : hasHeadsetUpgrade
+              ? 'Upgrade'
+              : isInstalled
+                ? 'Installed'
+                : item.installReady
+                  ? 'Install'
+                  : 'Inspect',
         note: display.note,
         indexedNote: item.note,
         release: display.release,
-        cta: hasLibraryUpdate
-          ? 'Upgrade Installed Version from Local Library'
+        cta: hasRemoteLibraryUpdate
+          ? isInstalled
+            ? 'Update the Local Library, then upgrade the selected headset install'
+            : 'Update the Local Library with the newest vrSrc version'
+          : hasHeadsetUpgrade
+            ? 'Install the newer Local Library version to the selected headset'
           : isInstalled
             ? 'Already Installed on Headset'
             : item.installReady
@@ -2478,6 +2914,7 @@ function GamesView(props: {
         manualMetadata: item.manualMetadata ?? null,
         isInstalled,
         hasLibraryUpdate,
+        hasRemoteLibraryUpdate,
         filterTags,
         heroImageUri: display.heroImageUri,
         installReady: item.installReady,
@@ -2564,6 +3001,7 @@ function GamesView(props: {
           manualMetadata: item.manualMetadata ?? null,
           isInstalled,
           hasLibraryUpdate: false,
+          hasRemoteLibraryUpdate: false,
           filterTags,
           heroImageUri: display.heroImageUri,
           installReady: false,
@@ -2593,17 +3031,6 @@ function GamesView(props: {
     return matchesSearchText(game.searchTerms, gamesSearch)
   })
   const sortedGameRows = [...filteredGameRows].sort((left, right) => {
-    if (gamesSortKey === 'date') {
-      const leftDate = left.sourceLastUpdatedAt ? Date.parse(left.sourceLastUpdatedAt) : Number.NEGATIVE_INFINITY
-      const rightDate = right.sourceLastUpdatedAt ? Date.parse(right.sourceLastUpdatedAt) : Number.NEGATIVE_INFINITY
-      const safeLeftDate = Number.isNaN(leftDate) ? Number.NEGATIVE_INFINITY : leftDate
-      const safeRightDate = Number.isNaN(rightDate) ? Number.NEGATIVE_INFINITY : rightDate
-
-      if (safeLeftDate !== safeRightDate) {
-        return gamesSortDirection === 'asc' ? safeLeftDate - safeRightDate : safeRightDate - safeLeftDate
-      }
-    }
-
     if (gamesSortKey === 'added') {
       const leftDate = left.indexedAt ? Date.parse(left.indexedAt) : Number.NEGATIVE_INFINITY
       const rightDate = right.indexedAt ? Date.parse(right.indexedAt) : Number.NEGATIVE_INFINITY
@@ -2612,6 +3039,14 @@ function GamesView(props: {
 
       if (safeLeftDate !== safeRightDate) {
         return gamesSortDirection === 'asc' ? safeLeftDate - safeRightDate : safeRightDate - safeLeftDate
+      }
+    }
+
+    if (gamesSortKey === 'rating') {
+      const leftRating = left.metaStoreMatch?.ratingAverage ?? 0
+      const rightRating = right.metaStoreMatch?.ratingAverage ?? 0
+      if (leftRating !== rightRating) {
+        return gamesSortDirection === 'asc' ? leftRating - rightRating : rightRating - leftRating
       }
     }
 
@@ -2659,16 +3094,18 @@ function GamesView(props: {
   const vrSrcItemStatusByReleaseName = vrSrcItems.reduce((statuses, item) => {
     const packageId = item.packageName.toLowerCase()
     const highestLibraryVersionCode = libraryHighestVersionCodeByPackageId.get(packageId) ?? null
-    const isUpdate = Boolean(highestLibraryVersionCode && compareVersionValues(item.versionCode, highestLibraryVersionCode) > 0)
+    const hasRemoteUpdate = Boolean(highestLibraryVersionCode && compareVersionValues(item.versionCode, highestLibraryVersionCode) > 0)
+    const isInstalledOnHeadset = installedPackageIds.has(packageId)
     const isInLibrary = Boolean(highestLibraryVersionCode)
 
     statuses.set(item.releaseName, {
       highestLibraryVersionCode,
-      isUpdate,
+      hasRemoteUpdate,
+      isInstalledOnHeadset,
       isInLibrary
     })
     return statuses
-  }, new Map<string, { highestLibraryVersionCode: string | null; isUpdate: boolean; isInLibrary: boolean }>())
+  }, new Map<string, { highestLibraryVersionCode: string | null; hasRemoteUpdate: boolean; isInstalledOnHeadset: boolean; isInLibrary: boolean }>())
   const filteredVrSrcItems = vrSrcItems.filter((item) => {
     const matchesSearch = matchesSearchText(
       [item.name, item.releaseName, item.packageName, item.versionCode, item.versionName ?? ''],
@@ -2686,7 +3123,7 @@ function GamesView(props: {
         return false
       }
     } else if (gamesFilter === 'updates') {
-      if (!(itemStatus?.isUpdate ?? false)) {
+      if (!(itemStatus?.hasRemoteUpdate ?? false)) {
         return false
       }
     } else if (gamesFilter === 'ready') {
@@ -2703,14 +3140,26 @@ function GamesView(props: {
 
     return true
   }).sort((left, right) => {
-    if (vrSrcSortMode === 'latest') {
-      const difference = parseVrSrcLastUpdated(right.lastUpdated) - parseVrSrcLastUpdated(left.lastUpdated)
+    if (vrSrcSortKey === 'added') {
+      const leftDate = parseVrSrcLastUpdated(left.lastUpdated)
+      const rightDate = parseVrSrcLastUpdated(right.lastUpdated)
+      const difference =
+        vrSrcSortDirection === 'asc' ? leftDate - rightDate : rightDate - leftDate
+      if (difference !== 0) {
+        return difference
+      }
+    } else if (vrSrcSortKey === 'rating') {
+      const leftDownloads = Number(left.downloads) || 0
+      const rightDownloads = Number(right.downloads) || 0
+      const difference =
+        vrSrcSortDirection === 'asc' ? leftDownloads - rightDownloads : rightDownloads - leftDownloads
       if (difference !== 0) {
         return difference
       }
     }
 
-    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+    const titleComparison = left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+    return vrSrcSortKey === 'title' && vrSrcSortDirection === 'desc' ? -titleComparison : titleComparison
   })
   const vrSrcSummary = vrSrcItems.reduce(
     (summary, item) => {
@@ -2719,7 +3168,7 @@ function GamesView(props: {
 
       if (highestLibraryVersionCode) {
         summary.inLibraryCount += 1
-        if (itemStatus?.isUpdate) {
+        if (itemStatus?.hasRemoteUpdate) {
           summary.updateCount += 1
         }
       } else {
@@ -2729,6 +3178,20 @@ function GamesView(props: {
       return summary
     },
     { newCount: 0, updateCount: 0, inLibraryCount: 0 }
+  )
+  const vrSrcPopularityRange = vrSrcItems.reduce(
+    (summary, item) => {
+      const downloads = Number(item.downloads)
+      if (!Number.isFinite(downloads) || downloads <= 0) {
+        return summary
+      }
+
+      return {
+        min: Math.min(summary.min, downloads),
+        max: Math.max(summary.max, downloads)
+      }
+    },
+    { min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY }
   )
   const getMatchingVrSrcLibraryItem = (item: VrSrcCatalogResponse['items'][number]) =>
     (localLibraryIndex?.items ?? [])
@@ -2742,12 +3205,14 @@ function GamesView(props: {
     const itemStatus = vrSrcItemStatusByReleaseName.get(item.releaseName)
     const matchingLibraryItem = getMatchingVrSrcLibraryItem(item)
     const highestLibraryVersion = matchingLibraryItem?.libraryVersion ?? matchingLibraryItem?.libraryVersionCode ?? null
-    const isUpdate = itemStatus?.isUpdate ?? false
-    const isInstalled = installedPackageIds.has(item.packageName.toLowerCase())
+    const hasRemoteUpdate = itemStatus?.hasRemoteUpdate ?? false
+    const isInstalled = itemStatus?.isInstalledOnHeadset ?? installedPackageIds.has(item.packageName.toLowerCase())
     const isInLibrary = itemStatus?.isInLibrary ?? false
     const actionBusy = vrSrcActionBusyReleaseNames.includes(item.releaseName)
-    const statusLabel = isUpdate ? 'Update' : isInstalled ? 'Installed' : isInLibrary ? 'In Library' : 'New'
-    const statusClassName = isUpdate
+    const isUpgrade = hasRemoteUpdate && isInstalled
+    const isUpdate = hasRemoteUpdate && !isInstalled
+    const statusLabel = isUpgrade ? 'Upgrade' : isUpdate ? 'Update' : isInstalled ? 'Installed' : isInLibrary ? 'In Library' : 'New'
+    const statusClassName = hasRemoteUpdate
       ? 'status-pill status-pending'
       : isInstalled
         ? 'status-pill status-ready library-status-pill'
@@ -2758,6 +3223,8 @@ function GamesView(props: {
     return {
       item,
       highestLibraryVersion,
+      hasRemoteUpdate,
+      isUpgrade,
       isUpdate,
       isInstalled,
       isInLibrary,
@@ -2793,7 +3260,10 @@ function GamesView(props: {
   const selectedVrSrcTrailerVideoId = selectedVrSrcDetails?.trailerVideoId ?? null
   const trailerEmbedOrigin =
     typeof window !== 'undefined' && window.location.origin ? encodeURIComponent(window.location.origin) : null
-  const selectedGame = filteredGameRows.find((game) => game.id === selectedGameId) ?? combinedGameRows.find((game) => game.id === selectedGameId) ?? null
+  const selectedGame =
+    resolveDisplayedLibraryGameRow(filteredGameRows, selectedGameId) ??
+    resolveDisplayedLibraryGameRow(combinedGameRows, selectedGameId) ??
+    null
   const selectedGameMatchingVrSrcItem =
     selectedGame?.source === 'library'
       ? (selectedGame.packageIds
@@ -2849,7 +3319,9 @@ function GamesView(props: {
     null
   const selectedGameHeaderArtUri = selectedGameCardArtUri
   const selectedGameStoreVersion = effectiveSelectedGameDetails?.version ?? selectedGame?.storeVersion ?? null
+  const selectedGameStoreVersionCode = effectiveSelectedGameDetails?.versionCode ?? null
   const selectedGameLibraryVersion = selectedGame?.libraryVersion ?? null
+  const selectedGameLibraryVersionCode = selectedGame?.libraryVersionCode ?? null
   const selectedGameInstalledVersion = selectedGame?.installedVersion ?? null
   const selectedGameMetaChipVersion = selectedGameLibraryVersion ?? effectiveSelectedGameDetails?.version ?? null
   const selectedGameHasNewerAvailableVersion =
@@ -3056,6 +3528,17 @@ function GamesView(props: {
   }, [selectedGameMatchingVrSrcItem])
 
   const toggleGamesSort = (key: GamesSortKey) => {
+    if (key === 'size') {
+      if (gamesSortKey === 'size') {
+        setGamesSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
+        return
+      }
+
+      setGamesSortKey('size')
+      setGamesSortDirection('desc')
+      return
+    }
+
     if (gamesSortKey === key) {
       setGamesSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))
       return
@@ -3064,22 +3547,9 @@ function GamesView(props: {
     setGamesSortKey(key)
     setGamesSortDirection(key === 'title' ? 'asc' : 'desc')
   }
-  const toggleLocalLibrarySortMode = () => {
-    if (gamesSortKey === 'title') {
-      setGamesSortKey('date')
-      setGamesSortDirection('desc')
-      return
-    }
 
-    if (gamesSortKey === 'date') {
-      setGamesSortKey('added')
-      setGamesSortDirection('desc')
-      return
-    }
-
-    setGamesSortKey('title')
-    setGamesSortDirection('asc')
-  }
+  const localLibrarySortValue = getSortModeValue(gamesSortKey === 'size' ? 'title' : gamesSortKey, gamesSortDirection)
+  const vrSrcSortValue = getSortModeValue(vrSrcSortKey, vrSrcSortDirection)
 
   useEffect(() => {
     setManualStoreIdDraft(selectedGame?.manualStoreId ?? '')
@@ -3262,6 +3732,57 @@ function GamesView(props: {
 
     setSelectedGameId(null)
     await onInstallLocalLibraryItem(selectedGame.itemId)
+  }
+
+  async function applySelectedLocalLibraryUpdateAction() {
+    if (!selectedGame || selectedGame.source !== 'library') {
+      return
+    }
+
+    if (selectedGame.action === 'Update') {
+      if (!selectedGameMatchingVrSrcItem) {
+        return
+      }
+
+      setSelectedGameId(null)
+      await onDownloadVrSrcToLibrary(selectedGameMatchingVrSrcItem.releaseName)
+      return
+    }
+
+    if (selectedGame.action === 'Upgrade' && selectedGame.hasRemoteLibraryUpdate && selectedGameMatchingVrSrcItem) {
+      setSelectedGameId(null)
+      await onDownloadVrSrcToLibraryAndInstall(selectedGameMatchingVrSrcItem.releaseName)
+      return
+    }
+
+    await installSelectedLocalLibraryItem()
+  }
+
+  async function applyLocalLibraryRowAction(game: LibraryGameRow) {
+    if (game.source !== 'library') {
+      return
+    }
+
+    const matchingVrSrcItem =
+      game.packageIds
+        .map((packageId) => vrSrcItems.find((item) => item.packageName.toLowerCase() === packageId.toLowerCase()) ?? null)
+        .find((value): value is VrSrcCatalogResponse['items'][number] => Boolean(value)) ?? null
+
+    if (game.action === 'Update') {
+      if (!matchingVrSrcItem) {
+        return
+      }
+
+      await onDownloadVrSrcToLibrary(matchingVrSrcItem.releaseName)
+      return
+    }
+
+    if (game.action === 'Upgrade' && game.hasRemoteLibraryUpdate && matchingVrSrcItem) {
+      await onDownloadVrSrcToLibraryAndInstall(matchingVrSrcItem.releaseName)
+      return
+    }
+
+    await onInstallLocalLibraryItem(game.itemId)
   }
 
   async function uninstallSelectedInstalledGame() {
@@ -3697,16 +4218,32 @@ function GamesView(props: {
                   <span className="eyebrow">Updates</span>
                   <strong>{vrSrcSummary.updateCount}</strong>
                 </div>
-                <button
-                  aria-pressed={vrSrcSortMode === 'latest'}
-                  className={vrSrcSortMode === 'latest' ? 'vrsrc-summary-pill active' : 'vrsrc-summary-pill'}
-                  title="Sort remote items by the most recently updated releases first."
-                  onClick={() => setVrSrcSortMode((current) => (current === 'latest' ? 'title' : 'latest'))}
-                  type="button"
+                <label
+                  className="vrsrc-summary-pill vrsrc-summary-pill-select"
+                  title="Choose the vrSrc sort order."
                 >
                   <span className="eyebrow">Sort</span>
-                  <strong>{vrSrcSortMode === 'latest' ? 'Latest' : 'Title'}</strong>
-                </button>
+                  <select
+                    aria-label="vrSrc sort order"
+                    className="vrsrc-summary-select"
+                    onChange={(event) => {
+                      const nextMode = parseSortModeValue(event.target.value)
+                      if (!nextMode) {
+                        return
+                      }
+
+                      setVrSrcSortKey(nextMode.key)
+                      setVrSrcSortDirection(nextMode.direction)
+                    }}
+                    value={vrSrcSortValue}
+                  >
+                    {SORT_MODE_SEQUENCE.map((option) => (
+                      <option key={getSortModeValue(option.key, option.direction)} value={getSortModeValue(option.key, option.direction)}>
+                        {getSortModeLabel(option.key, option.direction)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   className="vrsrc-summary-pill vrsrc-summary-pill-button"
                   disabled={vrSrcSyncBusy}
@@ -3749,87 +4286,120 @@ function GamesView(props: {
                       } as CSSProperties
                     }
                   >
-                    {filteredVrSrcEntries.map(({ item, isUpdate, isInstalled, isInLibrary, actionBusy, statusLabel, statusClassName, displayRemoteVersion }) => (
-                      <article
-                        className={
-                          selectedVrSrcReleaseName === item.releaseName
-                            ? 'game-gallery-card vrsrc-gallery-card active'
-                            : 'game-gallery-card vrsrc-gallery-card'
-                        }
-                        key={item.releaseName}
-                        onClick={() => {
-                          setSelectedGameId(null)
-                          setSelectedVrSrcReleaseName(item.releaseName)
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault()
+                    {filteredVrSrcEntries.map(({ item, hasRemoteUpdate, isUpgrade, isUpdate, isInstalled, isInLibrary, actionBusy, statusLabel, statusClassName, displayRemoteVersion }) => {
+                      const vrSrcRatingLabel = formatVrSrcPopularityLabel(item.downloads)
+                      const vrSrcRatingFillPercentage = getVrSrcPopularityFillPercentage(
+                        item.downloads,
+                        vrSrcPopularityRange.min,
+                        vrSrcPopularityRange.max
+                      )
+
+                      return (
+                        <article
+                          className={
+                            selectedVrSrcReleaseName === item.releaseName
+                              ? 'game-gallery-card vrsrc-gallery-card active'
+                              : 'game-gallery-card vrsrc-gallery-card'
+                          }
+                          key={item.releaseName}
+                          onClick={() => {
                             setSelectedGameId(null)
                             setSelectedVrSrcReleaseName(item.releaseName)
-                          }
-                        }}
-                        role="button"
-                        tabIndex={0}
-                      >
-                        <div className="game-gallery-hero-shell">
-                          <ResilientArtworkImage
-                            alt=""
-                            artworkKey={item.releaseName}
-                            className="game-gallery-hero-image"
-                            fallbackClassName="game-gallery-hero-placeholder fallback-art-surface"
-                            label={item.name}
-                            src={item.artworkUrl}
-                            variant="gallery"
-                          />
-                          <div className="game-gallery-title-banner">
-                            <strong>{item.name}</strong>
-                          </div>
-                          <div className="vrsrc-gallery-overlay">
-                            <div className="vrsrc-gallery-meta-stack">
-                              <span className="game-gallery-size">{item.sizeLabel}</span>
-                              <span className="vrsrc-gallery-version-chip">{displayRemoteVersion}</span>
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              setSelectedGameId(null)
+                              setSelectedVrSrcReleaseName(item.releaseName)
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <div className="game-gallery-hero-shell">
+                            <ResilientArtworkImage
+                              alt=""
+                              artworkKey={item.releaseName}
+                              className="game-gallery-hero-image"
+                              fallbackClassName="game-gallery-hero-placeholder fallback-art-surface"
+                              label={item.name}
+                              src={item.artworkUrl}
+                              variant="gallery"
+                            />
+                            {vrSrcRatingLabel ? (
+                              <div
+                                aria-label={`vrSrc popularity ${vrSrcRatingLabel}`}
+                                className="game-gallery-rating-strip"
+                                title={`vrSrc popularity ${vrSrcRatingLabel}`}
+                              >
+                                <div aria-hidden="true" className="games-rating-stars game-gallery-rating-stars">
+                                  <span className="games-rating-stars-base">★★★★★</span>
+                                  <span
+                                    className="games-rating-stars-fill"
+                                    style={{ width: `${vrSrcRatingFillPercentage}%` }}
+                                  >
+                                    ★★★★★
+                                  </span>
+                                </div>
+                              </div>
+                            ) : null}
+                            <div className="game-gallery-title-banner">
+                              <strong>{item.name}</strong>
                             </div>
-                            {isUpdate ? (
-                              <button
-                                className={`${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-update`}
-                                disabled={actionBusy || !selectedDeviceId}
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  void onDownloadVrSrcToLibraryAndInstall(item.releaseName)
-                                }}
-                                title={
-                                  selectedDeviceId
-                                    ? 'Download this vrSrc update into the Local Library, then install it to the selected headset'
-                                    : 'Select a headset first to download and install this vrSrc update'
-                                }
-                                type="button"
-                              >
-                                {actionBusy ? 'Working…' : statusLabel}
-                              </button>
-                            ) : (
-                              <span
-                                className={
-                                  isInstalled
-                                    ? 'status-pill status-ready game-action-indicator game-gallery-state'
-                                    : isInLibrary
-                                      ? `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-library`
-                                      : `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-new`
-                                }
-                              >
-                                {isInstalled ? (
-                                  <>
-                                    <span aria-hidden="true" className="game-action-indicator-check" />
-                                    <span>{statusLabel}</span>
-                                  </>
-                                ) : (
-                                  statusLabel
-                                )}
-                              </span>
-                            )}
+                            <div className="vrsrc-gallery-overlay">
+                              <div className="vrsrc-gallery-meta-stack">
+                                <span className="game-gallery-size">{item.sizeLabel}</span>
+                                <span className="vrsrc-gallery-version-chip">{displayRemoteVersion}</span>
+                              </div>
+                              {hasRemoteUpdate ? (
+                                <button
+                                  className={`${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-update`}
+                                  disabled={actionBusy || (isUpgrade && !selectedDeviceId)}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    if (isUpgrade) {
+                                      void onDownloadVrSrcToLibraryAndInstall(item.releaseName)
+                                      return
+                                    }
+
+                                    void onDownloadVrSrcToLibrary(item.releaseName)
+                                  }}
+                                  title={
+                                    isUpgrade
+                                      ? selectedDeviceId
+                                        ? 'Download this vrSrc upgrade into the Local Library, then install it to the selected headset'
+                                        : 'Select a headset first to download this vrSrc upgrade into the Local Library and apply it on the headset'
+                                      : 'Download this vrSrc update into the Local Library only'
+                                  }
+                                  type="button"
+                                >
+                                  {actionBusy ? 'Working…' : statusLabel}
+                                </button>
+                              ) : (
+                                <span
+                                  className={
+                                    isInstalled
+                                      ? 'status-pill status-ready game-action-indicator game-gallery-state'
+                                      : isInLibrary
+                                        ? `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-library`
+                                        : `${statusClassName} game-gallery-state vrsrc-gallery-status-pill is-new`
+                                  }
+                                >
+                                  {isInstalled ? (
+                                    <>
+                                      <span aria-hidden="true" className="game-action-indicator-check" />
+                                      <span>{statusLabel}</span>
+                                    </>
+                                  ) : (
+                                    statusLabel
+                                  )}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </article>
-                    ))}
+                        </article>
+                      )
+                    })}
                   </div>
                 </section>
               ) : (
@@ -3988,26 +4558,32 @@ function GamesView(props: {
                 <span className="eyebrow">Updates</span>
                 <strong>{localLibrarySummary.updateCount}</strong>
               </div>
-              <button
-                className="vrsrc-summary-pill"
-                onClick={toggleLocalLibrarySortMode}
-                title="Cycle Local Library sorting between title, source/latest date, and added-to-library order."
-                type="button"
+              <label
+                className="vrsrc-summary-pill vrsrc-summary-pill-select"
+                title="Choose the Local Library sort order."
               >
                 <span className="eyebrow">Sort</span>
-                <strong>
-                  {gamesSortKey === 'date' ? 'Latest' : gamesSortKey === 'added' ? 'Added' : 'Title'}
-                </strong>
-              </button>
-              <button
-                className="vrsrc-summary-pill"
-                onClick={() => setGamesSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'))}
-                title="Reverse the Local Library sort direction."
-                type="button"
-              >
-                <span className="eyebrow">Order</span>
-                <strong>{gamesSortDirection === 'asc' ? '↑' : '↓'}</strong>
-              </button>
+                <select
+                  aria-label="Local Library sort order"
+                  className="vrsrc-summary-select"
+                  onChange={(event) => {
+                    const nextMode = parseSortModeValue(event.target.value)
+                    if (!nextMode) {
+                      return
+                    }
+
+                    setGamesSortKey(nextMode.key)
+                    setGamesSortDirection(nextMode.direction)
+                  }}
+                  value={localLibrarySortValue}
+                >
+                  {SORT_MODE_SEQUENCE.map((option) => (
+                    <option key={getSortModeValue(option.key, option.direction)} value={getSortModeValue(option.key, option.direction)}>
+                      {getSortModeLabel(option.key, option.direction)}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
           <p className="vrsrc-subtitle">
@@ -4027,72 +4603,103 @@ function GamesView(props: {
                 } as CSSProperties
               }
             >
-              {sortedGameRows.map((game) => (
-                <article
-                  className={selectedGameId === game.id ? 'game-gallery-card active' : 'game-gallery-card'}
-                  key={game.id}
-                  onClick={() => {
-                    setSelectedVrSrcReleaseName(null)
-                    setSelectedGameId(game.id)
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
+              {sortedGameRows.map((game) => {
+                const gameGalleryRatingAverage = game.metaStoreMatch?.ratingAverage ?? null
+                const gameGalleryRatingLabel = formatRatingAverage(gameGalleryRatingAverage)
+                const gameGalleryRatingFillPercentage = getRatingFillPercentage(gameGalleryRatingAverage)
+
+                return (
+                  <article
+                    className={selectedGameId === game.id ? 'game-gallery-card active' : 'game-gallery-card'}
+                    key={game.id}
+                    onClick={() => {
                       setSelectedVrSrcReleaseName(null)
                       setSelectedGameId(game.id)
-                    }
-                  }}
-                >
-                  <div className="game-gallery-hero-shell">
-                    <ResilientArtworkImage
-                      alt=""
-                      artworkKey={game.itemId ?? game.id}
-                      className="game-gallery-hero-image"
-                      fallbackClassName="game-gallery-hero-placeholder fallback-art-surface"
-                      label={game.title}
-                      src={game.heroImageUri ?? game.thumbnailUri ?? undefined}
-                      variant="gallery"
-                    />
-                    <div className="game-gallery-title-banner">
-                      <strong>{game.title}</strong>
-                    </div>
-                    <div className="game-gallery-overlay">
-                      <span className="game-gallery-size">{game.size}</span>
-                      {game.action === 'Installed' ? (
-                        <span className="status-pill status-ready game-action-indicator game-gallery-state">
-                          <span aria-hidden="true" className="game-action-indicator-check" />
-                          <span>Installed</span>
-                        </span>
-                      ) : game.action === 'Install' || game.action === 'Update' ? (
-                        <button
-                          className="action-pill game-gallery-state"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (game.source === 'library' && game.itemId && selectedDeviceId) {
-                              void onInstallLocalLibraryItem(game.itemId)
-                              return
-                            }
-
-                            setSelectedVrSrcReleaseName(null)
-                            setSelectedGameId(game.id)
-                          }}
-                          disabled={
-                            game.source === 'library' &&
-                            (!selectedDeviceId || gamesInstallBusyIds.includes(game.itemId))
-                          }
-                          type="button"
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setSelectedVrSrcReleaseName(null)
+                        setSelectedGameId(game.id)
+                      }
+                    }}
+                  >
+                    <div className="game-gallery-hero-shell">
+                      <ResilientArtworkImage
+                        alt=""
+                        artworkKey={game.itemId ?? game.id}
+                        className="game-gallery-hero-image"
+                        fallbackClassName="game-gallery-hero-placeholder fallback-art-surface"
+                        label={game.title}
+                        src={game.heroImageUri ?? game.thumbnailUri ?? undefined}
+                        variant="gallery"
+                      />
+                      {gameGalleryRatingLabel ? (
+                        <div
+                          aria-label={`Storefront rating ${gameGalleryRatingLabel}`}
+                          className="game-gallery-rating-strip"
+                          title={`Storefront rating ${gameGalleryRatingLabel}`}
                         >
-                          {game.source === 'library' && gamesInstallBusyIds.includes(game.itemId)
-                            ? 'Installing…'
-                            : formatGameActionLabel(game.action)}
-                        </button>
+                          <div aria-hidden="true" className="games-rating-stars game-gallery-rating-stars">
+                            <span className="games-rating-stars-base">★★★★★</span>
+                            <span
+                              className="games-rating-stars-fill"
+                              style={{ width: `${gameGalleryRatingFillPercentage}%` }}
+                            >
+                              ★★★★★
+                            </span>
+                          </div>
+                        </div>
                       ) : null}
+                      <div className="game-gallery-title-banner">
+                        <strong>{game.title}</strong>
+                      </div>
+                      <div className="game-gallery-overlay">
+                        <span className="game-gallery-size">{game.size}</span>
+                        {game.action === 'Installed' ? (
+                          <span className="status-pill status-ready game-action-indicator game-gallery-state">
+                            <span aria-hidden="true" className="game-action-indicator-check" />
+                            <span>Installed</span>
+                          </span>
+                        ) : game.action === 'Install' || game.action === 'Update' || game.action === 'Upgrade' ? (
+                          <button
+                            className="action-pill game-gallery-state"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (
+                                game.source === 'library' &&
+                                game.itemId &&
+                                (game.action !== 'Upgrade' || selectedDeviceId)
+                              ) {
+                                void applyLocalLibraryRowAction(game)
+                                return
+                              }
+
+                              setSelectedVrSrcReleaseName(null)
+                              setSelectedGameId(game.id)
+                            }}
+                            disabled={
+                              game.source === 'library' &&
+                              (
+                                (game.action === 'Upgrade' && !selectedDeviceId) ||
+                                gamesInstallBusyIds.includes(game.itemId)
+                              )
+                            }
+                            title={game.source === 'library' ? getLibraryGameActionTitle(game, Boolean(selectedDeviceId)) : undefined}
+                            type="button"
+                          >
+                            {game.source === 'library' && gamesInstallBusyIds.includes(game.itemId)
+                              ? 'Installing…'
+                              : formatGameActionLabel(game.action)}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                )
+              })}
               {!sortedGameRows.length ? (
                 <div className="empty-state games-empty-state" style={{ minHeight: `${gamesGalleryViewportHeight}px` }}>
                   <strong>No matches for this view yet.</strong>
@@ -4114,12 +4721,12 @@ function GamesView(props: {
               </button>
               <span>Version</span>
               <button
-                className={gamesSortKey === 'date' ? 'table-sort-button active' : 'table-sort-button'}
-                onClick={() => toggleGamesSort('date')}
+                className={gamesSortKey === 'added' ? 'table-sort-button active' : 'table-sort-button'}
+                onClick={() => toggleGamesSort('added')}
                 type="button"
               >
-                <span>Latest</span>
-                <strong>{gamesSortKey === 'date' ? (gamesSortDirection === 'asc' ? '↑' : '↓') : '↕'}</strong>
+                <span>Added</span>
+                <strong>{gamesSortKey === 'added' ? (gamesSortDirection === 'asc' ? '↑' : '↓') : '↕'}</strong>
               </button>
               <button
                 className={gamesSortKey === 'size' ? 'table-sort-button active' : 'table-sort-button'}
@@ -4192,10 +4799,10 @@ function GamesView(props: {
                         if (
                           game.source === 'library' &&
                           game.itemId &&
-                          (game.action === 'Install' || game.action === 'Update') &&
-                          selectedDeviceId
+                          (game.action === 'Install' || game.action === 'Update' || game.action === 'Upgrade') &&
+                          (game.action !== 'Upgrade' || selectedDeviceId)
                         ) {
-                          void onInstallLocalLibraryItem(game.itemId)
+                          void applyLocalLibraryRowAction(game)
                           return
                         }
 
@@ -4204,13 +4811,17 @@ function GamesView(props: {
                       }}
                       disabled={
                         game.source === 'library' &&
-                        (game.action === 'Install' || game.action === 'Update') &&
-                        (!selectedDeviceId || gamesInstallBusyIds.includes(game.itemId))
+                        (game.action === 'Install' || game.action === 'Update' || game.action === 'Upgrade') &&
+                        (
+                          (game.action === 'Upgrade' && !selectedDeviceId) ||
+                          gamesInstallBusyIds.includes(game.itemId)
+                        )
                       }
+                      title={game.source === 'library' ? getLibraryGameActionTitle(game, Boolean(selectedDeviceId)) : undefined}
                       type="button"
                     >
                       {game.source === 'library' &&
-                      (game.action === 'Install' || game.action === 'Update') &&
+                      (game.action === 'Install' || game.action === 'Update' || game.action === 'Upgrade') &&
                       gamesInstallBusyIds.includes(game.itemId)
                         ? 'Installing…'
                         : formatGameActionLabel(game.action)}
@@ -4372,7 +4983,7 @@ function GamesView(props: {
               >
                 {vrSrcActionBusyReleaseNames.includes(selectedVrSrcItem.releaseName)
                   ? 'Working…'
-                  : selectedVrSrcStatus?.isUpdate
+                  : selectedVrSrcStatus?.hasRemoteUpdate
                     ? 'Update Library'
                     : selectedVrSrcIsInstalled
                       ? 'Already Installed'
@@ -4784,12 +5395,30 @@ function GamesView(props: {
                     <>
                       <div className="signal-chip signal-chip-latest">
                         <span>Latest Available</span>
-                        <strong>{formatVersionLabel(selectedGameStoreVersion) ?? 'Unavailable'}</strong>
+                        <strong>{formatVersionWithCode(selectedGameStoreVersion, selectedGameStoreVersionCode)}</strong>
                       </div>
                       <div className={selectedGameInstalledVersion ? 'signal-chip signal-chip-ready' : 'signal-chip'}>
                         <span>Installed</span>
-                        <strong>{formatVersionLabel(selectedGameInstalledVersion) ?? 'Unavailable'}</strong>
+                        <strong>{formatVersionWithCode(selectedGameInstalledVersion, null)}</strong>
                       </div>
+                      {selectedGame.source === 'library' ? (
+                        <div className="signal-chip">
+                          <span>Local Copy</span>
+                          <strong>{formatVersionWithCode(selectedGameLibraryVersion, selectedGameLibraryVersionCode)}</strong>
+                        </div>
+                      ) : null}
+                      {selectedGame.source === 'library' && !selectedGame.isInstalled ? (
+                        <div className="signal-chip">
+                          <span>Headset Status</span>
+                          <strong>Not installed on headset</strong>
+                        </div>
+                      ) : null}
+                      {selectedGame.source === 'library' && selectedGame.isInstalled ? (
+                        <div className="signal-chip signal-chip-ready">
+                          <span>Headset Status</span>
+                          <strong>Installed on headset</strong>
+                        </div>
+                      ) : null}
                       {effectiveSelectedGameDetails?.sizeBytes ? (
                         <div className="signal-chip">
                           <span>Footprint</span>
@@ -4911,8 +5540,12 @@ function GamesView(props: {
                 {!selectedGame.isInstalled || selectedGame.hasLibraryUpdate ? (
                   <button
                     className="action-pill"
-                    disabled={!selectedDeviceId || selectedGameInstallBusy}
-                    onClick={() => void installSelectedLocalLibraryItem()}
+                    disabled={
+                      selectedGameInstallBusy ||
+                      (selectedGame.action === 'Upgrade' && !selectedDeviceId)
+                    }
+                    onClick={() => void applySelectedLocalLibraryUpdateAction()}
+                    title={getLibraryGameActionTitle(selectedGame, Boolean(selectedDeviceId))}
                     type="button"
                   >
                     <span className="action-pill-icon" aria-hidden="true">
@@ -4927,7 +5560,7 @@ function GamesView(props: {
                         />
                       </svg>
                     </span>
-                    {selectedGameInstallBusy ? 'Installing…' : selectedGame.hasLibraryUpdate ? 'Install Local Upgrade' : 'Install Now'}
+                    {selectedGameInstallBusy ? 'Installing…' : formatGameActionLabel(selectedGame.action)}
                   </button>
                 ) : null}
                 {selectedGame.isInstalled && selectedGamePrimaryPackageId ? (
@@ -5342,7 +5975,8 @@ function InventoryView(props: {
     onUninstallInstalledApp,
     onBackupInstalledApp
   } = props
-  const [sortMode, setSortMode] = useState<'name' | 'size'>('name')
+  const [sortKey, setSortKey] = useState<InventorySortKey>('title')
+  const [sortDirection, setSortDirection] = useState<InventorySortDirection>('asc')
   const [selectedInventoryPackageId, setSelectedInventoryPackageId] = useState<string | null>(null)
   const [selectedInventoryDetails, setSelectedInventoryDetails] = useState<MetaStoreGameDetails | null>(null)
   const [selectedInventoryDetailsBusy, setSelectedInventoryDetailsBusy] = useState(false)
@@ -5371,18 +6005,38 @@ function InventoryView(props: {
 
     return artwork
   }, new Map<string, string>())
+  const inventorySortValue = getInventorySortModeValue(sortKey, sortDirection)
   const visibleApps = (deviceAppsResponse?.apps ?? [])
     .slice()
     .sort((left, right) => {
-      if (sortMode === 'size') {
+      if (sortKey === 'size') {
         const leftSize = left.totalFootprintBytes ?? -1
         const rightSize = right.totalFootprintBytes ?? -1
         if (leftSize !== rightSize) {
-          return rightSize - leftSize
+          return sortDirection === 'asc' ? leftSize - rightSize : rightSize - leftSize
         }
       }
 
-      return (left.label ?? left.inferredLabel).localeCompare(right.label ?? right.inferredLabel)
+      if (sortKey === 'rating') {
+        const leftSummary = resolveInstalledPackageSummary(
+          left.packageId,
+          packageSummaryByPackageId,
+          installedMetaStoreMatchesByPackageId
+        )
+        const rightSummary = resolveInstalledPackageSummary(
+          right.packageId,
+          packageSummaryByPackageId,
+          installedMetaStoreMatchesByPackageId
+        )
+        const leftRating = leftSummary?.ratingAverage ?? 0
+        const rightRating = rightSummary?.ratingAverage ?? 0
+        if (leftRating !== rightRating) {
+          return sortDirection === 'asc' ? leftRating - rightRating : rightRating - leftRating
+        }
+      }
+
+      const titleComparison = (left.label ?? left.inferredLabel).localeCompare(right.label ?? right.inferredLabel)
+      return sortKey === 'title' && sortDirection === 'desc' ? -titleComparison : titleComparison
     })
   const selectedInventoryApp =
     selectedInventoryPackageId !== null
@@ -5557,26 +6211,48 @@ function InventoryView(props: {
             </span>
             <button
               aria-pressed={displayMode === 'gallery'}
-              className={displayMode === 'gallery' ? 'filter-chip filter-chip-button active inventory-view-toggle' : 'filter-chip filter-chip-button inventory-view-toggle'}
+              className={displayMode === 'gallery' ? 'vrsrc-summary-pill vrsrc-summary-pill-button active inventory-view-toggle' : 'vrsrc-summary-pill vrsrc-summary-pill-button inventory-view-toggle'}
               onClick={onToggleDisplayMode}
               title={displayMode === 'gallery' ? 'Switch to the list-based installed inventory view.' : 'Switch to the gallery-based installed inventory view.'}
               type="button"
             >
               {displayMode === 'gallery' ? 'List View' : 'Grid View'}
             </button>
-            <button
-              className={sortMode === 'size' ? 'filter-chip filter-chip-button active inventory-view-toggle' : 'filter-chip filter-chip-button inventory-view-toggle'}
-              onClick={() => setSortMode((current) => (current === 'name' ? 'size' : 'name'))}
-              title={sortMode === 'size' ? 'Currently sorted by total size, largest first. Click to switch back to name order.' : 'Sort installed apps by total size instead of alphabetical order.'}
-              type="button"
+            <label
+              className="vrsrc-summary-pill vrsrc-summary-pill-select inventory-toolbar-pill"
+              title="Choose the installed inventory sort order."
             >
-              {sortMode === 'size' ? 'Sort: Size' : 'Sort: Name'}
-            </button>
+              <span className="eyebrow">Sort</span>
+              <select
+                aria-label="Installed inventory sort order"
+                className="vrsrc-summary-select"
+                onChange={(event) => {
+                  const nextMode = parseInventorySortModeValue(event.target.value)
+                  if (!nextMode) {
+                    return
+                  }
+
+                  setSortKey(nextMode.key)
+                  setSortDirection(nextMode.direction)
+                }}
+                value={inventorySortValue}
+              >
+                {INVENTORY_SORT_MODE_SEQUENCE.map((option) => (
+                  <option
+                    key={getInventorySortModeValue(option.key, option.direction)}
+                    value={getInventorySortModeValue(option.key, option.direction)}
+                  >
+                    {getInventorySortModeLabel(option.key, option.direction)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
-              className="status-pill status-pill-button inventory-toolbar-pill"
+              className="vrsrc-summary-pill vrsrc-summary-pill-button inventory-toolbar-pill"
               disabled={deviceAppsBusy || !selectedDeviceId}
               onClick={() => (selectedDeviceId ? void onRefreshInstalledApps(selectedDeviceId) : undefined)}
               title="Refresh installed apps, versions, and footprints from the selected headset."
+              type="button"
             >
               {deviceAppsBusy ? 'Loading apps...' : 'Refresh installed apps'}
             </button>
@@ -5600,6 +6276,9 @@ function InventoryView(props: {
                     resolveMetaStoreArtworkUri(summary) ??
                     (vrSrcArtworkByPackageId.get(app.packageId.trim().toLowerCase()) ?? null)
                   const displayLabel = app.label ?? app.inferredLabel
+                  const inventoryGalleryRatingAverage = summary?.ratingAverage ?? null
+                  const inventoryGalleryRatingLabel = formatRatingAverage(inventoryGalleryRatingAverage)
+                  const inventoryGalleryRatingFillPercentage = getRatingFillPercentage(inventoryGalleryRatingAverage)
 
                   return (
                     <article
@@ -5615,6 +6294,23 @@ function InventoryView(props: {
                         <div className="game-gallery-title-banner">
                           <strong>{displayLabel}</strong>
                         </div>
+                        {inventoryGalleryRatingLabel ? (
+                          <div
+                            aria-label={`Storefront rating ${inventoryGalleryRatingLabel}`}
+                            className="game-gallery-rating-strip"
+                            title={`Storefront rating ${inventoryGalleryRatingLabel}`}
+                          >
+                            <div aria-hidden="true" className="games-rating-stars game-gallery-rating-stars">
+                              <span className="games-rating-stars-base">★★★★★</span>
+                              <span
+                                className="games-rating-stars-fill"
+                                style={{ width: `${inventoryGalleryRatingFillPercentage}%` }}
+                              >
+                                ★★★★★
+                              </span>
+                            </div>
+                          </div>
+                        ) : null}
                         <ResilientArtworkImage
                           alt=""
                           artworkKey={app.packageId}
@@ -8242,6 +8938,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onHideHeadsetActionLog,
     onOpenHeadsetActivityReview,
     onCloseHeadsetActivityReview,
+    onCancelQueuedInstall,
     onPauseVrSrcTransfer,
     onResumeVrSrcTransfer,
     onCancelVrSrcTransfer,
@@ -8813,6 +9510,7 @@ export function WireframeShell(props: WireframeShellProps) {
         isOpen={isActionQueueOpen}
         items={queuedLiveQueueItems}
         onClose={() => setIsActionQueueOpen(false)}
+        onCancelQueuedInstall={onCancelQueuedInstall}
         onPauseVrSrcTransfer={onPauseVrSrcTransfer}
         onResumeVrSrcTransfer={onResumeVrSrcTransfer}
         onCancelVrSrcTransfer={onCancelVrSrcTransfer}

@@ -84,6 +84,7 @@ export interface InstalledAppSummary {
   label: string | null
   inferredLabel: string
   version: string | null
+  versionCode: string | null
   totalFootprintBytes: number | null
 }
 
