@@ -2823,7 +2823,7 @@ function GamesView(props: {
         filterTags.push('installed')
       }
 
-      if (hasRemoteLibraryUpdate) {
+      if (hasLibraryUpdate) {
         filterTags.push('updates')
       }
 
@@ -9190,7 +9190,12 @@ export function WireframeShell(props: WireframeShellProps) {
                         </strong>
                       </div>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="signal-chip rail-status-chip">
+                      <span>Headset</span>
+                      <strong>{selectedDevice.label ?? selectedDevice.product ?? selectedDevice.id}</strong>
+                    </div>
+                  )}
                   <span className="rail-session-kicker rail-session-kicker-stacked" title={selectedDeviceStatusTooltip}>
                     <span>Installed</span>
                     <span>Apps &amp; Games</span>
@@ -9198,7 +9203,6 @@ export function WireframeShell(props: WireframeShellProps) {
                   <strong className="rail-session-count" title={selectedDeviceStatusTooltip}>{selectedAppCount}</strong>
                   {railHasStorageData ? (
                     <div className="rail-storage-block">
-                      <span className="rail-storage-kicker">Storage</span>
                       <div className="rail-storage-copy">
                         <span>{formatPercent(railStorageUsagePercent)}</span>
                         <span>{formatBytes(selectedDevice.storageFreeBytes)} free</span>
@@ -9219,11 +9223,11 @@ export function WireframeShell(props: WireframeShellProps) {
                   <strong className="rail-session-title">Device Status</strong>
                 </div>
                 <div className="rail-status-list">
-                  <div className="signal-chip">
+                  <div className="signal-chip rail-status-chip">
                     <span>Devices</span>
                     <strong>{readyDevices} ready</strong>
                   </div>
-                  <div className="signal-chip">
+                  <div className="signal-chip rail-status-chip">
                     <span>Runtime</span>
                     <strong>{deviceStatus}</strong>
                   </div>

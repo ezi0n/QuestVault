@@ -56,7 +56,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.9.14',
+  version: '0.9.20',
   ping: (): string => 'pong',
   app: {
     isPackaged: !process.env.ELECTRON_RENDERER_URL,

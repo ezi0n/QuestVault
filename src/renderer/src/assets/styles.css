@@ -345,7 +345,8 @@ input {
 .rail-session-card {
   display: grid;
   gap: 7px;
-  padding: 13px 14px 11px;
+  width: 100%;
+  padding: 12px 13px;
   border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.07);
   background:
@@ -382,11 +383,14 @@ input {
 .rail-device-hero {
   display: grid;
   gap: 8px;
-  justify-items: start;
+  justify-items: center;
+  margin-top: 2px;
 }
 
 .rail-device-hero .rail-device-indicator-copy {
   padding: 0 2px;
+  justify-items: center;
+  text-align: center;
 }
 
 .rail-session-kicker {
@@ -419,18 +423,8 @@ input {
 
 .rail-storage-block {
   display: grid;
-  gap: 0;
+  gap: 4px;
   margin-top: 5px;
-}
-
-.rail-storage-kicker {
-  display: block;
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .rail-storage-copy {
