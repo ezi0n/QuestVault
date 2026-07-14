@@ -4,7 +4,7 @@
 
 QuestVault is an Electron desktop application for Quest library management, installed-app review, save backup workflows, ADB operations, and vrSrc-assisted remote catalog access. The app uses a typed split between the Electron main process, a preload bridge, and a React renderer.
 
-Current documented application version: `0.9.20`
+Current documented application version: `0.9.21`
 
 ## Runtime Shape
 
@@ -42,6 +42,7 @@ The device service is responsible for headset-facing operations:
 - back up installed APKs
 - reboot connected devices through ADB
 - inspect leftover data under `/sdcard/Android/data` and `/sdcard/Android/obb`, including superseded versioned OBB files that can be left behind after incomplete upgrades or refactors
+- canonicalize Quest storage aliases such as `/sdcard` and `/storage/emulated/0` before comparing superseded OBB candidates
 - write headset action records for connect, install, uninstall, reboot, APK install, and OBB transfer progress/failures
 
 Folder install flows prefer the package ID already stored in the local library index when choosing the OBB destination directory. Filename-based OBB package inference remains a fallback for entries without indexed package metadata.
@@ -109,6 +110,8 @@ It also supports richer on-demand item details such as notes and trailer lookup 
 The vrSrc queue currently allows up to three concurrent download requests while serializing payload preparation and archive extraction to a single active lane. Queued vrSrc work is surfaced back through the renderer’s Live queue so waiting transfers remain visible.
 
 Credential resolution still uses `curl` against Telegram, but vrSrc metadata archive and payload transfers now use `rclone`. QuestVault pins vrSrc HTTP transport requests to the `rclone/v1.72.1` user agent. Managed/system `rclone` versions are checked against a minimum working version so older QuestVault-managed runtimes can be replaced automatically during upgrades.
+
+For Local Library-targeted vrSrc downloads, payload acquisition can fall back from cache extraction to direct final-destination extraction when the cache volume lacks enough free space for the expanded payload. This avoids requiring both an extracted cache copy and an imported library copy on small system volumes.
 
 vrSrc metadata refresh now stages archive download, extraction, and catalog rebuild in temporary paths before promoting them into the live cache. That keeps the previous `meta.7z`, extracted metadata, and catalog available until a replacement has finished successfully, and it avoids flushing the cache when the downloaded archive matches the current one.
 

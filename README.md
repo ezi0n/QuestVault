@@ -82,6 +82,8 @@ vrSrc is no longer working due to the recently introduced changes (no I won't ap
 - Save drawer package IDs now wrap cleanly instead of forcing sideways scroll on long package names.
 - Folder installs now prefer the indexed package ID for OBB destinations, so payloads with asset-style `.obb` filenames can still transfer correctly after APK install.
 - APK install and OBB transfer failures now capture richer ADB output in the headset action log.
+- Orphaned OBB cleanup now de-duplicates Quest storage aliases and only flags genuinely lower-version same-kind OBB files as superseded.
+- vrSrc Local Library downloads can extract directly into the final library destination when the cache volume is too small for the expanded payload.
 - remote download requirement bundles retained for a potential reactivation.
 
 - [QuestVault Screenshots](screenshots/)

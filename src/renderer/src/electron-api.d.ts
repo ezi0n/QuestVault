@@ -41,6 +41,7 @@ import type {
   SettingsPathKey,
   SettingsSelectPathResponse,
   VrSrcCatalogResponse,
+  VrSrcClearBrokenDownloadResponse,
   VrSrcClearCacheResponse,
   VrSrcDownloadToLibraryResponse,
   VrSrcItemDetailsResponse,
@@ -74,7 +75,11 @@ interface ElectronApi {
     listInstalledApps: (serial: string) => Promise<DeviceAppsResponse>
     scanLeftoverData: (serial: string) => Promise<DeviceLeftoverScanResponse>
     deleteLeftoverData: (serial: string, itemId: string) => Promise<DeviceLeftoverDeleteResponse>
-    uninstallInstalledApp: (serial: string, packageId: string) => Promise<DeviceInstalledAppActionResponse>
+    uninstallInstalledApp: (
+      serial: string,
+      packageId: string,
+      options?: { keepData?: boolean }
+    ) => Promise<DeviceInstalledAppActionResponse>
     reboot: (serial: string) => Promise<DeviceRebootResponse>
     backupInstalledApp: (serial: string, packageId: string, backupPath: string) => Promise<DeviceInstalledAppBackupResponse>
     installLocalLibraryItem: (serial: string, itemId: string) => Promise<DeviceLibraryInstallResponse>
@@ -123,6 +128,7 @@ interface ElectronApi {
     getItemDetails: (releaseName: string, gameName: string) => Promise<VrSrcItemDetailsResponse>
     syncCatalog: () => Promise<VrSrcSyncResponse>
     clearCache: () => Promise<VrSrcClearCacheResponse>
+    clearBrokenDownload: (releaseName: string) => Promise<VrSrcClearBrokenDownloadResponse>
     downloadToLibrary: (releaseName: string) => Promise<VrSrcDownloadToLibraryResponse>
     downloadToLibraryAndInstall: (serial: string, releaseName: string) => Promise<VrSrcDownloadAndInstallResponse>
     installNow: (serial: string, releaseName: string) => Promise<VrSrcInstallNowResponse>

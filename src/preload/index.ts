@@ -42,6 +42,7 @@ import type {
   SettingsPathKey,
   SettingsSelectPathResponse,
   VrSrcCatalogResponse,
+  VrSrcClearBrokenDownloadResponse,
   VrSrcClearCacheResponse,
   VrSrcDownloadAndInstallResponse,
   VrSrcDownloadToLibraryResponse,
@@ -56,7 +57,7 @@ import type {
 } from '@shared/types/ipc'
 
 const api = {
-  version: '0.9.20',
+  version: '0.9.21',
   ping: (): string => 'pong',
   app: {
     isPackaged: !process.env.ELECTRON_RENDERER_URL,
@@ -87,8 +88,12 @@ const api = {
       ipcRenderer.invoke('devices:scan-leftover-data', serial),
     deleteLeftoverData: (serial: string, itemId: string): Promise<DeviceLeftoverDeleteResponse> =>
       ipcRenderer.invoke('devices:delete-leftover-data', serial, itemId),
-    uninstallInstalledApp: (serial: string, packageId: string): Promise<DeviceInstalledAppActionResponse> =>
-      ipcRenderer.invoke('devices:uninstall-installed-app', serial, packageId),
+    uninstallInstalledApp: (
+      serial: string,
+      packageId: string,
+      options?: { keepData?: boolean }
+    ): Promise<DeviceInstalledAppActionResponse> =>
+      ipcRenderer.invoke('devices:uninstall-installed-app', serial, packageId, options),
     reboot: (serial: string): Promise<DeviceRebootResponse> => ipcRenderer.invoke('devices:reboot', serial),
     backupInstalledApp: (
       serial: string,
@@ -156,6 +161,8 @@ const api = {
       ipcRenderer.invoke('vrsrc:get-item-details', releaseName, gameName),
     syncCatalog: (): Promise<VrSrcSyncResponse> => ipcRenderer.invoke('vrsrc:sync-catalog'),
     clearCache: (): Promise<VrSrcClearCacheResponse> => ipcRenderer.invoke('vrsrc:clear-cache'),
+    clearBrokenDownload: (releaseName: string): Promise<VrSrcClearBrokenDownloadResponse> =>
+      ipcRenderer.invoke('vrsrc:clear-broken-download', releaseName),
     downloadToLibrary: (releaseName: string): Promise<VrSrcDownloadToLibraryResponse> =>
       ipcRenderer.invoke('vrsrc:download-to-library', releaseName),
     downloadToLibraryAndInstall: (serial: string, releaseName: string): Promise<VrSrcDownloadAndInstallResponse> =>

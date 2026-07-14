@@ -963,7 +963,7 @@ input {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   margin-top: 0;
 }
 
@@ -1643,6 +1643,12 @@ input {
   margin: 0 0 12px;
 }
 
+.leftover-scan-summary {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .leftover-grid {
   display: grid;
   gap: 12px;
@@ -1687,6 +1693,11 @@ input {
   color: rgba(255, 214, 163, 0.98);
   border-color: rgba(255, 172, 114, 0.32);
   background: rgba(116, 69, 40, 0.34);
+}
+
+.empty-state.empty-state-danger {
+  border-color: rgba(255, 127, 127, 0.32);
+  background: rgba(95, 45, 52, 0.24);
 }
 
 .search-shell,
@@ -3216,6 +3227,152 @@ input {
 
 .hidden-entry-dialog {
   width: min(640px, calc(100vw - 48px));
+}
+
+.vrsrc-delta-dialog {
+  width: min(1360px, calc(100vw - 48px));
+  max-height: calc(100vh - 80px);
+  overflow: hidden;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.vrsrc-delta-heading {
+  padding-right: 52px;
+}
+
+.vrsrc-delta-icon-close.close-pill {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  color: transparent;
+}
+
+.vrsrc-delta-icon-close::before,
+.vrsrc-delta-icon-close::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 17px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(230, 237, 248, 0.92);
+}
+
+.vrsrc-delta-icon-close::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.vrsrc-delta-icon-close::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.vrsrc-delta-inline-notice {
+  padding: 12px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 193, 107, 0.2);
+  background: rgba(255, 193, 107, 0.08);
+  color: rgba(255, 234, 204, 0.94);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.vrsrc-delta-table {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.vrsrc-delta-grid {
+  grid-template-columns:
+    minmax(280px, 1fr)
+    minmax(132px, 160px)
+    minmax(86px, 104px)
+    minmax(108px, 126px)
+    minmax(304px, 304px);
+}
+
+.vrsrc-delta-table .table-header {
+  padding: 0 4px 7px;
+  gap: 10px;
+  font-size: 0.72rem;
+}
+
+.vrsrc-delta-results {
+  min-height: 0;
+  max-height: min(520px, calc(100vh - 360px));
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  padding-right: 12px;
+  scrollbar-gutter: stable;
+}
+
+.vrsrc-delta-results::-webkit-scrollbar {
+  width: 10px;
+}
+
+.vrsrc-delta-results::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 999px;
+}
+
+.vrsrc-delta-results::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+.vrsrc-delta-results::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.vrsrc-delta-row {
+  min-height: 104px;
+  padding: 16px 18px;
+  gap: 10px;
+  align-items: center;
+  animation: none;
+}
+
+.vrsrc-delta-actions .action-pill {
+  min-height: 46px;
+  width: auto;
+}
+
+.vrsrc-delta-actions .action-pill:first-child {
+  width: 152px;
+}
+
+.vrsrc-delta-actions .action-pill:last-child {
+  width: 132px;
+}
+
+.vrsrc-delta-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-top: 4px;
+  background: linear-gradient(180deg, transparent, rgba(31, 42, 58, 0.9) 34%, rgba(31, 42, 58, 0.98));
+}
+
+.vrsrc-delta-footer span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.vrsrc-delta-footer .action-pill {
+  min-width: 144px;
+  justify-content: center;
 }
 
 .hidden-entry-field {
@@ -4882,7 +5039,7 @@ button.vrsrc-summary-pill {
     minmax(150px, 186px)
     minmax(90px, 108px)
     minmax(118px, 132px)
-    minmax(248px, 248px);
+    minmax(292px, 292px);
 }
 
 .vrsrc-table-surface .table-header {
@@ -5163,7 +5320,7 @@ button.vrsrc-summary-pill {
 
 .vrsrc-item-actions .action-pill {
   min-height: 34px;
-  width: 120px;
+  width: 142px;
   padding: 8px 14px;
   font-size: 0.84rem;
   justify-content: center;
@@ -5171,6 +5328,20 @@ button.vrsrc-summary-pill {
 
 .vrsrc-item-actions .action-pill:disabled {
   opacity: 0.55;
+}
+
+.vrsrc-item-actions.vrsrc-delta-actions .action-pill {
+  min-height: 46px;
+  padding: 10px 14px;
+  font-size: 0.86rem;
+}
+
+.vrsrc-item-actions.vrsrc-delta-actions .action-pill:first-child {
+  width: 152px;
+}
+
+.vrsrc-item-actions.vrsrc-delta-actions .action-pill:last-child {
+  width: 132px;
 }
 
 .vrsrc-drawer .games-drawer-title-block p {

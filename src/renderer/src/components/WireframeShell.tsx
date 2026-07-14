@@ -45,6 +45,8 @@ interface UiNotice {
   tone: 'info' | 'success' | 'danger'
 }
 
+type HeadsetActivityFilter = 'all' | 'connect' | 'install' | 'uninstall' | 'reboot'
+
 function isHiddenInstalledCompanionPackage(packageId: string): boolean {
   return packageId.startsWith('com.mrf.') || packageId.startsWith('com.meta.') || packageId.startsWith('com.oculus.')
 }
@@ -117,9 +119,10 @@ interface WireframeShellProps {
   headsetActionLogBusy: boolean
   isHeadsetActionLogVisible: boolean
   isHeadsetActivityReviewOpen: boolean
+  headsetActivityReviewInitialFilter: HeadsetActivityFilter
   queueAutoOpenSignal: number
   onHideHeadsetActionLog: () => void
-  onOpenHeadsetActivityReview: () => void
+  onOpenHeadsetActivityReview: (filter?: HeadsetActivityFilter) => void
   onCloseHeadsetActivityReview: () => void
   onCancelQueuedInstall: (itemId: string) => void
   onPauseVrSrcTransfer: (releaseName: string, operation: VrSrcTransferOperation, serial?: string | null) => Promise<void>
@@ -212,6 +215,7 @@ interface WireframeShellProps {
   onSyncVrSrcCatalog: () => Promise<void>
   onDownloadVrSrcToLibrary: (releaseName: string) => Promise<void>
   onDownloadVrSrcToLibraryAndInstall: (releaseName: string) => Promise<void>
+  onClearBrokenVrSrcDownload: (releaseName: string) => Promise<void>
   onInstallVrSrcNow: (releaseName: string) => Promise<void>
   onHiddenEntryRequested: () => Promise<void>
   onRefreshSaveBackups: () => Promise<void>
@@ -2576,6 +2580,7 @@ function GamesView(props: {
   onSyncVrSrcCatalog: () => Promise<void>
   onDownloadVrSrcToLibrary: (releaseName: string) => Promise<void>
   onDownloadVrSrcToLibraryAndInstall: (releaseName: string) => Promise<void>
+  onClearBrokenVrSrcDownload: (releaseName: string) => Promise<void>
   onInstallVrSrcNow: (releaseName: string) => Promise<void>
   onHiddenEntryRequested: () => Promise<void>
   onSaveDeviceUserName: (userName: string) => Promise<void>
@@ -2620,6 +2625,7 @@ function GamesView(props: {
     onSyncVrSrcCatalog,
     onDownloadVrSrcToLibrary,
     onDownloadVrSrcToLibraryAndInstall,
+    onClearBrokenVrSrcDownload,
     onInstallVrSrcNow,
     onHiddenEntryRequested,
     onSaveDeviceUserName,
@@ -3201,6 +3207,10 @@ function GamesView(props: {
           libraryItem.packageIds.some((packageId) => packageId.toLowerCase() === item.packageName.toLowerCase())
       )
       .sort((left, right) => compareVersionValues(right.libraryVersionCode, left.libraryVersionCode))[0] ?? null
+  const brokenVrSrcDownloadByReleaseName = (vrSrcCatalog?.brokenDownloads ?? []).reduce(
+    (summary, brokenDownload) => summary.set(brokenDownload.releaseName, brokenDownload),
+    new Map<string, NonNullable<VrSrcCatalogResponse['brokenDownloads']>[number]>()
+  )
   const filteredVrSrcEntries = filteredVrSrcItems.map((item) => {
     const itemStatus = vrSrcItemStatusByReleaseName.get(item.releaseName)
     const matchingLibraryItem = getMatchingVrSrcLibraryItem(item)
@@ -3208,11 +3218,25 @@ function GamesView(props: {
     const hasRemoteUpdate = itemStatus?.hasRemoteUpdate ?? false
     const isInstalled = itemStatus?.isInstalledOnHeadset ?? installedPackageIds.has(item.packageName.toLowerCase())
     const isInLibrary = itemStatus?.isInLibrary ?? false
+    const brokenDownload = brokenVrSrcDownloadByReleaseName.get(item.releaseName) ?? null
+    const isBrokenDownload = brokenDownload !== null
     const actionBusy = vrSrcActionBusyReleaseNames.includes(item.releaseName)
     const isUpgrade = hasRemoteUpdate && isInstalled
     const isUpdate = hasRemoteUpdate && !isInstalled
-    const statusLabel = isUpgrade ? 'Upgrade' : isUpdate ? 'Update' : isInstalled ? 'Installed' : isInLibrary ? 'In Library' : 'New'
-    const statusClassName = hasRemoteUpdate
+    const statusLabel = isBrokenDownload
+      ? 'Broken Release'
+      : isUpgrade
+        ? 'Upgrade'
+        : isUpdate
+          ? 'Update'
+          : isInstalled
+            ? 'Installed'
+            : isInLibrary
+              ? 'In Library'
+              : 'New'
+    const statusClassName = isBrokenDownload
+      ? 'status-pill status-danger'
+      : hasRemoteUpdate
       ? 'status-pill status-pending'
       : isInstalled
         ? 'status-pill status-ready library-status-pill'
@@ -3228,6 +3252,8 @@ function GamesView(props: {
       isUpdate,
       isInstalled,
       isInLibrary,
+      isBrokenDownload,
+      brokenDownload,
       actionBusy,
       statusLabel,
       statusClassName,
@@ -4412,7 +4438,7 @@ function GamesView(props: {
                     <span>Action</span>
                   </div>
                   <div className="table-stack vrsrc-results-scroll">
-                  {filteredVrSrcEntries.map(({ item, highestLibraryVersion, actionBusy, statusLabel, statusClassName, displayRemoteVersion }) => (
+                  {filteredVrSrcEntries.map(({ item, highestLibraryVersion, isBrokenDownload, brokenDownload, actionBusy, statusLabel, statusClassName, displayRemoteVersion }) => (
                       <article
                         className={
                           selectedVrSrcReleaseName === item.releaseName
@@ -4473,33 +4499,64 @@ function GamesView(props: {
                           <span className={statusClassName}>{statusLabel}</span>
                         </div>
                         <div className="vrsrc-item-actions">
-                          <button
-                            className="action-pill action-pill-ghost"
-                            disabled={actionBusy}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void onDownloadVrSrcToLibrary(item.releaseName)
-                            }}
-                            type="button"
-                          >
-                            {actionBusy ? 'Working…' : 'Add to Library'}
-                          </button>
-                          <button
-                            className="action-pill action-pill-ghost"
-                            disabled={actionBusy || !selectedDeviceId}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void onInstallVrSrcNow(item.releaseName)
-                            }}
-                            title={
-                              selectedDeviceId
-                                ? 'Download this vrSrc payload and install it to the selected headset'
-                                : 'Select a headset first to install directly from vrSrc'
-                            }
-                            type="button"
-                          >
-                            Install Now
-                          </button>
+                          {isBrokenDownload ? (
+                            <>
+                              <button
+                                className="action-pill action-pill-ghost"
+                                disabled={actionBusy}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onDownloadVrSrcToLibrary(item.releaseName)
+                                }}
+                                title={brokenDownload?.details ?? 'Retry the vrSrc release and replace the incomplete payload'}
+                                type="button"
+                              >
+                                {actionBusy ? 'Working…' : 'Retry Download'}
+                              </button>
+                              <button
+                                className="action-pill action-pill-danger"
+                                disabled={actionBusy}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onClearBrokenVrSrcDownload(item.releaseName)
+                                }}
+                                title="Remove the incomplete vrSrc payload files while keeping this release marked broken"
+                                type="button"
+                              >
+                                Clear Broken Files
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="action-pill action-pill-ghost"
+                                disabled={actionBusy}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onDownloadVrSrcToLibrary(item.releaseName)
+                                }}
+                                type="button"
+                              >
+                                {actionBusy ? 'Working…' : 'Add to Library'}
+                              </button>
+                              <button
+                                className="action-pill action-pill-ghost"
+                                disabled={actionBusy || !selectedDeviceId}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onInstallVrSrcNow(item.releaseName)
+                                }}
+                                title={
+                                  selectedDeviceId
+                                    ? 'Download this vrSrc payload and install it to the selected headset'
+                                    : 'Select a headset first to install directly from vrSrc'
+                                }
+                                type="button"
+                              >
+                                Install Now
+                              </button>
+                            </>
+                          )}
                         </div>
                       </article>
                     ))}
@@ -7526,6 +7583,7 @@ function SettingsView(props: {
   onOpenManagedDependencies: () => void
   onOpenLibraryDiagnostics: (filter?: 'all' | 'installReady' | 'missing') => void
   onOpenOrphanedDataDiscovery: () => void
+  onOpenHeadsetActivityReview: (filter?: HeadsetActivityFilter) => void
   onChooseSettingsPath: (key: SettingsPathKey) => Promise<void>
   onClearSettingsPath: (key: SettingsPathKey) => Promise<void>
   onRescanLocalLibrary: () => Promise<void>
@@ -7552,6 +7610,7 @@ function SettingsView(props: {
     onOpenManagedDependencies,
     onOpenLibraryDiagnostics,
     onOpenOrphanedDataDiscovery,
+    onOpenHeadsetActivityReview,
     onChooseSettingsPath,
     onClearSettingsPath,
     onRescanLocalLibrary,
@@ -7803,6 +7862,14 @@ function SettingsView(props: {
               >
                 Orphaned Data Discovery
               </button>
+              <button
+                className="status-pill status-pill-button"
+                onClick={() => onOpenHeadsetActivityReview('install')}
+                title="Open the persisted headset install log with install failures, steps, and metadata"
+                type="button"
+              >
+                Install Activity Log
+              </button>
             </div>
           </div>
           <div className="settings-maintenance-history settings-maintenance-history-pill">
@@ -7993,46 +8060,54 @@ function OrphanedDataContent(props: {
             and superseded versioned OBB files.
           </p>
         </div>
-      ) : deviceLeftoverResponse?.items.length ? (
-        <div className="leftover-grid">
-          {deviceLeftoverResponse.items.map((item) => (
-            <article className="leftover-card" key={item.id}>
-              <div className="leftover-card-top">
-                <div className="row-title">
-                  <strong>{item.packageId}</strong>
-                  <p>{item.absolutePath}</p>
-                  {item.details ? <p className="leftover-card-note">{item.details}</p> : null}
-                  {item.deleteBlockedReason ? <p className="leftover-card-note">{item.deleteBlockedReason}</p> : null}
-                </div>
-                <div className="inline-actions">
-                  <span className="meta-chip">{item.location === 'superseded-obb' ? 'SUPERSEDED OBB' : item.location.toUpperCase()}</span>
-                  <span className="meta-chip">{formatBytes(item.sizeBytes)}</span>
-                  {item.deleteBlocked ? <span className="meta-chip leftover-protected-chip">Protected</span> : null}
-                  <button
-                    className="action-pill action-pill-danger"
-                    disabled={item.deleteBlocked || deviceLeftoverBusyItemId === item.id}
-                    onClick={() => void onDeleteLeftoverData(item.id)}
-                    title={
-                      item.deleteBlocked
-                        ? 'Quest is blocking deletion of this leftover path through standard ADB.'
-                        : item.location === 'superseded-obb'
-                          ? 'Delete this superseded versioned OBB file from the headset.'
-                          : 'Delete this orphaned Android/data or Android/obb entry from the headset.'
-                    }
-                  >
-                    {item.deleteBlocked
-                      ? 'Protected'
-                      : deviceLeftoverBusyItemId === item.id
-                        ? 'Deleting...'
-                        : item.location === 'superseded-obb'
-                          ? 'Delete OBB'
-                          : 'Delete leftover'}
-                  </button>
-                </div>
-              </div>
-            </article>
-          ))}
+      ) : deviceLeftoverResponse?.runtime.status === 'error' ? (
+        <div className="empty-state empty-state-danger">
+          <strong>Leftover scan failed.</strong>
+          <p>{deviceLeftoverMessage ?? deviceLeftoverResponse.message}</p>
         </div>
+      ) : deviceLeftoverResponse?.items.length ? (
+        <>
+          {deviceLeftoverMessage ? <p className="leftover-scan-summary">{deviceLeftoverMessage}</p> : null}
+          <div className="leftover-grid">
+            {deviceLeftoverResponse.items.map((item) => (
+              <article className="leftover-card" key={item.id}>
+                <div className="leftover-card-top">
+                  <div className="row-title">
+                    <strong>{item.packageId}</strong>
+                    <p>{item.absolutePath}</p>
+                    {item.details ? <p className="leftover-card-note">{item.details}</p> : null}
+                    {item.deleteBlockedReason ? <p className="leftover-card-note">{item.deleteBlockedReason}</p> : null}
+                  </div>
+                  <div className="inline-actions">
+                    <span className="meta-chip">{item.location === 'superseded-obb' ? 'SUPERSEDED OBB' : item.location.toUpperCase()}</span>
+                    <span className="meta-chip">{formatBytes(item.sizeBytes)}</span>
+                    {item.deleteBlocked ? <span className="meta-chip leftover-protected-chip">Protected</span> : null}
+                    <button
+                      className="action-pill action-pill-danger"
+                      disabled={item.deleteBlocked || deviceLeftoverBusyItemId === item.id}
+                      onClick={() => void onDeleteLeftoverData(item.id)}
+                      title={
+                        item.deleteBlocked
+                          ? 'Quest is blocking deletion of this leftover path through standard ADB.'
+                          : item.location === 'superseded-obb'
+                            ? 'Delete this superseded versioned OBB file from the headset.'
+                            : 'Delete this orphaned Android/data or Android/obb entry from the headset.'
+                      }
+                    >
+                      {item.deleteBlocked
+                        ? 'Protected'
+                        : deviceLeftoverBusyItemId === item.id
+                          ? 'Deleting...'
+                          : item.location === 'superseded-obb'
+                            ? 'Delete OBB'
+                            : 'Delete leftover'}
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </>
       ) : (
         <div className="empty-state">
           <strong>No cleanup candidates found.</strong>
@@ -8275,12 +8350,20 @@ function InstalledAppHistoryDialog(props: {
 function HeadsetActivityDialog(props: {
   isOpen: boolean
   onClose: () => void
+  initialFilter: HeadsetActivityFilter
   headsetActionLog: HeadsetActionLogResponse | null
   headsetActionLogBusy: boolean
 }) {
-  const { isOpen, onClose, headsetActionLog, headsetActionLogBusy } = props
-  const [activityFilter, setActivityFilter] = useState<'all' | 'connect' | 'install' | 'uninstall' | 'reboot'>('all')
+  const { isOpen, onClose, initialFilter, headsetActionLog, headsetActionLogBusy } = props
+  const [activityFilter, setActivityFilter] = useState<HeadsetActivityFilter>(initialFilter)
   const [expandedActivityId, setExpandedActivityId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (isOpen) {
+      setActivityFilter(initialFilter)
+      setExpandedActivityId(null)
+    }
+  }, [initialFilter, isOpen])
 
   function formatActivityAction(action: HeadsetActionLogRecord['action']): string {
     if (action === 'connect') {
@@ -8934,6 +9017,7 @@ export function WireframeShell(props: WireframeShellProps) {
     headsetActionLogBusy,
     isHeadsetActionLogVisible,
     isHeadsetActivityReviewOpen,
+    headsetActivityReviewInitialFilter,
     queueAutoOpenSignal,
     onHideHeadsetActionLog,
     onOpenHeadsetActivityReview,
@@ -9029,6 +9113,7 @@ export function WireframeShell(props: WireframeShellProps) {
     onSyncVrSrcCatalog,
     onDownloadVrSrcToLibrary,
     onDownloadVrSrcToLibraryAndInstall,
+    onClearBrokenVrSrcDownload,
     onInstallVrSrcNow,
     onHiddenEntryRequested,
     onRefreshSaveBackups,
@@ -9362,6 +9447,7 @@ export function WireframeShell(props: WireframeShellProps) {
               onSyncVrSrcCatalog={onSyncVrSrcCatalog}
               onDownloadVrSrcToLibrary={onDownloadVrSrcToLibrary}
               onDownloadVrSrcToLibraryAndInstall={onDownloadVrSrcToLibraryAndInstall}
+              onClearBrokenVrSrcDownload={onClearBrokenVrSrcDownload}
               onInstallVrSrcNow={onInstallVrSrcNow}
               onHiddenEntryRequested={onHiddenEntryRequested}
               onSaveDeviceUserName={onSaveDeviceUserName}
@@ -9464,6 +9550,7 @@ export function WireframeShell(props: WireframeShellProps) {
                 setIsLibraryDiagnosticsOpen(true)
               }}
               onOpenOrphanedDataDiscovery={() => setIsOrphanedDataOpen(true)}
+              onOpenHeadsetActivityReview={onOpenHeadsetActivityReview}
               onChooseSettingsPath={onChooseSettingsPath}
               onClearSettingsPath={onClearSettingsPath}
               onRescanLocalLibrary={onRescanLocalLibrary}
@@ -9533,6 +9620,7 @@ export function WireframeShell(props: WireframeShellProps) {
       <HeadsetActivityDialog
         isOpen={isHeadsetActivityReviewOpen}
         onClose={onCloseHeadsetActivityReview}
+        initialFilter={headsetActivityReviewInitialFilter}
         headsetActionLog={headsetActionLog}
         headsetActionLogBusy={headsetActionLogBusy}
       />

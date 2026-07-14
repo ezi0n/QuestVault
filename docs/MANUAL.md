@@ -1,6 +1,6 @@
 # User Manual
 
-Current documented application version: `0.9.20`
+Current documented application version: `0.9.21`
 
 ## Overview
 
@@ -94,6 +94,8 @@ The current vrSrc flow lets you:
 During sync, QuestVault excludes vrSrc rows that advertise a non-positive footprint, such as `0 MB`, so placeholder or patch-only source entries are not counted, shown, or offered as downloadable catalog items.
 
 The vrSrc `Updates` summary pill shows the remote update count only. Use the global `Updates` filter in the Apps & Games filter row when you want to display only update candidates.
+
+When a vrSrc archive cannot be safely extracted in QuestVault's cache volume because that volume is short on free space, downloads that target the Local Library can extract directly into the final library folder instead. QuestVault then skips the duplicate cache-to-library copy and leaves the cache clean after import.
 
 For download, update, and install actions, the vrSrc drawer now closes immediately so the transfer or install state is visible in `Live` right away. If the selected payload is already in the Local Library or cannot proceed, those outcomes are also surfaced through `Live` instead of only inline workspace banners.
 
@@ -207,6 +209,8 @@ Open `Orphaned OBB / Data` to:
 - scan headset leftovers after refactors or incomplete upgrades
 - inspect orphaned paths and superseded versioned OBB files
 - delete leftover `Android/data` and `Android/obb` folders from apps that are no longer installed so you can reclaim that space
+
+Superseded OBB detection treats `/sdcard` and `/storage/emulated/0` as the same Quest storage path and only flags lower-version OBB files when a newer same-kind `main` or `patch` OBB is present. Scan failures are shown as errors instead of being folded into the empty state.
 
 ### Headset App Scan History
 

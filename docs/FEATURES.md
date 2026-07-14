@@ -75,6 +75,7 @@
 - Long package identifiers in the Game Saves drawer now wrap instead of causing horizontal drawer scroll.
 - Local folder installs prefer indexed package IDs for OBB destinations, improving installs for payloads whose `.obb` files do not encode package names.
 - APK install and OBB transfer failures record richer ADB output in the headset action log.
+- Orphaned OBB cleanup de-duplicates Quest storage aliases and only flags lower-version same-kind OBB files as superseded.
 - Headset activity logging also captures reboot events for device maintenance workflows.
 
 ## vrSrc-Specific Features
@@ -93,6 +94,7 @@
 - Packaged builds now repair stale staged vrSrc artwork references and route local vrSrc artwork through a packaged-safe asset path so synced cards and drawers can display thumbnails reliably on clean installs.
 - Older managed/system `rclone` runtimes are now checked and refreshed automatically when they fall below the minimum working version for vrSrc sync.
 - vrSrc catalog sync excludes non-downloadable `0 MB` rows before counts and browse results are produced.
+- vrSrc Local Library downloads can extract directly into the final library destination when the cache volume is too small for the expanded payload.
 
 ## Maintenance Features
 

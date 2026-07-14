@@ -514,9 +514,28 @@ export interface VrSrcCatalogItem {
   note: string | null
 }
 
+export interface VrSrcBrokenDownload {
+  releaseName: string
+  detectedAt: string | null
+  partialFiles: string[]
+  missingFiles: string[]
+  sizeMismatches: Array<{ fileName: string; expectedBytes: number; actualBytes: number }>
+  details: string | null
+}
+
 export interface VrSrcCatalogResponse {
   syncedAt: string | null
   items: VrSrcCatalogItem[]
+  brokenDownloads?: VrSrcBrokenDownload[]
+}
+
+export interface VrSrcSyncDelta {
+  hasBaseline: boolean
+  baselineSyncedAt: string | null
+  syncedAt: string | null
+  newItems: VrSrcCatalogItem[]
+  knownCount: number
+  versionChangeCount: number
 }
 
 export interface VrSrcItemDetailsResponse {
@@ -530,11 +549,20 @@ export interface VrSrcSyncResponse {
   message: string
   details: string | null
   usedCachedCatalog: boolean
+  delta?: VrSrcSyncDelta | null
   status: VrSrcStatusResponse
   catalog: VrSrcCatalogResponse
 }
 
 export interface VrSrcClearCacheResponse {
+  success: boolean
+  message: string
+  details: string | null
+  status: VrSrcStatusResponse
+  catalog: VrSrcCatalogResponse
+}
+
+export interface VrSrcClearBrokenDownloadResponse {
   success: boolean
   message: string
   details: string | null

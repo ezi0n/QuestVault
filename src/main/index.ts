@@ -303,8 +303,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('devices:delete-leftover-data', async (_event, serial: string, itemId: string) =>
     deviceService.deleteLeftoverData(serial, itemId)
   )
-  ipcMain.handle('devices:uninstall-installed-app', async (_event, serial: string, packageId: string) =>
-    deviceService.uninstallInstalledApp(serial, packageId)
+  ipcMain.handle('devices:uninstall-installed-app', async (_event, serial: string, packageId: string, options?: { keepData?: boolean }) =>
+    deviceService.uninstallInstalledApp(serial, packageId, options)
   )
   ipcMain.handle('devices:reboot', async (_event, serial: string) => deviceService.rebootDevice(serial))
   ipcMain.handle('devices:backup-installed-app', async (_event, serial: string, packageId: string, backupPath: string) =>
@@ -406,6 +406,9 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle('vrsrc:sync-catalog', async () => vrSrcService.syncCatalog())
   ipcMain.handle('vrsrc:clear-cache', async () => vrSrcService.clearCache())
+  ipcMain.handle('vrsrc:clear-broken-download', async (_event, releaseName: string) =>
+    vrSrcService.clearBrokenDownload(releaseName)
+  )
   ipcMain.handle('vrsrc:download-to-library', async (_event, releaseName: string) =>
     vrSrcService.downloadToLibrary(releaseName)
   )

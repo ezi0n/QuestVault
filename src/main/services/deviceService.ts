@@ -31,6 +31,16 @@ import { headsetActionLogService, type HeadsetActionContext } from './headsetAct
 import { metaStoreService } from './metaStoreService'
 
 const execFileAsync = promisify(execFile)
+type ApkReaderModule = {
+  open(path: string): Promise<{
+    readManifest(): Promise<{
+      package?: string
+      versionCode?: string | number
+    }>
+  }>
+}
+
+const ApkReader: ApkReaderModule = require('@devicefarmer/adbkit-apkreader')
 const PLATFORM_PACKAGE_PREFIXES = ['com.android.', 'com.oculus.', 'com.meta.', 'com.facebook.']
 const HIDDEN_INSTALLED_COMPANION_PACKAGE_PREFIXES = ['com.mrf.', 'com.meta.', 'com.oculus.']
 const INSTALLED_APP_LIST_TIMEOUT_MS = 15_000
@@ -78,10 +88,34 @@ interface StoredInstalledAppScanSnapshot {
 interface VersionedObbFile {
   fileName: string
   absolutePath: string
+  canonicalPath: string
   packageId: string
   kind: 'main' | 'patch'
   versionCode: number
   sizeBytes: number | null
+}
+
+interface ApkInstallMetadata {
+  packageName: string | null
+  versionCode: string | null
+}
+
+interface ApkInstallResult {
+  success: boolean
+  details: string | null
+  packageName: string | null
+  usedPreservedDataRetry: boolean
+  preflightDetails: string | null
+}
+
+interface UpgradeSpaceEstimate {
+  packageName: string
+  incomingBytes: number
+  installedFootprintBytes: number
+  effectiveRequiredBytes: number
+  freeBytes: number | null
+  warning: boolean
+  message: string
 }
 
 const INSTALLED_APP_SCAN_HISTORY_VERSION = 2
@@ -89,6 +123,7 @@ const INSTALLED_APP_SCAN_HISTORY_LIMIT_PER_SERIAL = 90
 
 class DeviceService {
   private catalogNameMapPromise: Promise<Map<string, string>> | null = null
+  private apkMetadataParserUnavailable = false
   private blockedLeftoverDeletes = new Map<string, string>()
   private installQueue: Promise<void> = Promise.resolve()
   private installQueueDepth = 0
@@ -1039,15 +1074,22 @@ class DeviceService {
     }
   }
 
-  async uninstallInstalledApp(serial: string, packageId: string): Promise<DeviceInstalledAppActionResponse> {
+  async uninstallInstalledApp(
+    serial: string,
+    packageId: string,
+    options?: { keepData?: boolean }
+  ): Promise<DeviceInstalledAppActionResponse> {
     const runtime = await this.resolveRuntime()
     const normalizedSerial = serial.trim()
     const normalizedPackageId = packageId.trim()
+    const keepData = Boolean(options?.keepData)
     const action = await this.startHeadsetAction('uninstall', {
       serial: normalizedSerial || null,
       packageName: normalizedPackageId || null,
       message: normalizedPackageId
-        ? `Starting uninstall for ${normalizedPackageId}.`
+        ? keepData
+          ? `Starting repair removal for ${normalizedPackageId} while keeping app data.`
+          : `Starting uninstall for ${normalizedPackageId}.`
         : 'Starting uninstall without a package name.'
     })
 
@@ -1098,16 +1140,22 @@ class DeviceService {
     }
 
     try {
-      await this.logHeadsetActionStep(action, `Running uninstall for ${normalizedPackageId}.`, {
+      await this.logHeadsetActionStep(action, keepData ? `Running keep-data uninstall for ${normalizedPackageId}.` : `Running uninstall for ${normalizedPackageId}.`, {
         packageName: normalizedPackageId
       })
-      const { stdout, stderr } = await execFileAsync(runtime.adbPath, ['-s', normalizedSerial, 'uninstall', normalizedPackageId], {
+      const uninstallArgs = keepData
+        ? ['-s', normalizedSerial, 'uninstall', '-k', normalizedPackageId]
+        : ['-s', normalizedSerial, 'uninstall', normalizedPackageId]
+      const { stdout, stderr } = await execFileAsync(runtime.adbPath, uninstallArgs, {
         maxBuffer: 10 * 1024 * 1024
       })
       const output = [stdout, stderr].filter(Boolean).join('\n').trim()
-      const message = `Uninstalled ${normalizedPackageId}.`
+      const message = keepData
+        ? `Removed ${normalizedPackageId} while keeping app data.`
+        : `Uninstalled ${normalizedPackageId}.`
       await this.completeHeadsetAction(action, output || message, {
-        packageName: normalizedPackageId
+        packageName: normalizedPackageId,
+        keepData
       })
 
       return {
@@ -1976,14 +2024,20 @@ class DeviceService {
       .filter((item) => Boolean(item.packageId) && Boolean(item.absolutePath))
   }
 
+  private normalizeAndroidStoragePath(path: string): string {
+    const normalizedPath = path.trim().replace(/\\/g, '/').replace(/\/+/g, '/')
+    return normalizedPath.replace(/^\/storage\/emulated\/0(?=\/|$)/i, '/sdcard').toLowerCase()
+  }
+
   private async readSupersededVersionedObbFiles(
     adbPath: string,
     serial: string,
     installedPackages: Set<string>
   ): Promise<DeviceLeftoverItem[]> {
     const shellScript =
-      'if [ -d "/sdcard/Android/obb" ]; then ' +
-      'for dir in /sdcard/Android/obb/*; do ' +
+      'for root in /sdcard/Android/obb /storage/emulated/0/Android/obb; do ' +
+      '[ -d "$root" ] || continue; ' +
+      'for dir in "$root"/*; do ' +
       '[ -d "$dir" ] || continue; ' +
       'pkg=${dir##*/}; ' +
       'for file in "$dir"/*.obb; do ' +
@@ -1995,7 +2049,7 @@ class DeviceService {
       'echo "$pkg|$file|$name|${size:-}";; ' +
       'esac; ' +
       'done; ' +
-      'done; fi'
+      'done; done'
 
     const { stdout } = await execFileAsync(adbPath, ['-s', serial, 'shell', shellScript], {
       maxBuffer: 10 * 1024 * 1024
@@ -2015,6 +2069,7 @@ class DeviceService {
         return {
           fileName,
           absolutePath,
+          canonicalPath: this.normalizeAndroidStoragePath(absolutePath),
           packageId,
           kind: match[1].toLowerCase() === 'patch' ? 'patch' : 'main',
           versionCode: Number.parseInt(match[2], 10),
@@ -2024,11 +2079,25 @@ class DeviceService {
       .filter((item): item is VersionedObbFile => Boolean(item))
 
     const filesByPackage = new Map<string, VersionedObbFile[]>()
+    const seenFileKeys = new Set<string>()
     for (const file of parsedFiles) {
       const normalizedPackageId = file.packageId.trim().toLowerCase()
       if (!installedPackages.has(normalizedPackageId)) {
         continue
       }
+
+      const fileKey = [
+        normalizedPackageId,
+        file.kind,
+        String(file.versionCode),
+        file.fileName.trim().toLowerCase(),
+        file.canonicalPath
+      ].join('::')
+      if (seenFileKeys.has(fileKey)) {
+        continue
+      }
+      seenFileKeys.add(fileKey)
+
       const existing = filesByPackage.get(normalizedPackageId) ?? []
       existing.push(file)
       filesByPackage.set(normalizedPackageId, existing)
@@ -2047,9 +2116,12 @@ class DeviceService {
         if (kindFiles.length < 2) {
           continue
         }
-        const sorted = [...kindFiles].sort((left, right) => right.versionCode - left.versionCode)
-        const current = sorted[0]
-        for (const stale of sorted.slice(1)) {
+        const currentVersionCode = Math.max(...kindFiles.map((file) => file.versionCode))
+        const currentFiles = kindFiles.filter((file) => file.versionCode === currentVersionCode)
+        const retainedFileNames = Array.from(new Set(currentFiles.map((file) => file.fileName))).sort((left, right) =>
+          left.localeCompare(right, undefined, { sensitivity: 'base' })
+        )
+        for (const stale of kindFiles.filter((file) => file.versionCode < currentVersionCode)) {
           items.push({
             id: `superseded-obb:${stale.packageId}:${stale.fileName}`,
             packageId: stale.packageId,
@@ -2058,7 +2130,7 @@ class DeviceService {
             sizeBytes: stale.sizeBytes,
             deleteBlocked: false,
             deleteBlockedReason: null,
-            details: `Superseded ${kind.toUpperCase()} OBB ${stale.fileName}. Current retained file: ${current.fileName}.`
+            details: `Superseded ${kind.toUpperCase()} OBB ${stale.fileName}. Current retained ${retainedFileNames.length === 1 ? 'file' : 'files'}: ${retainedFileNames.join(', ')}.`
           })
         }
       }
@@ -2123,44 +2195,448 @@ class DeviceService {
     return `${serial.trim().toLowerCase()}::${absolutePath.trim().toLowerCase()}`
   }
 
+  private async readApkInstallMetadata(apkPath: string): Promise<ApkInstallMetadata> {
+    if (this.apkMetadataParserUnavailable) {
+      return {
+        packageName: null,
+        versionCode: null
+      }
+    }
+
+    try {
+      const reader = await ApkReader.open(apkPath)
+      const manifest = await reader.readManifest()
+
+      return {
+        packageName: typeof manifest.package === 'string' && manifest.package.trim() ? manifest.package.trim() : null,
+        versionCode:
+          manifest.versionCode !== undefined && manifest.versionCode !== null
+            ? String(manifest.versionCode)
+            : null
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /Cannot find module|ERR_REQUIRE_ESM|not a function/i.test(error.message)
+      ) {
+        this.apkMetadataParserUnavailable = true
+      }
+
+      return {
+        packageName: null,
+        versionCode: null
+      }
+    }
+  }
+
+  private isInsufficientStorageInstallFailure(details: string): boolean {
+    return /INSTALL_FAILED_INSUFFICIENT_STORAGE|insufficient storage|not enough (?:free )?space|no space left/i.test(details)
+  }
+
+  private async runReplaceInstall(adbPath: string, serial: string, apkPath: string): Promise<string | null> {
+    const { stdout, stderr } = await execFileAsync(adbPath, ['-s', serial, 'install', '-r', '-g', apkPath], {
+      maxBuffer: 10 * 1024 * 1024
+    })
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+
+    return output || null
+  }
+
+  private async uninstallPackageKeepingData(
+    adbPath: string,
+    serial: string,
+    packageName: string
+  ): Promise<string | null> {
+    const { stdout, stderr } = await execFileAsync(adbPath, ['-s', serial, 'uninstall', '-k', packageName], {
+      maxBuffer: 10 * 1024 * 1024
+    })
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+
+    return output || null
+  }
+
+  private shellQuote(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`
+  }
+
+  private formatByteCount(value: number): string {
+    if (!Number.isFinite(value) || value <= 0) {
+      return '0 B'
+    }
+
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let size = value
+    let unitIndex = 0
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024
+      unitIndex += 1
+    }
+
+    return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
+  }
+
+  private async readRemoteFileSizeBytes(
+    adbPath: string,
+    serial: string,
+    remotePath: string
+  ): Promise<number | null> {
+    const output = await this.runShellCommand(
+      adbPath,
+      serial,
+      `stat -c %s ${this.shellQuote(remotePath)} 2>/dev/null || wc -c < ${this.shellQuote(remotePath)} 2>/dev/null || true`
+    )
+    const parsed = Number.parseInt(output.trim().split(/\s+/)[0] ?? '', 10)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  private async readInstalledPackageFootprintBytes(
+    adbPath: string,
+    serial: string,
+    packageName: string
+  ): Promise<number> {
+    const quotedPackage = this.shellQuote(packageName)
+    const shellScript =
+      `pkg=${quotedPackage}; ` +
+      'total=0; ' +
+      'pm_path=$(pm path "$pkg" 2>/dev/null | head -n 1 | sed "s/^package://"); ' +
+      'code_dir=${pm_path%/base.apk}; ' +
+      'for path in "$code_dir" "/sdcard/Android/obb/$pkg" "/sdcard/Android/data/$pkg"; do ' +
+      '[ -n "$path" ] || continue; ' +
+      'size=$(du -sk "$path" 2>/dev/null | cut -f1); ' +
+      'if [ -n "$size" ]; then total=$((total + size)); fi; ' +
+      'done; ' +
+      'echo "$total"'
+    const output = await this.runShellCommand(adbPath, serial, shellScript)
+    const parsedKilobytes = Number.parseInt(output.trim().split(/\s+/)[0] ?? '', 10)
+    return Number.isFinite(parsedKilobytes) ? parsedKilobytes * 1024 : 0
+  }
+
+  private async logUpgradeSpaceEstimate(
+    adbPath: string,
+    serial: string,
+    packageName: string | null,
+    incomingBytes: number | null,
+    action?: HeadsetActionContext | null
+  ): Promise<UpgradeSpaceEstimate | null> {
+    if (!packageName || !incomingBytes || incomingBytes <= 0) {
+      return null
+    }
+
+    const installedPackages = await this.readInstalledPackageIds(adbPath, serial)
+    if (!installedPackages.has(packageName.toLowerCase())) {
+      return null
+    }
+
+    const [storageInfo, installedFootprintBytes] = await Promise.all([
+      this.readStorageInfo(adbPath, serial).catch(() => null),
+      this.readInstalledPackageFootprintBytes(adbPath, serial, packageName).catch(() => 0)
+    ])
+    const effectiveRequiredBytes = Math.max(0, incomingBytes - installedFootprintBytes)
+    const freeBytes = storageInfo?.freeBytes ?? null
+    const warning = freeBytes !== null && effectiveRequiredBytes > freeBytes
+    const message = warning
+      ? `Upgrade may need ${this.formatByteCount(effectiveRequiredBytes)} but the headset reports ${this.formatByteCount(freeBytes)} free.`
+      : `Upgrade space estimate: ${this.formatByteCount(effectiveRequiredBytes)} additional space needed.`
+    const estimate: UpgradeSpaceEstimate = {
+      packageName,
+      incomingBytes,
+      installedFootprintBytes,
+      effectiveRequiredBytes,
+      freeBytes,
+      warning,
+      message
+    }
+
+    await this.logHeadsetActionStep(
+      action,
+      warning ? 'Headset space looks tight for this upgrade.' : 'Checked headset upgrade space.',
+      {
+        packageName,
+        incomingBytes,
+        installedFootprintBytes,
+        effectiveRequiredBytes,
+        freeBytes,
+        warning
+      }
+    )
+
+    return estimate
+  }
+
+  private async pushObbWithVerification(
+    adbPath: string,
+    serial: string,
+    obbPath: string,
+    remotePath: string,
+    packageName: string,
+    action?: HeadsetActionContext | null
+  ): Promise<string | null> {
+    const localSizeBytes = (await stat(obbPath)).size
+    let lastOutput: string | null = null
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (attempt > 1) {
+        await this.logHeadsetActionStep(action, `Retrying OBB transfer for ${basename(obbPath)} after size verification failed.`, {
+          obbPath,
+          packageName,
+          localSizeBytes,
+          remotePath
+        })
+        await this.runShellCommand(adbPath, serial, `rm -f ${this.shellQuote(remotePath)}`)
+      }
+
+      const { stdout, stderr } = await execFileAsync(
+        adbPath,
+        ['-s', serial, 'push', obbPath, remotePath],
+        {
+          maxBuffer: 10 * 1024 * 1024
+        }
+      )
+      lastOutput = [stdout, stderr].filter(Boolean).join('\n').trim() || null
+      const remoteSizeBytes = await this.readRemoteFileSizeBytes(adbPath, serial, remotePath)
+      if (remoteSizeBytes === localSizeBytes) {
+        await this.logHeadsetActionStep(action, 'OBB transfer verified.', {
+          obbPath,
+          packageName,
+          remotePath,
+          localSizeBytes,
+          remoteSizeBytes,
+          attempt
+        })
+        return lastOutput
+      }
+
+      await this.logHeadsetActionStep(action, 'OBB transfer size verification failed.', {
+        obbPath,
+        packageName,
+        remotePath,
+        localSizeBytes,
+        remoteSizeBytes,
+        attempt
+      })
+    }
+
+    const finalRemoteSizeBytes = await this.readRemoteFileSizeBytes(adbPath, serial, remotePath)
+    throw new Error(
+      `OBB transfer verification failed for ${basename(obbPath)}. Local size ${this.formatByteCount(localSizeBytes)}, remote size ${finalRemoteSizeBytes === null ? 'unknown' : this.formatByteCount(finalRemoteSizeBytes)}.`
+    )
+  }
+
+  private async prepareObbDestinationDirectory(
+    adbPath: string,
+    serial: string,
+    packageName: string,
+    action?: HeadsetActionContext | null
+  ): Promise<string> {
+    const candidates = [
+      `/sdcard/Android/obb/${packageName}`,
+      `/storage/emulated/0/Android/obb/${packageName}`
+    ]
+    const shellScript = [
+      `for dir in ${candidates.map((candidate) => this.shellQuote(candidate)).join(' ')}; do`,
+      'mkdir -p "$dir" 2>/dev/null && printf "%s" "$dir" && exit 0;',
+      'done;',
+      'exit 1'
+    ].join(' ')
+    const destinationDirectory = await this.runShellCommand(adbPath, serial, shellScript)
+    const normalizedDirectory = destinationDirectory.trim()
+
+    if (!normalizedDirectory) {
+      throw new Error(`Unable to create OBB destination for ${packageName}.`)
+    }
+
+    await this.logHeadsetActionStep(action, 'Prepared OBB destination directory.', {
+      packageName,
+      destinationDirectory
+    })
+
+    return normalizedDirectory
+  }
+
+  private async installApkWithLowSpaceRetry(
+    adbPath: string,
+    serial: string,
+    apkPath: string,
+    options: {
+      action?: HeadsetActionContext | null
+      packageNameHint?: string | null
+      installLabel: string
+      successLabel: string
+      failureLabel: string
+      preflightPayloadBytes?: number | null
+    }
+  ): Promise<ApkInstallResult> {
+    const metadata = await this.readApkInstallMetadata(apkPath)
+    const packageNameHint = options.packageNameHint?.trim() || null
+    const packageName = metadata.packageName ?? packageNameHint
+    const apkStats = await stat(apkPath).catch(() => null)
+    const preflightEstimate = await this.logUpgradeSpaceEstimate(
+      adbPath,
+      serial,
+      packageName,
+      options.preflightPayloadBytes ?? apkStats?.size ?? null,
+      options.action
+    )
+
+    await this.logHeadsetActionStep(options.action, `${options.installLabel} ${basename(apkPath)}.`, {
+      apkPath,
+      packageName,
+      versionCode: metadata.versionCode,
+      apkSizeBytes: apkStats?.size ?? null,
+      upgradeSpaceEstimateMessage: preflightEstimate?.message ?? null,
+      upgradeEffectiveRequiredBytes: preflightEstimate?.effectiveRequiredBytes ?? null,
+      upgradeFreeBytes: preflightEstimate?.freeBytes ?? null
+    })
+
+    try {
+      const output = await this.runReplaceInstall(adbPath, serial, apkPath)
+      if (output) {
+        await this.logHeadsetActionStep(options.action, options.successLabel, {
+          apkPath,
+          packageName,
+          outputLines: output.split('\n').length,
+          installMode: 'replace'
+        })
+      }
+
+      return {
+        success: true,
+        details: output,
+        packageName,
+        usedPreservedDataRetry: false,
+        preflightDetails: preflightEstimate?.message ?? null
+      }
+    } catch (error) {
+      const details = this.readErrorMessage(error)
+      const shouldRetryWithKeptData = metadata.packageName && this.isInsufficientStorageInstallFailure(details)
+
+      await this.logHeadsetActionStep(options.action, options.failureLabel, {
+        apkPath,
+        packageName,
+        error: details,
+        retryEligible: Boolean(shouldRetryWithKeptData)
+      })
+
+      if (!shouldRetryWithKeptData || !metadata.packageName) {
+        return {
+          success: false,
+          details,
+          packageName,
+          usedPreservedDataRetry: false,
+          preflightDetails: preflightEstimate?.message ?? null
+        }
+      }
+
+      const retryPackageName = metadata.packageName
+      const installedPackages = await this.readInstalledPackageIds(adbPath, serial)
+      if (!installedPackages.has(retryPackageName.toLowerCase())) {
+        await this.logHeadsetActionStep(
+          options.action,
+          'Low-space preserved-data reinstall was skipped because the APK package is not installed on the headset.',
+          { apkPath, packageName: retryPackageName }
+        )
+        return {
+          success: false,
+          details,
+          packageName,
+          usedPreservedDataRetry: false,
+          preflightDetails: preflightEstimate?.message ?? null
+        }
+      }
+
+      await this.logHeadsetActionStep(
+        options.action,
+        'Replace install ran out of space; removing the installed package while keeping app data before retrying.',
+        { apkPath, packageName: retryPackageName }
+      )
+
+      let uninstallOutput: string | null = null
+      try {
+        uninstallOutput = await this.uninstallPackageKeepingData(adbPath, serial, retryPackageName)
+        await this.logHeadsetActionStep(options.action, 'Removed installed package while keeping app data.', {
+          packageName: retryPackageName,
+          outputLines: uninstallOutput ? uninstallOutput.split('\n').length : 0
+        })
+      } catch (uninstallError) {
+        const uninstallDetails = this.readErrorMessage(uninstallError)
+        await this.logHeadsetActionStep(options.action, 'Unable to remove installed package while keeping app data.', {
+          packageName: retryPackageName,
+          error: uninstallDetails
+        })
+        return {
+          success: false,
+          details: `${details}\n\nPreserved-data retry failed before reinstall:\n${uninstallDetails}`,
+          packageName: retryPackageName,
+          usedPreservedDataRetry: true,
+          preflightDetails: preflightEstimate?.message ?? null
+        }
+      }
+
+      try {
+        const reinstallOutput = await this.runReplaceInstall(adbPath, serial, apkPath)
+        await this.logHeadsetActionStep(options.action, 'APK install finished after preserved-data retry.', {
+          apkPath,
+          packageName: retryPackageName,
+          outputLines: reinstallOutput ? reinstallOutput.split('\n').length : 0,
+          installMode: 'preserved-data-reinstall'
+        })
+
+        return {
+          success: true,
+          details: [uninstallOutput, reinstallOutput].filter(Boolean).join('\n') || null,
+          packageName: retryPackageName,
+          usedPreservedDataRetry: true,
+          preflightDetails: preflightEstimate?.message ?? null
+        }
+      } catch (reinstallError) {
+        const reinstallDetails = this.readErrorMessage(reinstallError)
+        await this.logHeadsetActionStep(options.action, 'APK reinstall failed after keeping app data.', {
+          apkPath,
+          packageName: retryPackageName,
+          error: reinstallDetails
+        })
+        return {
+          success: false,
+          details: `${details}\n\nRemoved ${retryPackageName} with app data kept, but reinstall failed:\n${reinstallDetails}`,
+          packageName: retryPackageName,
+          usedPreservedDataRetry: true,
+          preflightDetails: preflightEstimate?.message ?? null
+        }
+      }
+    }
+  }
+
   private async installSingleApk(
     adbPath: string,
     serial: string,
     apkPath: string,
     action?: HeadsetActionContext | null
   ): Promise<{ success: boolean; message: string; details: string | null; packageName: string | null }> {
-    await this.logHeadsetActionStep(action, `Installing standalone APK ${basename(apkPath)}.`, {
-      apkPath
+    const installResult = await this.installApkWithLowSpaceRetry(adbPath, serial, apkPath, {
+      action,
+      installLabel: 'Installing standalone APK',
+      successLabel: 'Standalone APK install finished.',
+      failureLabel: 'Standalone APK install failed.'
     })
-    try {
-      const { stdout, stderr } = await execFileAsync(adbPath, ['-s', serial, 'install', '-r', '-g', apkPath], {
-        maxBuffer: 10 * 1024 * 1024
-      })
-      const output = [stdout, stderr].filter(Boolean).join('\n').trim()
-      if (output) {
-        await this.logHeadsetActionStep(action, 'Standalone APK install finished.', {
-          apkPath,
-          outputLines: output.split('\n').length
-        })
-      }
+
+    if (installResult.success) {
       return {
         success: true,
-        message: `Installed ${basename(apkPath)} on ${serial}.`,
-        details: output || null,
-        packageName: null
+        message: installResult.usedPreservedDataRetry
+          ? `Installed ${basename(apkPath)} on ${serial} after freeing the previous package while keeping app data.`
+          : `Installed ${basename(apkPath)} on ${serial}.`,
+        details: [installResult.preflightDetails, installResult.details].filter(Boolean).join('\n') || null,
+        packageName: installResult.packageName
       }
-    } catch (error) {
-      const details = this.readErrorMessage(error)
-      await this.logHeadsetActionStep(action, 'Standalone APK install failed.', {
-        apkPath,
-        error: details
-      })
-      return {
-        success: false,
-        message: `Unable to install ${basename(apkPath)}.`,
-        details,
-        packageName: null
-      }
+    }
+
+    return {
+      success: false,
+      message: installResult.usedPreservedDataRetry
+        ? `Unable to reinstall ${basename(apkPath)} after freeing the previous package. App data was kept.`
+        : `Unable to install ${basename(apkPath)}.`,
+      details: [installResult.preflightDetails, installResult.details].filter(Boolean).join('\n') || null,
+      packageName: installResult.packageName
     }
   }
 
@@ -2175,6 +2651,12 @@ class DeviceService {
     const obbPaths = files.filter((filePath) => filePath.toLowerCase().endsWith('.obb'))
     const installScriptPaths = files.filter((filePath) => basename(filePath).toLowerCase() === 'install.txt')
     let packageName = item.packageIds[0] ?? this.inferPackageNameFromObbFiles(obbPaths)
+    const payloadSizeBytes = await files.reduce<Promise<number>>(async (totalPromise, filePath) => {
+      const total = await totalPromise
+      const fileStats = await stat(filePath).catch(() => null)
+      return total + (fileStats?.size ?? 0)
+    }, Promise.resolve(0))
+    let preflightDetails: string | null = null
 
     if (!apkPaths.length) {
       await this.failHeadsetAction(action, 'No APK files were found in this library item.')
@@ -2187,31 +2669,33 @@ class DeviceService {
     }
 
     for (const apkPath of apkPaths) {
-      await this.logHeadsetActionStep(action, `Installing folder APK ${basename(apkPath)}.`, {
-        apkPath
+      const installResult = await this.installApkWithLowSpaceRetry(adbPath, serial, apkPath, {
+        action,
+        packageNameHint: packageName ?? item.packageIds[0] ?? null,
+        installLabel: 'Installing folder APK',
+        successLabel: 'Folder APK install finished.',
+        failureLabel: `Folder APK install failed for ${basename(apkPath)}.`,
+        preflightPayloadBytes: preflightDetails ? null : payloadSizeBytes
       })
-      try {
-        const { stdout, stderr } = await execFileAsync(adbPath, ['-s', serial, 'install', '-r', '-g', apkPath], {
-          maxBuffer: 10 * 1024 * 1024
-        })
-        const output = [stdout, stderr].filter(Boolean).join('\n').trim()
-        if (output) {
-          await this.logHeadsetActionStep(action, 'Folder APK install finished.', {
-            apkPath,
-            outputLines: output.split('\n').length
-          })
-        }
-      } catch (error) {
-        const details = this.readErrorMessage(error)
+      preflightDetails = preflightDetails ?? installResult.preflightDetails
+
+      if (installResult.packageName && (!packageName || !item.packageIds.length)) {
+        packageName = installResult.packageName
+      }
+
+      if (!installResult.success) {
         await this.failHeadsetAction(action, `Folder APK install failed for ${basename(apkPath)}.`, {
           apkPath,
-          error: details
+          packageName: installResult.packageName ?? packageName ?? item.packageIds[0] ?? null,
+          error: installResult.details
         })
         return {
           success: false,
-          message: `Unable to install ${basename(apkPath)}.`,
-          details,
-          packageName: packageName ?? item.packageIds[0] ?? null
+          message: installResult.usedPreservedDataRetry
+            ? `Unable to reinstall ${basename(apkPath)} after freeing the previous package. App data was kept.`
+            : `Unable to install ${basename(apkPath)}.`,
+          details: [installResult.preflightDetails, installResult.details].filter(Boolean).join('\n') || null,
+          packageName: installResult.packageName ?? packageName ?? item.packageIds[0] ?? null
         }
       }
     }
@@ -2234,22 +2718,24 @@ class DeviceService {
         packageName,
         obbCount: obbPaths.length
       })
-      await this.runShellCommand(adbPath, serial, `mkdir -p "/sdcard/Android/obb/${packageName}"`)
+      const remoteObbDirectory = await this.prepareObbDestinationDirectory(adbPath, serial, packageName, action)
       const pushedObbFileNames: string[] = []
       for (const obbPath of obbPaths) {
         await this.logHeadsetActionStep(action, `Pushing OBB ${basename(obbPath)}.`, {
           obbPath,
-          packageName
+          packageName,
+          remoteObbDirectory
         })
         try {
-          const { stdout, stderr } = await execFileAsync(
+          const remoteObbPath = `${remoteObbDirectory}/${basename(obbPath)}`
+          const output = await this.pushObbWithVerification(
             adbPath,
-            ['-s', serial, 'push', obbPath, `/sdcard/Android/obb/${packageName}/${basename(obbPath)}`],
-            {
-              maxBuffer: 10 * 1024 * 1024
-            }
+            serial,
+            obbPath,
+            remoteObbPath,
+            packageName,
+            action
           )
-          const output = [stdout, stderr].filter(Boolean).join('\n').trim()
           if (output) {
             await this.logHeadsetActionStep(action, 'OBB transfer finished.', {
               obbPath,
@@ -2297,7 +2783,7 @@ class DeviceService {
       message: obbPaths.length
         ? `Installed ${apkPaths.length} APK${apkPaths.length === 1 ? '' : 's'}, pushed ${obbPaths.length} OBB file${obbPaths.length === 1 ? '' : 's'}${appliedShellSteps ? `, and applied ${appliedShellSteps} install script step${appliedShellSteps === 1 ? '' : 's'}` : ''}.`
         : `Installed ${apkPaths.length} APK${apkPaths.length === 1 ? '' : 's'} from the local library${appliedShellSteps ? ` and applied ${appliedShellSteps} install script step${appliedShellSteps === 1 ? '' : 's'}` : ''}.`,
-      details: null,
+      details: preflightDetails,
       packageName: packageName ?? item.packageIds[0] ?? null
     }
   }

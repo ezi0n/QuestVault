@@ -22,7 +22,9 @@ import type {
   InstalledAppScanDelta,
   SettingsPathStatsResponse,
   SettingsPathKey,
+  VrSrcCatalogItem,
   VrSrcCatalogResponse,
+  VrSrcSyncDelta,
   VrSrcStatusResponse,
   VrSrcTransferOperation,
   VrSrcTransferProgressUpdate,
@@ -60,6 +62,13 @@ interface SignatureMismatchDialogState {
 interface HiddenEntryDialogState {
   value: string
   saving: boolean
+}
+
+interface VrSrcDeltaDialogState {
+  baselineSyncedAt: string | null
+  syncedAt: string | null
+  items: VrSrcCatalogItem[]
+  versionChangeCount: number
 }
 
 class QueuedInstallCancelledError extends Error {
@@ -240,9 +249,17 @@ function buildVrSrcSyncLiveQueueDetails(response: {
   details: string | null
   usedCachedCatalog: boolean
   catalog: VrSrcCatalogResponse
+  delta?: VrSrcSyncDelta | null
 }): string {
+  const deltaDetail = response.delta?.hasBaseline
+    ? response.delta.newItems.length
+      ? `Found ${response.delta.newItems.length} new title${response.delta.newItems.length === 1 ? '' : 's'}.`
+      : 'No new titles found in this sync.'
+    : response.delta
+      ? 'No previous vrSrc baseline yet; sync results popup was suppressed.'
+      : null
   if (!response.usedCachedCatalog) {
-    return buildLiveQueueDetails(response.message, response.details)
+    return buildLiveQueueDetails([response.message, deltaDetail].filter(Boolean).join(' '), response.details)
   }
 
   const cachedCount = response.catalog.items.length
@@ -252,6 +269,39 @@ function buildVrSrcSyncLiveQueueDetails(response: {
       : `${response.message} No cached vrSrc catalog is available.`
 
   return buildLiveQueueDetails(fallbackMessage, response.details)
+}
+
+function shouldShowVrSrcSyncDelta(delta: VrSrcSyncDelta | null | undefined): delta is VrSrcSyncDelta {
+  return Boolean(delta?.hasBaseline && delta.newItems.length)
+}
+
+function formatVrSrcDialogVersion(item: VrSrcCatalogItem): string {
+  return item.versionName?.trim() ? `v${item.versionName.trim()}` : `Code ${item.versionCode}`
+}
+
+function formatVrSrcDeltaDialogCount(count: number): string {
+  return `${count} new title${count === 1 ? '' : 's'} discovered`
+}
+
+function buildVrSrcFallbackArtworkLabel(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  const initials = words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? '').join('')
+  return initials || 'VR'
+}
+
+function isVrSrcItemInLibrary(item: VrSrcCatalogItem, localLibraryIndex: LocalLibraryScanResponse | null): boolean {
+  const packageName = item.packageName.trim().toLowerCase()
+  if (!packageName) {
+    return false
+  }
+
+  return Boolean(
+    localLibraryIndex?.items.some(
+      (libraryItem) =>
+        libraryItem.availability === 'present' &&
+        libraryItem.packageIds.some((packageId) => packageId.trim().toLowerCase() === packageName)
+    )
+  )
 }
 
 function buildInstalledAppChangeDetails(change: InstalledAppScanDelta | null): string | null {
@@ -462,7 +512,11 @@ function isSignatureMismatchFailure(response: {
   }
 
   const combined = `${response.message}\n${response.details ?? ''}`
-  return /INSTALL_FAILED_UPDATE_INCOMPATIBLE/i.test(combined)
+  return (
+    /INSTALL_FAILED_UPDATE_INCOMPATIBLE|INSTALL_FAILED_VERSION_DOWNGRADE|signatures? do(?:es)? not match|signature mismatch|version downgrade/i.test(
+      combined
+    )
+  )
 }
 
 function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
@@ -541,6 +595,10 @@ function describeVrSrcTransfer(update: VrSrcTransferProgressUpdate): string {
   const speedLabel = formatTransferRate(update.speedBytesPerSecond)
   if (speedLabel) {
     parts.push(speedLabel)
+  }
+
+  if (update.phase === 'downloading' && update.fileName?.trim()) {
+    parts.push(update.fileName.trim())
   }
 
   const etaLabel = formatEtaSeconds(update.etaSeconds)
@@ -728,6 +786,7 @@ function App() {
   const [vrSrcMaintenanceBusy, setVrSrcMaintenanceBusy] = useState(false)
   const [vrSrcActionBusyReleaseNames, setVrSrcActionBusyReleaseNames] = useState<string[]>([])
   const [vrSrcMessage, setVrSrcMessage] = useState<UiNotice | null>(null)
+  const [vrSrcDeltaDialog, setVrSrcDeltaDialog] = useState<VrSrcDeltaDialogState | null>(null)
   const [hasLoadedVrSrc, setHasLoadedVrSrc] = useState(false)
   const [signatureMismatchDialog, setSignatureMismatchDialog] = useState<SignatureMismatchDialogState | null>(null)
   const [signatureMismatchAcknowledged, setSignatureMismatchAcknowledged] = useState(false)
@@ -746,6 +805,7 @@ function App() {
   const [headsetActionLogBusy, setHeadsetActionLogBusy] = useState(false)
   const [isHeadsetActionLogVisible, setIsHeadsetActionLogVisible] = useState(false)
   const [isHeadsetActivityReviewOpen, setIsHeadsetActivityReviewOpen] = useState(false)
+  const [headsetActivityReviewInitialFilter, setHeadsetActivityReviewInitialFilter] = useState<'all' | 'connect' | 'install' | 'uninstall' | 'reboot'>('all')
   const [hasCompletedStartupUpdateCheck, setHasCompletedStartupUpdateCheck] = useState(false)
   const deviceResponseRef = useRef<DeviceListResponse | null>(null)
   const hasCompletedInitialScanRef = useRef(false)
@@ -1507,7 +1567,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
 
     vrSrcInitialSyncAttemptedRef.current = true
-    void syncVrSrcCatalog({ openPanelOnSuccess: false })
+    void syncVrSrcCatalog({ openPanelOnSuccess: false, showDeltaDialog: true })
   }, [hasCompletedStartupUpdateCheck, settings, vrSrcCatalog, vrSrcStatus, vrSrcSyncBusy])
 
   useEffect(() => {
@@ -2002,6 +2062,21 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     }
   }
 
+  async function refreshVrSrcCatalogSnapshot() {
+    if (!hasHiddenRemoteKey(settings)) {
+      setVrSrcStatus(null)
+      setVrSrcCatalog(null)
+      return
+    }
+
+    const [status, catalog] = await Promise.all([
+      window.api.vrsrc.getStatus(),
+      window.api.vrsrc.getCatalog()
+    ])
+    setVrSrcStatus(status)
+    setVrSrcCatalog(catalog)
+  }
+
   async function ensureVrSrcCatalogReadyForFirstHeadsetRefresh(): Promise<void> {
     if (
       vrSrcStartupBootstrapCompletedRef.current ||
@@ -2032,7 +2107,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
     await bootstrapPromise
   }
 
-  async function syncVrSrcCatalog(options?: { openPanelOnSuccess?: boolean }) {
+  async function syncVrSrcCatalog(options?: { openPanelOnSuccess?: boolean; showDeltaDialog?: boolean }) {
     if (!hasHiddenRemoteKey(settings)) {
       setVrSrcStatus(null)
       setVrSrcCatalog(null)
@@ -2064,6 +2139,16 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       })
       if (response.success) {
         setVrSrcMessage(null)
+        if (options?.showDeltaDialog && shouldShowVrSrcSyncDelta(response.delta)) {
+          setVrSrcDeltaDialog({
+            baselineSyncedAt: response.delta.baselineSyncedAt,
+            syncedAt: response.delta.syncedAt,
+            items: response.delta.newItems,
+            versionChangeCount: response.delta.versionChangeCount
+          })
+        } else if (options?.showDeltaDialog) {
+          setVrSrcDeltaDialog(null)
+        }
         if (options?.openPanelOnSuccess !== false) {
           setIsVrSrcPanelOpen(true)
         }
@@ -2159,11 +2244,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
           updateLiveQueueItem(queueId, {
             phase: 'uninstalling',
             progress: 52,
-            details: `Installed copy uses a different signature. Removing ${response.packageName} before retrying...`,
+            details: `Android rejected the in-place replacement. Removing ${response.packageName} while keeping data before retrying...`,
             transferControl: null
           })
 
-          const uninstallResponse = await window.api.devices.uninstallInstalledApp(options.serialForRecovery, response.packageName)
+          const uninstallResponse = await window.api.devices.uninstallInstalledApp(options.serialForRecovery, response.packageName, {
+            keepData: true
+          })
           if (!uninstallResponse.success) {
             updateLiveQueueItem(queueId, {
               phase: 'failed',
@@ -2279,6 +2366,11 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       scheduleVrSrcQueueRemoval(queueId, 30_000)
       setVrSrcMessage(null)
     } finally {
+      try {
+        await refreshVrSrcCatalogSnapshot()
+      } catch {
+        // Transfer failures should still leave their live queue result visible.
+      }
       vrSrcActionBusyReleaseNamesRef.current = vrSrcActionBusyReleaseNamesRef.current.filter(
         (entry) => entry !== options.releaseName
       )
@@ -2321,6 +2413,51 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       setVrSrcMessage(null)
     } finally {
       setVrSrcMaintenanceBusy(false)
+    }
+  }
+
+  async function clearBrokenVrSrcDownload(releaseName: string) {
+    if (vrSrcActionBusyReleaseNamesRef.current.includes(releaseName)) {
+      return
+    }
+
+    setVrSrcMessage(null)
+    vrSrcActionBusyReleaseNamesRef.current = [...vrSrcActionBusyReleaseNamesRef.current, releaseName]
+    setVrSrcActionBusyReleaseNames((current) => [...current, releaseName])
+    const queueId = enqueueLiveQueueItem({
+      id: createLiveQueueId('cleanup', `vrsrc-broken-${releaseName}`),
+      title: releaseName,
+      subtitle: 'Broken vrSrc Release',
+      kind: 'cleanup',
+      phase: 'cleaning-up',
+      progress: 18,
+      details: 'Removing incomplete vrSrc release files while keeping the broken state visible...',
+      artworkUrl: null
+    })
+
+    try {
+      const response = await window.api.vrsrc.clearBrokenDownload(releaseName)
+      setVrSrcStatus(response.status)
+      setVrSrcCatalog(response.catalog)
+      updateLiveQueueItem(queueId, {
+        phase: response.success ? 'completed' : 'failed',
+        progress: 100,
+        details: buildLiveQueueDetails(response.message, response.details)
+      })
+      scheduleVrSrcQueueRemoval(queueId, response.success ? 5000 : 30_000)
+    } catch (error) {
+      const details = error instanceof Error ? error.message : 'Unknown error.'
+      updateLiveQueueItem(queueId, {
+        phase: 'failed',
+        progress: 100,
+        details
+      })
+      scheduleVrSrcQueueRemoval(queueId, 30_000)
+    } finally {
+      vrSrcActionBusyReleaseNamesRef.current = vrSrcActionBusyReleaseNamesRef.current.filter(
+        (entry) => entry !== releaseName
+      )
+      setVrSrcActionBusyReleaseNames((current) => current.filter((entry) => entry !== releaseName))
     }
   }
 
@@ -4223,10 +4360,12 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
               updateLiveQueueItem(queueId, {
                 phase: 'uninstalling',
                 progress: 52,
-                details: `Installed copy uses a different signature. Removing ${recoveryPackageName} before retrying...`
+                details: `Android rejected the in-place replacement. Removing ${recoveryPackageName} while keeping data before retrying...`
               })
 
-              const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, recoveryPackageName)
+              const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, recoveryPackageName, {
+                keepData: true
+              })
               if (!uninstallResponse.success) {
                 updateLiveQueueItem(queueId, {
                   phase: 'failed',
@@ -4368,10 +4507,12 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
               updateLiveQueueItem(activeQueueId, {
                 phase: 'uninstalling',
                 progress: 52,
-                details: `Installed copy uses a different signature. Removing ${response.packageName} before retrying...`
+                details: `Android rejected the in-place replacement. Removing ${response.packageName} while keeping data before retrying...`
               })
 
-              const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, response.packageName)
+              const uninstallResponse = await window.api.devices.uninstallInstalledApp(targetDeviceId, response.packageName, {
+                keepData: true
+              })
               if (!uninstallResponse.success) {
                 updateLiveQueueItem(activeQueueId, {
                   phase: 'failed',
@@ -4960,9 +5101,13 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       headsetActionLogBusy={headsetActionLogBusy}
       isHeadsetActionLogVisible={isHeadsetActionLogVisible}
       isHeadsetActivityReviewOpen={isHeadsetActivityReviewOpen}
+      headsetActivityReviewInitialFilter={headsetActivityReviewInitialFilter}
       queueAutoOpenSignal={queueAutoOpenSignal}
       onHideHeadsetActionLog={() => setIsHeadsetActionLogVisible(false)}
-      onOpenHeadsetActivityReview={() => setIsHeadsetActivityReviewOpen(true)}
+      onOpenHeadsetActivityReview={(filter = 'all') => {
+        setHeadsetActivityReviewInitialFilter(filter)
+        setIsHeadsetActivityReviewOpen(true)
+      }}
       onCloseHeadsetActivityReview={() => setIsHeadsetActivityReviewOpen(false)}
       onCancelQueuedInstall={cancelQueuedInstall}
       onPauseVrSrcTransfer={pauseVrSrcTransfer}
@@ -5052,9 +5197,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onDeleteBackupStorageItem={deleteBackupStorageItem}
       onRefreshAllMetadata={refreshAllMetadata}
       onToggleVrSrcPanel={() => setIsVrSrcPanelOpen((current) => !current)}
-      onSyncVrSrcCatalog={syncVrSrcCatalog}
+      onSyncVrSrcCatalog={() => syncVrSrcCatalog({ showDeltaDialog: true })}
       onDownloadVrSrcToLibrary={downloadVrSrcToLibrary}
       onDownloadVrSrcToLibraryAndInstall={downloadVrSrcToLibraryAndInstall}
+      onClearBrokenVrSrcDownload={clearBrokenVrSrcDownload}
       onInstallVrSrcNow={installVrSrcNow}
       onHiddenEntryRequested={promptForHiddenEntry}
       onRefreshSaveBackups={refreshSaveBackups}
@@ -5080,6 +5226,129 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
       onRestoreSaveBackup={restoreSaveBackup}
       onDeleteSaveBackup={deleteSaveBackup}
       />
+      {vrSrcDeltaDialog ? (
+        <>
+          <div className="library-scan-backdrop" />
+          <section
+            aria-label="vrSrc sync results"
+            aria-modal="true"
+            className="library-support-dialog vrsrc-delta-dialog surface-panel"
+            role="dialog"
+          >
+            <div className="section-heading vrsrc-delta-heading">
+              <div>
+                <p className="eyebrow">vrSrc Sync Complete</p>
+                <h2>{formatVrSrcDeltaDialogCount(vrSrcDeltaDialog.items.length)}</h2>
+                <p className="section-copy compact">
+                  Only net-new catalog entries are shown here. Known titles and newer versions are excluded.
+                </p>
+              </div>
+              <button
+                aria-label="Dismiss vrSrc sync results"
+                className="close-pill vrsrc-delta-icon-close"
+                onClick={() => setVrSrcDeltaDialog(null)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            {!selectedDeviceId ? (
+              <div className="vrsrc-delta-inline-notice">
+                Select a ready headset to enable Install Now.
+              </div>
+            ) : null}
+
+            <section className="vrsrc-delta-table" aria-label="New vrSrc titles">
+              <div className="table-header vrsrc-delta-grid">
+                <span>Title</span>
+                <span>Version</span>
+                <span>Size</span>
+                <span>Status</span>
+                <span>Action</span>
+              </div>
+              <div className="vrsrc-delta-results">
+                {vrSrcDeltaDialog.items.map((item) => {
+                  const actionBusy = vrSrcActionBusyReleaseNames.includes(item.releaseName)
+                  const isInLibrary = isVrSrcItemInLibrary(item, localLibraryIndex)
+                  const statusLabel = actionBusy ? 'Queued' : isInLibrary ? 'In Library' : 'New'
+                  const statusClassName = isInLibrary
+                    ? 'status-pill status-ready'
+                    : actionBusy
+                      ? 'status-pill status-pending'
+                      : 'status-pill status-neutral'
+
+                  return (
+                    <article className="table-row-card vrsrc-delta-grid vrsrc-delta-row" key={item.releaseName}>
+                      <div className="vrsrc-row-primary">
+                        {item.artworkUrl ? (
+                          <div className="vrsrc-thumb">
+                            <img alt="" className="vrsrc-thumb-image" src={item.artworkUrl} />
+                          </div>
+                        ) : (
+                          <div className="vrsrc-thumb-placeholder fallback-art-surface">
+                            <span>{buildVrSrcFallbackArtworkLabel(item.name)}</span>
+                          </div>
+                        )}
+                        <div className="row-title vrsrc-row-title">
+                          <strong>{item.name}</strong>
+                          <p>{item.packageName}</p>
+                        </div>
+                      </div>
+                      <div className="games-version-stack vrsrc-version-stack">
+                        <strong>{formatVrSrcDialogVersion(item)}</strong>
+                        <span>Added this sync</span>
+                      </div>
+                      <span className="vrsrc-size-cell">{item.sizeLabel}</span>
+                      <div className="vrsrc-status-cell">
+                        <span className={statusClassName}>{statusLabel}</span>
+                      </div>
+                      <div className="vrsrc-item-actions vrsrc-delta-actions">
+                        <button
+                          className="action-pill action-pill-ghost"
+                          disabled={actionBusy || isInLibrary}
+                          onClick={() => {
+                            void downloadVrSrcToLibrary(item.releaseName)
+                          }}
+                          type="button"
+                        >
+                          {actionBusy ? 'Working...' : isInLibrary ? 'In Library' : 'Add to Library'}
+                        </button>
+                        <button
+                          className="action-pill action-pill-ghost"
+                          disabled={actionBusy || !selectedDeviceId}
+                          onClick={() => {
+                            void installVrSrcNow(item.releaseName)
+                          }}
+                          title={
+                            selectedDeviceId
+                              ? 'Download this vrSrc payload and install it to the selected headset'
+                              : 'Select a headset first to install directly from vrSrc'
+                          }
+                          type="button"
+                        >
+                          Install Now
+                        </button>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            </section>
+
+            <div className="vrsrc-delta-footer">
+              <span>
+                {vrSrcDeltaDialog.versionChangeCount
+                  ? `${vrSrcDeltaDialog.versionChangeCount} known title${vrSrcDeltaDialog.versionChangeCount === 1 ? '' : 's'} changed version and were excluded.`
+                  : 'Known titles and version changes were excluded.'}
+              </span>
+              <button className="action-pill action-pill-ghost" onClick={() => setVrSrcDeltaDialog(null)} type="button">
+                Dismiss
+              </button>
+            </div>
+          </section>
+        </>
+      ) : null}
       {signatureMismatchDialog ? (
         <>
           <div className="library-scan-backdrop" />
@@ -5092,10 +5361,10 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Warning</p>
-                <h2>Uninstall and Retry?</h2>
+                <h2>Repair and Retry?</h2>
                 <p className="section-copy compact">
-                  QuestVault could not update <strong>{signatureMismatchDialog.packageName}</strong> because the
-                  installed app on the selected headset uses a different signing key.
+                  QuestVault could not update <strong>{signatureMismatchDialog.packageName}</strong> because Android
+                  rejected the in-place replacement.
                 </p>
               </div>
               <button className="close-pill" onClick={() => resolveSignatureMismatchDialog(false)} type="button">
@@ -5104,17 +5373,18 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
             </div>
 
             <div className="signature-mismatch-warning-card">
-              <strong>Signature mismatch detected</strong>
+              <strong>Repair reinstall available</strong>
               <span>
-                QuestVault must uninstall the currently installed copy before it can retry the install with the new
-                package.
+                QuestVault can remove the currently installed package while asking Android to keep app data, then retry
+                the install with the selected package.
               </span>
             </div>
 
             <div className="signature-mismatch-warning-card is-danger">
               <strong>Data and save warning</strong>
               <span>
-                Uninstalling the existing app may remove its local data and saves if they are not already backed up.
+                Android usually preserves data for this repair path, but some apps store saves in locations that may not
+                survive package replacement.
               </span>
             </div>
 
@@ -5124,7 +5394,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
                 onChange={(event) => setSignatureMismatchAcknowledged(event.target.checked)}
                 type="checkbox"
               />
-              <span>I understand that uninstalling may remove app data and saves from the headset.</span>
+              <span>I understand app data and saves may still be at risk and should be backed up first.</span>
             </label>
 
             <div className="signature-mismatch-actions">
@@ -5137,7 +5407,7 @@ function findMetaStoreMatchByPackageId(packageId: string): MetaStoreGameSummary 
                 onClick={() => resolveSignatureMismatchDialog(true)}
                 type="button"
               >
-                Uninstall and Retry
+                Repair and Retry
               </button>
             </div>
           </section>
